@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { TrendingUp, Volume2, MessageSquare, Users } from 'lucide-react'
+import { TrendingUp, Volume2, MessageSquare, Users, Bell, Vote, Zap } from 'lucide-react'
 
 function formatTime(ts) {
   if (!ts) return ''
@@ -7,12 +7,21 @@ function formatTime(ts) {
   return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function AnalyticsTab({ contestants, roomMap, itemCatalog }) {
+function formatDateTime(ts) {
+  if (!ts) return ''
+  const d = new Date(typeof ts === 'string' ? ts : (ts > 1e12 ? ts : ts * 1000))
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' +
+    d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifications = [], systemEvents = [] }) {
   const [stockHistory, setStockHistory] = useState([])
   const [stocks, setStocks] = useState([])
   const [ttsAnalytics, setTtsAnalytics] = useState(null)
   const [chatAnalytics, setChatAnalytics] = useState(null)
   const [fishtoyStatus, setFishtoyStatus] = useState([])
+  const [polls, setPolls] = useState([])
+  const [priceChanges, setPriceChanges] = useState([])
 
   useEffect(() => {
     fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
@@ -20,6 +29,8 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog }) {
     fetch('/api/analytics/tts-sfx').then(r => r.json()).then(setTtsAnalytics).catch(() => {})
     fetch('/api/analytics/chat').then(r => r.json()).then(setChatAnalytics).catch(() => {})
     fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
+    fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
+    fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
 
     const interval = setInterval(() => {
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
@@ -214,6 +225,112 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog }) {
           ))}
         </div>
       </Section>
+
+      <div className="grid grid-cols-2 gap-3">
+        {/* Director Messages / Notifications Timeline */}
+        <Section title="Director Messages" icon={Bell}>
+          {notifications.length > 0 ? (
+            <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
+              {notifications.map(n => (
+                <div key={n.id} className="flex items-start gap-2 p-2 bg-yellow-500/5 border border-yellow-500/20 rounded">
+                  <Bell className="w-3.5 h-3.5 text-yellow-400 shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-tank-bright break-words">{n.message}</p>
+                    <span className="text-[10px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-tank-muted font-mono">No director messages yet</div>
+          )}
+        </Section>
+
+        {/* Poll History */}
+        <Section title="Poll History" icon={Vote}>
+          {polls.length > 0 ? (
+            <div className="space-y-2 max-h-[300px] overflow-y-auto">
+              {polls.filter(p => p.event_type === 'poll:start' || p.event_type === 'poll:stop').map(p => {
+                const d = p.data || {}
+                return (
+                  <div key={p.id} className={`p-2 rounded border ${
+                    p.event_type === 'poll:stop'
+                      ? 'border-purple-500/30 bg-purple-500/5'
+                      : 'border-tank-border bg-tank-bg'
+                  }`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                        p.event_type === 'poll:stop'
+                          ? 'bg-purple-500/10 text-purple-400'
+                          : 'bg-tank-highlight text-tank-muted'
+                      }`}>
+                        {p.event_type === 'poll:stop' ? 'RESULT' : 'STARTED'}
+                      </span>
+                      <span className="text-[10px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
+                    </div>
+                    {d.question && <p className="text-xs text-tank-bright mb-1">{d.question}</p>}
+                    {d.winner && (
+                      <div className="text-xs">
+                        Winner: <span className="font-semibold text-purple-400">{d.winner}</span>
+                      </div>
+                    )}
+                    {d.answers && !d.winner && (
+                      <div className="text-[10px] text-tank-muted">
+                        Options: {d.answers.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="text-xs text-tank-muted font-mono">No polls recorded yet</div>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {/* TTS/SFX Price Changes */}
+        <Section title="Price Changes" icon={Zap}>
+          {priceChanges.length > 0 ? (
+            <div className="space-y-1 max-h-[200px] overflow-y-auto">
+              {priceChanges.map(p => (
+                <div key={p.id} className="flex items-center justify-between text-xs p-1.5 bg-tank-bg rounded">
+                  <span className={`font-mono px-1.5 py-0.5 rounded ${
+                    p.event_type === 'tts:price' ? 'bg-purple-500/10 text-purple-400' : 'bg-indigo-500/10 text-indigo-400'
+                  }`}>
+                    {p.event_type === 'tts:price' ? 'TTS' : 'SFX'}
+                  </span>
+                  <span className="text-tank-bright font-mono">{typeof p.data === 'number' ? `${p.data}t` : JSON.stringify(p.data)}</span>
+                  <span className="text-[10px] text-tank-muted font-mono">{formatDateTime(p.timestamp_local)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-tank-muted font-mono">No price changes recorded</div>
+          )}
+        </Section>
+
+        {/* System Events */}
+        <Section title="System Events" icon={Zap}>
+          {systemEvents.length > 0 ? (
+            <div className="space-y-1 max-h-[200px] overflow-y-auto">
+              {systemEvents.map(e => (
+                <div key={e.dbId} className="flex items-center gap-2 text-xs p-1.5 bg-tank-bg rounded">
+                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-tank-highlight text-tank-muted shrink-0">
+                    {e.event}
+                  </span>
+                  <span className="text-tank-text truncate flex-1">
+                    {typeof e.data === 'string' ? e.data : JSON.stringify(e.data).substring(0, 100)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-tank-muted font-mono">No system events yet</div>
+          )}
+        </Section>
+      </div>
     </div>
   )
 }

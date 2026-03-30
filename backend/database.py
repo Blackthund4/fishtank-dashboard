@@ -344,3 +344,75 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
         }
         for row in rows
     ]
+
+
+# ============================================================
+# POLLS
+# ============================================================
+
+
+def get_polls(limit=50):
+    """Get poll events (start, stop, vote)."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT id, event_type, event_id, timestamp_server, timestamp_local, data
+        FROM events WHERE event_type IN ('poll:start', 'poll:stop', 'poll:vote')
+        ORDER BY id DESC LIMIT ?
+    """, (limit,)).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "event_type": row["event_type"],
+            "timestamp_local": row["timestamp_local"],
+            "data": json.loads(row["data"]),
+        }
+        for row in rows
+    ]
+
+
+# ============================================================
+# NOTIFICATIONS / DIRECTOR MESSAGES
+# ============================================================
+
+
+def get_notifications(limit=100):
+    """Get director messages and announcements."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT id, event_type, timestamp_local, data
+        FROM events WHERE event_type IN ('notification:global', 'announcement')
+        ORDER BY id DESC LIMIT ?
+    """, (limit,)).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "event_type": row["event_type"],
+            "timestamp_local": row["timestamp_local"],
+            "data": json.loads(row["data"]),
+        }
+        for row in rows
+    ]
+
+
+# ============================================================
+# PRICE CHANGES
+# ============================================================
+
+
+def get_price_changes(limit=100):
+    """Get TTS/SFX price change events."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT id, event_type, timestamp_local, data
+        FROM events WHERE event_type IN ('tts:price', 'sfx:price')
+        ORDER BY id DESC LIMIT ?
+    """, (limit,)).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "event_type": row["event_type"],
+            "timestamp_local": row["timestamp_local"],
+            "data": json.loads(row["data"]),
+        }
+        for row in rows
+    ]

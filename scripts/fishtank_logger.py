@@ -49,10 +49,22 @@ LOG_FILE = "fishtank_log.jsonl"  # set to None to disable
 SOCKET_EVENTS = [
     "tts:queued",
     "tts:update",
+    "tts:price",
     "sfx:queued",
     "sfx:update",
+    "sfx:price",
     "chat:message",
     "happening",
+    "poll:start",
+    "poll:stop",
+    "poll:vote",
+    "notification:global",
+    "announcement",
+    "stock:update",
+    "stock:new",
+    "stock:remove",
+    "stock:split",
+    "feature-toggles:update",
 ]
 
 FISHTOY_POLL_INTERVAL = 2

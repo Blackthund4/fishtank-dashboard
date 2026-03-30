@@ -40,12 +40,30 @@ COOKIE = os.environ.get("FISHTANK_COOKIE", "")
 
 EVENTS = [
     # Fishtoys are polled via REST (/v1/items/recent), not socket events
+    # Chat
+    "chat:message",
+    # TTS / SFX
     "tts:queued",
     "tts:update",
+    "tts:price",
     "sfx:queued",
     "sfx:update",
-    "chat:message",
+    "sfx:price",
+    # Polls
+    "poll:start",
+    "poll:stop",
+    "poll:vote",
+    # Notifications / Director messages
+    "notification:global",
+    "announcement",
+    # Stocks (change events, not periodic prices)
+    "stock:update",
+    "stock:new",
+    "stock:remove",
+    "stock:split",
+    # System
     "happening",
+    "feature-toggles:update",
 ]
 
 FISHTOY_POLL_INTERVAL = 2  # seconds
@@ -148,16 +166,30 @@ def start_fish_client():
                 # Log to console
                 ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
                 summary = ""
-                if isinstance(data, dict):
-                    if "chat" in evt:
-                        user = data.get("user", {})
-                        name = user.get("displayName", "?") if isinstance(user, dict) else "?"
-                        msg = str(data.get("message", ""))[:60]
-                        summary = f"{name}: {msg}"
-                    elif "tts" in evt or "sfx" in evt:
-                        summary = f"{data.get('displayName', '?')}"
-                    else:
-                        summary = str(data)[:80]
+                if evt == "chat:message" and isinstance(data, dict):
+                    user = data.get("user", {})
+                    name = user.get("displayName", "?") if isinstance(user, dict) else "?"
+                    msg = str(data.get("message", ""))[:60]
+                    summary = f"{name}: {msg}"
+                elif evt == "notification:global" or evt == "announcement":
+                    summary = str(data)[:120]
+                elif evt == "poll:start" and isinstance(data, dict):
+                    summary = f"Q: {data.get('question', '?')} | {len(data.get('answers', []))} options"
+                elif evt == "poll:stop" and isinstance(data, dict):
+                    summary = f"Winner: {data.get('winner', '?')} | Q: {data.get('question', '?')}"
+                elif evt == "poll:vote" and isinstance(data, list):
+                    parts = [f"{v.get('value','?')}:{v.get('score',0)}" for v in data[:5]]
+                    summary = " | ".join(parts)
+                elif "stock:" in evt and isinstance(data, dict):
+                    summary = f"{data.get('tickerSymbol', '?')} {str(data)[:80]}"
+                elif ("tts:price" in evt or "sfx:price" in evt):
+                    summary = str(data)[:80]
+                elif ("tts" in evt or "sfx" in evt) and isinstance(data, dict):
+                    summary = data.get("displayName", "?")
+                elif isinstance(data, dict):
+                    summary = str(data)[:80]
+                else:
+                    summary = str(data)[:80]
                 print(f"[{ts}] {evt}: {summary}")
 
                 # Broadcast to browsers
@@ -567,6 +599,24 @@ def api_fishtoys(
         target=target, item_id=item_id, search=search,
         limit=limit, offset=offset,
     )
+
+
+@app.get("/api/polls")
+def api_polls(limit: int = Query(50, le=500)):
+    """Get poll events (start, stop, vote)."""
+    return database.get_polls(limit=limit)
+
+
+@app.get("/api/notifications")
+def api_notifications(limit: int = Query(100, le=500)):
+    """Get director messages and announcements."""
+    return database.get_notifications(limit=limit)
+
+
+@app.get("/api/price-changes")
+def api_price_changes(limit: int = Query(100, le=500)):
+    """Get TTS/SFX price change history."""
+    return database.get_price_changes(limit=limit)
 
 
 # --- Serve frontend static files ---

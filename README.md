@@ -116,6 +116,9 @@ Open http://localhost:3000 (Vite proxies API/WebSocket to the backend)
 | `GET /api/analytics/chat` | Chat analytics: top chatters, hourly volume |
 | `GET /api/hidden-content` | Fishtoy events with metadata only. Query params: `target`, `search`, `limit`, `offset` |
 | `GET /api/fishtoy-availability` | Fishtoy/bigtoy items with enabled/cooldown/cost status |
+| `GET /api/polls` | Poll events (start, stop, vote). Query params: `limit` |
+| `GET /api/notifications` | Director messages and announcements. Query params: `limit` |
+| `GET /api/price-changes` | TTS/SFX price change history. Query params: `limit` |
 | `GET /api/status` | Connection status and browser client count |
 | `WS /ws` | Live event stream via WebSocket |
 

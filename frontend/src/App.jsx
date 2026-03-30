@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText } from 'lucide-react'
+import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote } from 'lucide-react'
 import { useWebSocket } from './useWebSocket'
 import StatusBar from './components/StatusBar'
 import Panel from './components/Panel'
@@ -17,6 +17,12 @@ const ACTIVITY_TYPES = new Set([
   'tts:queued', 'tts:update', 'sfx:queued', 'sfx:update',
   'happening', 'item:new', 'item:update',
   'item-details:new', 'item-details:update',
+])
+const POLL_TYPES = new Set(['poll:start', 'poll:stop', 'poll:vote'])
+const NOTIFICATION_TYPES = new Set(['notification:global', 'announcement'])
+const SYSTEM_TYPES = new Set([
+  'tts:price', 'sfx:price', 'stock:update', 'stock:new',
+  'stock:remove', 'stock:split', 'feature-toggles:update',
 ])
 
 function normalizeStats(raw) {
@@ -56,6 +62,12 @@ export default function App() {
   const [searchText, setSearchText] = useState('')
   const [activeTab, setActiveTab] = useState('dashboard')
 
+  // Polls and notifications
+  const [activePoll, setActivePoll] = useState(null)
+  const [pollVotes, setPollVotes] = useState([])
+  const [notifications, setNotifications] = useState([])
+  const [systemEvents, setSystemEvents] = useState([])
+
   // Load catalog + historical data on mount
   useEffect(() => {
     fetch('/api/items').then(r => r.json()).then(setItemCatalog).catch(() => {})
@@ -63,6 +75,14 @@ export default function App() {
     fetch('/api/rooms').then(r => r.json()).then(setRoomMap).catch(() => {})
     fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
     fetch('/api/stats').then(r => r.json()).then(raw => setStats(normalizeStats(raw))).catch(() => {})
+    fetch('/api/notifications').then(r => r.json()).then(data => {
+      setNotifications(data.map(n => ({
+        id: n.id,
+        type: n.event_type,
+        message: typeof n.data === 'string' ? n.data : n.data?.message || JSON.stringify(n.data),
+        timestamp: n.timestamp_local,
+      })))
+    }).catch(() => {})
 
     // Fetch fishtoys separately so they aren't crowded out by chat volume
     fetch('/api/fishtoys?limit=500')
@@ -111,6 +131,23 @@ export default function App() {
         if (msg.event_type.startsWith('sfx')) {
           setStats(s => ({ ...s, sfx: s.sfx + 1, total_spend: s.total_spend + (msg.data?.cost || 0) }))
         }
+      } else if (msg.event_type === 'poll:start') {
+        setActivePoll(msg.data)
+        setPollVotes([])
+      } else if (msg.event_type === 'poll:vote') {
+        setPollVotes(Array.isArray(msg.data) ? msg.data : [])
+      } else if (msg.event_type === 'poll:stop') {
+        setActivePoll(prev => prev ? { ...prev, ended: true, winner: msg.data?.winner } : null)
+      } else if (NOTIFICATION_TYPES.has(msg.event_type)) {
+        const notif = {
+          id: msg.db_id,
+          type: msg.event_type,
+          message: typeof msg.data === 'string' ? msg.data : msg.data?.message || JSON.stringify(msg.data),
+          timestamp: new Date().toISOString(),
+        }
+        setNotifications(prev => [notif, ...prev].slice(0, 50))
+      } else if (SYSTEM_TYPES.has(msg.event_type)) {
+        setSystemEvents(prev => [item, ...prev].slice(0, 100))
       }
     })
     return remove
@@ -255,6 +292,65 @@ export default function App() {
           </button>
         ))}
       </div>
+
+      {/* Notification banner (director messages) */}
+      {notifications.length > 0 && (
+        <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-3 py-1.5 flex items-center gap-2 shrink-0">
+          <Bell className="w-4 h-4 text-yellow-400 shrink-0" />
+          <span className="text-xs font-semibold text-yellow-400 uppercase shrink-0">Director</span>
+          <span className="text-sm text-tank-bright flex-1">{notifications[0].message}</span>
+          <span className="text-[10px] font-mono text-tank-muted shrink-0">
+            {new Date(notifications[0].timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+          {notifications.length > 1 && (
+            <span className="text-[10px] font-mono text-yellow-400/60">+{notifications.length - 1} more</span>
+          )}
+        </div>
+      )}
+
+      {/* Live poll bar */}
+      {activePoll && !activePoll.ended && (
+        <div className="bg-purple-500/10 border-b border-purple-500/30 px-3 py-1.5 shrink-0">
+          <div className="flex items-center gap-2 mb-1">
+            <Vote className="w-4 h-4 text-purple-400 shrink-0" />
+            <span className="text-xs font-semibold text-purple-400 uppercase shrink-0">Live Poll</span>
+            <span className="text-sm text-tank-bright">{activePoll.question || 'Poll'}</span>
+          </div>
+          {pollVotes.length > 0 && (
+            <div className="flex gap-2">
+              {(() => {
+                const total = pollVotes.reduce((s, v) => s + (v.score || 0), 0) || 1
+                return pollVotes.map((v, i) => (
+                  <div key={v.value} className="flex-1">
+                    <div className="flex items-center justify-between text-[10px] mb-0.5">
+                      <span className="text-tank-bright font-medium truncate">{v.value}</span>
+                      <span className="text-purple-400 font-mono ml-1">{Math.round(v.score / total * 100)}%</span>
+                    </div>
+                    <div className="h-1.5 bg-tank-bg rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-purple-400 transition-all"
+                        style={{ width: `${Math.round(v.score / total * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Poll result (briefly shown after close) */}
+      {activePoll && activePoll.ended && (
+        <div className="bg-purple-500/5 border-b border-purple-500/20 px-3 py-1.5 flex items-center gap-2 shrink-0">
+          <Vote className="w-4 h-4 text-purple-400/60 shrink-0" />
+          <span className="text-xs font-semibold text-purple-400/60 uppercase shrink-0">Poll Ended</span>
+          <span className="text-sm text-tank-muted">{activePoll.question}</span>
+          {activePoll.winner && (
+            <span className="text-sm font-semibold text-purple-400">Winner: {activePoll.winner}</span>
+          )}
+        </div>
+      )}
 
       {activeTab === 'dashboard' && (
       <main className="flex-1 flex gap-2 p-2 min-h-0">
@@ -553,6 +649,8 @@ export default function App() {
           contestants={contestants}
           roomMap={roomMap}
           itemCatalog={itemCatalog}
+          notifications={notifications}
+          systemEvents={systemEvents}
         />
       )}
 
