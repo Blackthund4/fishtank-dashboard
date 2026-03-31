@@ -1,33 +1,41 @@
 # Fishtank Dashboard
 
-Real-time event monitoring dashboard for [fishtank.live](https://www.fishtank.live), an interactive 24/7 reality show. Captures and displays fishtoy redemptions (including hidden metadata like love letter contents), chat messages, TTS, SFX, and other events via a dual data source architecture.
+Real-time event monitoring dashboard for [fishtank.live](https://www.fishtank.live), an interactive 24/7 reality show. Captures fishtoy redemptions (including hidden metadata like love letter contents), chat messages, TTS, SFX, polls, director messages, stock market data, and system events via a dual data source architecture built on reverse-engineered APIs.
 
 ## Architecture
 
 ```
 Browser (React)  <--WebSocket-->  Backend (FastAPI)  <--Socket.IO-->  fishtank.live
                  <--REST API--->        |            <--REST poll-->  /v1/items/recent
+                                        |            <--REST poll-->  /v1/stocks (60s)
                                     SQLite DB
 ```
 
 **Backend** captures events from fishtank.live using two methods:
-- **REST polling** (`/v1/items/recent` every 2s): Fishtoy redemptions including hidden metadata. The fishtank API does not broadcast fishtoy events over Socket.IO, so polling this endpoint is the only way to capture them.
-- **Socket.IO** (via [fishclient](https://pypi.org/project/fishclient/) with patches): Real-time push for chat messages, TTS, and SFX events.
+- **REST polling** (`/v1/items/recent` every 2s): Fishtoy and bigtoy redemptions including hidden metadata. The fishtank API does not broadcast fishtoy events over Socket.IO, so polling is the only way to capture them. A separate stock price poller runs every 60s to build price history.
+- **Socket.IO** (via [fishclient](https://pypi.org/project/fishclient/) with 5 bug patches): 18 real-time event types including chat, TTS, SFX, polls, director messages, stock changes, and price updates.
 
-Item names are resolved from the `/v1/items` catalog and contestant data is loaded from `/v1/contestants` on startup.
+On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/contestants`, filtered to current season), room name mappings (`/v1/live-streams`), and stock prices (`/v1/stocks`).
 
-**Frontend** is a React + Tailwind CSS dashboard with contestant/target filtering, item type filtering, metadata search, and clickable fishtoy cards. Historical data loads from the REST API on page load, then live events stream in via WebSocket.
+**Frontend** is a React + Tailwind CSS dashboard with three tabs:
+- **Dashboard**: Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room names, stock ticker, target filtering, metadata search, and session stats. Director message banner and live poll bar appear at the top when active.
+- **Analytics**: Stock market cards, contestant grid, TTS/SFX analytics (top rooms, top spenders, hourly activity), chat analytics (top chatters, hourly volume), poll history, director message timeline, price change log, fishtoy availability status, and system events.
+- **Hidden Content**: Searchable archive of fishtoy metadata (love letters, custom messages) with target filtering.
 
 ### Key Technical Details
 
-- **Dual data source discovery**: Through systematic API probing and raw WebSocket frame analysis, we determined that fishtoy data is served exclusively via REST (`/v1/items/recent`), not Socket.IO. The fishclient library lists `fishtoy:queued` and `fishtoy:update` as socket events, but these do not fire in Season 5. Chat, TTS, and SFX still arrive via Socket.IO using msgpack binary serialization.
-- **fishclient library patches**: The library has several bugs that required monkey-patching:
+- **Dual data source discovery**: Through systematic API probing (`test_api_probe.py`, `test_api_probe2.py`) and raw WebSocket frame analysis (`test_catchall.py`), we determined that fishtoy data is served exclusively via REST (`/v1/items/recent`), not Socket.IO. The fishclient library lists `fishtoy:queued` and `fishtoy:update` as socket events, but these do not fire in Season 5.
+- **Complete event registry**: By decompiling the fishtank.live production JavaScript, we mapped the full socket event registry (60+ events across chat, TTS, SFX, polls, stocks, items, trading, challenges, and notifications). 18 high-value events are actively captured.
+- **fishclient library patches** ([PR submitted](https://github.com/pluhian/fishclient)): 5 bugs fixed via monkey-patching:
   - Only processes 3-key msgpack packets (0x83 fixmap), silently dropping 4+ key packets
   - Malformed binary frames crash the listener and trigger unnecessary reconnection
   - Shutdown causes deadlock (thread.join() before websocket.close())
+  - Spurious reconnection on clean shutdown (missing is_connected check)
   - Auto-registered disconnect handler has wrong signature, silently fails
-- **Hidden metadata capture**: Fishtoy items like "Love Letter" include user-written content in a `metadata` field that isn't displayed on the website UI. The dashboard surfaces this content prominently.
-- **SQLite persistence**: All events are stored as JSON with indexed fields for efficient querying, filtering, and full-text search across metadata.
+- **Item type filtering**: Only FISHTOY and BIGTOY types are captured. WARTOY (user-vs-user effects), NORMAL_ITEM, and SPECIAL types are filtered out via the item catalog's `type` field.
+- **Hidden metadata capture**: Fishtoy items like "Love Letter" include user-written content in a `metadata` field not displayed on the website UI.
+- **Room name resolution**: TTS/SFX events contain room codes (e.g. `hwdn-5`). The backend resolves these to human-readable names (e.g. "Hallway") via the `/v1/live-streams` endpoint.
+- **Stock price history**: Prices are polled every 60 seconds and stored in SQLite for historical tracking.
 
 ## Setup
 
@@ -108,7 +116,7 @@ Open http://localhost:3000 (Vite proxies API/WebSocket to the backend)
 | `GET /api/fishtoys` | Fishtoy events with filters. Query params: `target`, `item_id`, `search`, `limit`, `offset` |
 | `GET /api/stats` | Summary statistics (counts, top targets, top senders, total spend) |
 | `GET /api/items` | Item catalog (itemId to name/description/icon mapping) |
-| `GET /api/contestants` | Current season contestant list |
+| `GET /api/contestants` | Current season contestant list (filtered to active season) |
 | `GET /api/rooms` | Room code to name mapping (e.g. `hwdn-5` to `Hallway`) |
 | `GET /api/stocks` | Live stock market data (refreshes from fishtank API on each call) |
 | `GET /api/stocks/history` | Stock price history from SQLite. Query params: `ticker`, `limit` |
@@ -122,32 +130,68 @@ Open http://localhost:3000 (Vite proxies API/WebSocket to the backend)
 | `GET /api/status` | Connection status and browser client count |
 | `WS /ws` | Live event stream via WebSocket |
 
+## Socket Events Captured
+
+| Event | Description |
+|---|---|
+| `chat:message` | Chat messages |
+| `tts:update` | Text-to-speech events (with room, sender, cost) |
+| `tts:price` | TTS price changes |
+| `sfx:update` | Sound effect events (with room, sender, cost) |
+| `sfx:price` | SFX price changes |
+| `poll:start` | Poll created (question + options) |
+| `poll:stop` | Poll closed (winner) |
+| `poll:vote` | Live vote tallies |
+| `notification:global` | Director messages / system announcements |
+| `announcement` | System announcements |
+| `stock:update` | Individual stock price changes |
+| `stock:new` | New stock added |
+| `stock:remove` | Stock removed (elimination) |
+| `stock:split` | Stock split event |
+| `happening` | System happenings |
+| `feature-toggles:update` | Feature enable/disable changes |
+
 ## Project Structure
 
 ```
 fishtank-dashboard/
     backend/
-        server.py           FastAPI server + fishclient bridge + REST pollers
-        database.py         SQLite storage layer with analytics queries
-        import_logs.py      Backfill JSONL logs into SQLite
+        server.py             FastAPI server + fishclient bridge + REST pollers
+        database.py           SQLite storage layer with analytics queries
+        import_logs.py        Backfill JSONL logs into SQLite
         requirements.txt
     frontend/
         src/
-            App.jsx          Main layout with tab navigation
-            useWebSocket.js  WebSocket hook with auto-reconnect
+            App.jsx           Main layout with tab navigation, polls, notifications
+            useWebSocket.js   WebSocket hook with auto-reconnect
             components/
-                StatusBar.jsx    Connection status + live stats
-                Panel.jsx        Reusable scrollable panel
-                FishtoyCard.jsx  Collapsible fishtoy event cards
-                ChatMessage.jsx  Chat message display
-                ActivityCard.jsx TTS/SFX display with room names
+                StatusBar.jsx     Connection status + live stats
+                Panel.jsx         Reusable scrollable panel
+                FishtoyCard.jsx   Collapsible fishtoy event cards
+                ChatMessage.jsx   Chat message display
+                ActivityCard.jsx  TTS/SFX display with room names
             tabs/
-                AnalyticsTab.jsx    Stock market, contestants, TTS/SFX + chat analytics
+                AnalyticsTab.jsx      Stock market, contestants, analytics, polls, system events
                 HiddenContentTab.jsx  Searchable hidden content archive
         index.html
         package.json
         vite.config.js
         tailwind.config.js
+    scripts/
+        fishtoy_poller.py     Standalone fishtoy-only REST poller
+        fishtank_logger.py    Combined logger (REST + Socket.IO)
+        import_logs.py        JSONL to SQLite backfill tool
+        research/
+            test_catchall.py          Raw WebSocket frame logger (all packet types)
+            test_filtered_catchall.py Filtered catchall (skips chat/TTS/SFX noise)
+            test_api_probe.py         REST endpoint discovery (round 1)
+            test_api_probe2.py        REST endpoint discovery (round 2)
+            test_cookie.py            Auth cookie validation
+            test_initial_data.py      Initial-data event analysis
+    TECHNICAL_WRITEUP.md      Reverse engineering process documentation
+    DEPLOY_WINDOWS.md         Standalone logger setup (Windows)
+    DEPLOY_FEDORA.md          Standalone logger setup (Fedora)
+    DEPLOY_DASHBOARD_WINDOWS.md  Dashboard setup (Windows)
     README.md
 ```
 
