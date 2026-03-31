@@ -3,11 +3,15 @@ Fishtank Dashboard Backend
 
 Captures fishtank.live events via two methods:
   - REST polling: /v1/items/recent for fishtoy redemptions
-  - Socket.IO: real-time push for chat, TTS, SFX
+  - Socket.IO: real-time push for chat, TTS, SFX, polls, notifications
 
 Stores everything in SQLite and serves a React dashboard.
 
-Usage:
+Usage (recommended):
+    Create backend/.env with FISHTANK_EMAIL and FISHTANK_PASSWORD
+    python server.py
+
+Legacy usage:
     export FISHTANK_COOKIE='your_cookie_here'
     python server.py
 """
@@ -15,7 +19,6 @@ Usage:
 import asyncio
 import json
 import logging
-import os
 import types
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -31,12 +34,13 @@ from pathlib import Path
 from fishclient import FishClient
 
 import database
+from auth import AuthManager
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-COOKIE = os.environ.get("FISHTANK_COOKIE", "")
+auth = AuthManager()
 
 EVENTS = [
     # Fishtoys are polled via REST (/v1/items/recent), not socket events
@@ -101,12 +105,67 @@ def _patched_listen(self):
             if not self.is_connected:
                 break
             _logger.error(f"Error receiving message: {e}")
-            _logger.info("Reconnecting...")
-            try:
-                self.connect()
-            except Exception as err:
-                _logger.error(f"Reconnect failed: {err}")
+            self.is_connected = False  # Signal reconnect_loop to reconnect
             break
+
+
+def reconnect_loop():
+    """Continuously maintain the fishclient connection with fresh tokens."""
+    global fish_client
+    _logger = logging.getLogger("fishclient.reconnect")
+    backoff = 5
+
+    while not _poller_stop.is_set():
+        if not auth.is_configured:
+            _poller_stop.wait(30)
+            continue
+
+        cookie = auth.get_fishclient_cookie()
+        if not cookie:
+            _logger.warning("No cookie available, retrying in 30s...")
+            _poller_stop.wait(30)
+            continue
+
+        try:
+            client = FishClient(cookie=cookie)
+            client.handle_message = types.MethodType(_patched_handle_message, client)
+            client.listen = types.MethodType(_patched_listen, client)
+
+            # Register all event handlers
+            for event_name in EVENTS:
+                client.dispatcher.on(event_name)(make_event_handler(event_name))
+
+            @client.dispatcher.on("disconnect")
+            def on_disc(data):
+                _logger.warning(f"Server disconnect: {data}")
+
+            @client.dispatcher.on("connect_error")
+            def on_err(data):
+                _logger.error(f"Connection error: {data}")
+
+            client.connect()
+            fish_client = client
+            backoff = 5  # Reset backoff on successful connect
+            print(f"[OK] Connected to fishtank.live")
+
+            # Block until the listen thread exits (disconnect)
+            while client.is_connected and not _poller_stop.is_set():
+                _poller_stop.wait(2)
+
+            if _poller_stop.is_set():
+                break
+
+            print(f"[!] Socket disconnected. Reconnecting in {backoff}s with fresh tokens...")
+
+        except Exception as e:
+            print(f"[!] Connection failed: {e}. Retrying in {backoff}s...")
+
+        # If token might be expired, refresh before reconnecting
+        if auth.mode == "auto":
+            auth.handle_401()
+
+        _poller_stop.wait(backoff)
+        backoff = min(backoff * 2, 60)  # Exponential backoff up to 60s
 
 
 # ============================================================
@@ -140,81 +199,48 @@ fish_client: FishClient = None
 _loop: asyncio.AbstractEventLoop = None
 
 
-def start_fish_client():
-    """Connect to fishtank.live and register event handlers."""
-    global fish_client
+def make_event_handler(evt):
+    """Create an event handler for a specific socket event type."""
+    def handler(data):
+        # Store in database
+        db_id = database.store_event(evt, data)
 
-    if not COOKIE:
-        print("[WARNING] No FISHTANK_COOKIE set. Dashboard will run but no live events.")
-        return
+        # Log to console
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        summary = ""
+        if evt == "chat:message" and isinstance(data, dict):
+            user = data.get("user", {})
+            name = user.get("displayName", "?") if isinstance(user, dict) else "?"
+            msg = str(data.get("message", ""))[:60]
+            summary = f"{name}: {msg}"
+        elif evt == "notification:global" or evt == "announcement":
+            summary = str(data)[:120]
+        elif evt == "poll:start" and isinstance(data, dict):
+            summary = f"Q: {data.get('question', '?')} | {len(data.get('answers', []))} options"
+        elif evt == "poll:stop" and isinstance(data, dict):
+            summary = f"Winner: {data.get('winner', '?')} | Q: {data.get('question', '?')}"
+        elif evt == "poll:vote" and isinstance(data, list):
+            parts = [f"{v.get('value','?')}:{v.get('score',0)}" for v in data[:5]]
+            summary = " | ".join(parts)
+        elif "stock:" in evt and isinstance(data, dict):
+            summary = f"{data.get('tickerSymbol', '?')} {str(data)[:80]}"
+        elif ("tts:price" in evt or "sfx:price" in evt):
+            summary = str(data)[:80]
+        elif ("tts" in evt or "sfx" in evt) and isinstance(data, dict):
+            summary = data.get("displayName", "?")
+        elif isinstance(data, dict):
+            summary = str(data)[:80]
+        else:
+            summary = str(data)[:80]
+        print(f"[{ts}] {evt}: {summary}")
 
-    cookie = COOKIE.strip().strip("'\"").strip().replace("\n", "").replace("\r", "")
+        # Broadcast to browsers
+        if _loop and _loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                broadcast_to_browsers(evt, data, db_id), _loop
+            )
 
-    fish_client = FishClient(cookie=cookie)
-    fish_client.handle_message = types.MethodType(_patched_handle_message, fish_client)
-    fish_client.listen = types.MethodType(_patched_listen, fish_client)
-
-    for event_name in EVENTS:
-
-        def make_handler(evt):
-            def handler(data):
-                # Store in database
-                db_id = database.store_event(evt, data)
-
-                # Log to console
-                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                summary = ""
-                if evt == "chat:message" and isinstance(data, dict):
-                    user = data.get("user", {})
-                    name = user.get("displayName", "?") if isinstance(user, dict) else "?"
-                    msg = str(data.get("message", ""))[:60]
-                    summary = f"{name}: {msg}"
-                elif evt == "notification:global" or evt == "announcement":
-                    summary = str(data)[:120]
-                elif evt == "poll:start" and isinstance(data, dict):
-                    summary = f"Q: {data.get('question', '?')} | {len(data.get('answers', []))} options"
-                elif evt == "poll:stop" and isinstance(data, dict):
-                    summary = f"Winner: {data.get('winner', '?')} | Q: {data.get('question', '?')}"
-                elif evt == "poll:vote" and isinstance(data, list):
-                    parts = [f"{v.get('value','?')}:{v.get('score',0)}" for v in data[:5]]
-                    summary = " | ".join(parts)
-                elif "stock:" in evt and isinstance(data, dict):
-                    summary = f"{data.get('tickerSymbol', '?')} {str(data)[:80]}"
-                elif ("tts:price" in evt or "sfx:price" in evt):
-                    summary = str(data)[:80]
-                elif ("tts" in evt or "sfx" in evt) and isinstance(data, dict):
-                    summary = data.get("displayName", "?")
-                elif isinstance(data, dict):
-                    summary = str(data)[:80]
-                else:
-                    summary = str(data)[:80]
-                print(f"[{ts}] {evt}: {summary}")
-
-                # Broadcast to browsers
-                if _loop and _loop.is_running():
-                    asyncio.run_coroutine_threadsafe(
-                        broadcast_to_browsers(evt, data, db_id), _loop
-                    )
-
-            return handler
-
-        fish_client.dispatcher.on(event_name)(make_handler(event_name))
-
-    # Server disconnect/error logging
-    @fish_client.dispatcher.on("disconnect")
-    def on_disc(data):
-        print(f"[!] Server disconnect: {data}")
-
-    @fish_client.dispatcher.on("connect_error")
-    def on_err(data):
-        print(f"[!] Connection error: {data}")
-
-    try:
-        fish_client.connect()
-        print("[OK] Connected to fishtank.live")
-    except Exception as e:
-        print(f"[ERROR] Failed to connect: {e}")
-        print("Dashboard will run without live events. Fix cookie and restart.")
+    return handler
 
 
 def stop_fish_client():
@@ -227,8 +253,6 @@ def stop_fish_client():
             fish_client.websocket.close()
         except Exception:
             pass
-    if fish_client.socket_thread is not None:
-        fish_client.socket_thread.join(timeout=3)
     fish_client = None
 
 
@@ -243,14 +267,10 @@ def load_catalog():
     """Fetch item catalog, contestants, room mapping, and stocks from fishtank API."""
     global _item_catalog, _contestants, _room_map, _stocks
 
-    if not COOKIE:
+    if not auth.is_configured:
         return
 
-    cookie = COOKIE.strip().strip("'\"").strip().replace("\n", "").replace("\r", "")
-    session = http_requests.Session()
-    session.cookies.set(
-        "sb-wcsaaupukpdmqdjcgaoo-auth-token", cookie, domain="api.fishtank.live"
-    )
+    session = auth.get_session()
 
     # Load item catalog
     try:
@@ -307,15 +327,10 @@ def load_catalog():
 
 def fishtoy_poller():
     """Poll /v1/items/recent for fishtoy redemptions."""
-    if not COOKIE:
+    if not auth.is_configured:
         return
 
-    cookie = COOKIE.strip().strip("'\"").strip().replace("\n", "").replace("\r", "")
-    session = http_requests.Session()
-    session.cookies.set(
-        "sb-wcsaaupukpdmqdjcgaoo-auth-token", cookie, domain="api.fishtank.live"
-    )
-
+    session = auth.get_session()
     seen_ids = set()
     prev_poll_ids = []
     first_poll = True
@@ -324,8 +339,14 @@ def fishtoy_poller():
         try:
             r = session.get("https://api.fishtank.live/v1/items/recent", timeout=10)
             if r.status_code in (401, 403):
-                print(f"[!] Fishtoy poller: auth expired (HTTP {r.status_code}). Restart with fresh cookie.")
-                _poller_stop.wait(FISHTOY_POLL_INTERVAL)
+                print(f"[!] Fishtoy poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
+                if auth.handle_401():
+                    # Rebuild session with new cookie
+                    session = auth.get_session()
+                    print("[OK] Fishtoy poller: re-auth successful, resuming.")
+                else:
+                    print("[!] Fishtoy poller: re-auth failed. Will retry in 30s.")
+                    _poller_stop.wait(30)
                 continue
             if r.status_code != 200:
                 _poller_stop.wait(FISHTOY_POLL_INTERVAL)
@@ -360,7 +381,8 @@ def fishtoy_poller():
                 target = item.get("target", "?")
                 item_name = cat_entry.get("name", f"#{iid}")
                 meta = item.get("metadata", "")
-                print(f"[{t}] {item_type or '?'}: {name} -> {target} ({item_name}){f' [{meta[:50]}]' if meta else ''}")
+                meta_str = str(meta) if meta else ""
+                print(f"[{t}] {item_type or '?'}: {name} -> {target} ({item_name}){f' [{meta_str[:50]}]' if meta_str else ''}")
 
                 # Broadcast to browsers
                 if _loop and _loop.is_running():
@@ -386,19 +408,20 @@ def fishtoy_poller():
 
 def stock_poller():
     """Poll /v1/stocks every 60s and store price history."""
-    if not COOKIE:
+    if not auth.is_configured:
         return
 
-    cookie = COOKIE.strip().strip("'\"").strip().replace("\n", "").replace("\r", "")
-    session = http_requests.Session()
-    session.cookies.set(
-        "sb-wcsaaupukpdmqdjcgaoo-auth-token", cookie, domain="api.fishtank.live"
-    )
+    session = auth.get_session()
 
     while not _poller_stop.is_set():
         try:
             r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
-            if r.status_code == 200:
+            if r.status_code in (401, 403):
+                print(f"[!] Stock poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
+                if auth.handle_401():
+                    session = auth.get_session()
+                    print("[OK] Stock poller: re-auth successful.")
+            elif r.status_code == 200:
                 data = r.json()
                 stocks = data.get("stocks", [])
                 if stocks:
@@ -426,8 +449,8 @@ async def lifespan(app: FastAPI):
     # Load item catalog and contestants from fishtank API
     load_catalog()
 
-    # Start fishclient (Socket.IO for chat/TTS/SFX) in background thread
-    Thread(target=start_fish_client, daemon=True).start()
+    # Start fishclient reconnect loop (Socket.IO for chat/TTS/SFX/polls/notifications)
+    Thread(target=reconnect_loop, daemon=True).start()
 
     # Start fishtoy REST poller in background thread
     Thread(target=fishtoy_poller, daemon=True).start()
@@ -445,7 +468,7 @@ app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # For local dev. On a VPS, set to your domain.
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -487,10 +510,11 @@ def api_stats():
 
 @app.get("/api/status")
 def api_status():
+    fc = fish_client  # Local ref to avoid race condition
     return {
-        "connected": fish_client is not None and fish_client.is_connected,
+        "connected": fc is not None and fc.is_connected,
         "browser_clients": len(browser_clients),
-        "cookie_set": bool(COOKIE),
+        "auth": auth.status(),
     }
 
 
@@ -514,23 +538,7 @@ def api_rooms():
 
 @app.get("/api/stocks")
 def api_stocks():
-    """Return current stock data. Refreshes from API on each call."""
-    if not COOKIE:
-        return _stocks
-
-    cookie = COOKIE.strip().strip("'\"").strip().replace("\n", "").replace("\r", "")
-    session = http_requests.Session()
-    session.cookies.set(
-        "sb-wcsaaupukpdmqdjcgaoo-auth-token", cookie, domain="api.fishtank.live"
-    )
-    try:
-        r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            _stocks.clear()
-            _stocks.extend(data.get("stocks", []))
-    except Exception:
-        pass
+    """Return current stock data (updated by stock_poller every 60s)."""
     return _stocks
 
 
@@ -635,7 +643,10 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):
-        file_path = FRONTEND_DIST / full_path
+        file_path = (FRONTEND_DIST / full_path).resolve()
+        # Prevent path traversal outside dist directory
+        if not str(file_path).startswith(str(FRONTEND_DIST.resolve())):
+            return FileResponse(FRONTEND_DIST / "index.html")
         if file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(FRONTEND_DIST / "index.html")
@@ -648,12 +659,18 @@ if FRONTEND_DIST.exists():
 if __name__ == "__main__":
     import uvicorn
 
-    if not COOKIE:
+    if not auth.is_configured:
         print("=" * 60)
-        print("  WARNING: FISHTANK_COOKIE not set")
-        print("  Set it to enable live event streaming:")
-        print("    export FISHTANK_COOKIE='your_cookie_here'  (Linux/Mac)")
-        print("    $env:FISHTANK_COOKIE = 'your_cookie'       (PowerShell)")
+        print("  WARNING: No auth credentials configured")
+        print()
+        print("  Option 1 (recommended): Create backend/.env file:")
+        print("    FISHTANK_EMAIL=your_email@example.com")
+        print("    FISHTANK_PASSWORD=your_password")
+        print()
+        print("  Option 2 (legacy): Set cookie manually:")
+        print("    $env:FISHTANK_COOKIE = 'your_cookie'  (PowerShell)")
+        print()
+        print("  See .env.example for details.")
         print("=" * 60)
 
     print("Starting Fishtank Dashboard on http://localhost:8000")

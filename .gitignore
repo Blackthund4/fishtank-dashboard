@@ -1,14 +1,25 @@
-﻿__pycache__/
-*.pyc
+# Credentials and tokens (NEVER commit these)
+backend/.env
+backend/token_cache.json
+
+# Database
 *.db
 *.db-wal
 *.db-shm
-venv/
-node_modules/
-dist/
-package-lock.json
+
+# Logs
 *.jsonl
+
+# Node
+node_modules/
+frontend/dist/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/

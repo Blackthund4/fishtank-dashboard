@@ -17,10 +17,11 @@ Browser (React)  <--WebSocket-->  Backend (FastAPI)  <--Socket.IO-->  fishtank.l
 
 On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/contestants`, filtered to current season), room name mappings (`/v1/live-streams`), and stock prices (`/v1/stocks`).
 
-**Frontend** is a React + Tailwind CSS dashboard with three tabs:
+**Frontend** is a React + Tailwind CSS dashboard with four tabs:
 - **Dashboard**: Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room names, stock ticker, target filtering, metadata search, and session stats. Director message banner and live poll bar appear at the top when active.
 - **Analytics**: Stock market cards, contestant grid, TTS/SFX analytics (top rooms, top spenders, hourly activity), chat analytics (top chatters, hourly volume), poll history, director message timeline, price change log, fishtoy availability status, and system events.
 - **Hidden Content**: Searchable archive of fishtoy metadata (love letters, custom messages) with target filtering.
+- **User Search**: Search any username to see their unified activity timeline across chat, TTS, SFX, and fishtoys with type filters.
 
 ### Key Technical Details
 
@@ -36,6 +37,8 @@ On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/
 - **Hidden metadata capture**: Fishtoy items like "Love Letter" include user-written content in a `metadata` field not displayed on the website UI.
 - **Room name resolution**: TTS/SFX events contain room codes (e.g. `hwdn-5`). The backend resolves these to human-readable names (e.g. "Hallway") via the `/v1/live-streams` endpoint.
 - **Stock price history**: Prices are polled every 60 seconds and stored in SQLite for historical tracking.
+- **Automatic authentication**: The dashboard logs in via `/v1/auth/log-in` using email/password from a `.env` file, caches tokens to disk, and automatically re-authenticates on 401 responses. No manual cookie copying required.
+- **Resilient socket reconnection**: If the Socket.IO connection drops, the reconnect loop gets fresh tokens from the auth manager and reconnects with exponential backoff (5s to 60s). Stale token reconnections are eliminated.
 
 ## Setup
 
@@ -59,21 +62,44 @@ cd frontend
 npm install
 ```
 
-### Get Your Auth Cookie
+### Authentication
+
+**Option 1: Automatic (recommended)**
+
+```bash
+cd backend
+cp .env.example .env
+```
+
+Edit `.env` with your fishtank.live credentials:
+```
+FISHTANK_EMAIL=your_email@example.com
+FISHTANK_PASSWORD=your_password
+```
+
+The dashboard logs in automatically on startup, caches tokens to disk, and re-authenticates if they expire. No manual cookie copying.
+
+**Option 2: Manual cookie (legacy)**
+
+If you prefer not to store credentials, set the cookie manually:
 
 1. Log into fishtank.live in your browser
 2. Open DevTools (F12) > **Network** tab
 3. Filter by `api.fishtank.live`
 4. Click any request, find the `Cookie:` header in Request Headers
-5. Copy the value after `sb-wcsaaupukpdmqdjcgaoo-auth-token=` (short ~33 char string)
+5. Copy the value after `sb-wcsaaupukpdmqdjcgaoo-auth-token=`
 
-**Important**: Copy from the Network tab, not Application/Cookies tab. The Application tab shows Supabase JWTs which will not work.
+Then set it as an environment variable:
+```bash
+export FISHTANK_COOKIE='your_cookie_value'    # Linux/Mac
+$env:FISHTANK_COOKIE = 'your_cookie_value'    # PowerShell
+```
+
+**Important**: Copy from the Network tab, not Application/Cookies tab.
 
 ## Running
 
 ### Single process (recommended)
-
-Build the frontend first, then run just the backend. It serves the built frontend as static files.
 
 ```bash
 cd frontend
@@ -81,8 +107,6 @@ npm install
 npm run build
 
 cd ../backend
-export FISHTANK_COOKIE='your_cookie_value'    # Linux/Mac
-$env:FISHTANK_COOKIE = 'your_cookie_value'    # PowerShell
 python server.py
 ```
 
@@ -90,13 +114,9 @@ Open http://localhost:8000
 
 ### Development mode (two terminals)
 
-If you're making changes to the frontend and want live reload:
-
 Terminal 1 (backend):
 ```bash
 cd backend
-export FISHTANK_COOKIE='your_cookie_value'    # Linux/Mac
-$env:FISHTANK_COOKIE = 'your_cookie_value'    # PowerShell
 python server.py
 ```
 
@@ -127,7 +147,8 @@ Open http://localhost:3000 (Vite proxies API/WebSocket to the backend)
 | `GET /api/polls` | Poll events (start, stop, vote). Query params: `limit` |
 | `GET /api/notifications` | Director messages and announcements. Query params: `limit` |
 | `GET /api/price-changes` | TTS/SFX price change history. Query params: `limit` |
-| `GET /api/status` | Connection status and browser client count |
+| `GET /api/user/{username}` | Search all event types for a specific user's activity |
+| `GET /api/status` | Connection status, browser client count, and auth status |
 | `WS /ws` | Live event stream via WebSocket |
 
 ## Socket Events Captured
@@ -158,8 +179,10 @@ fishtank-dashboard/
     backend/
         server.py             FastAPI server + fishclient bridge + REST pollers
         database.py           SQLite storage layer with analytics queries
+        auth.py               Automatic login, token caching, 401 re-auth
         import_logs.py        Backfill JSONL logs into SQLite
         requirements.txt
+        .env.example          Template for credentials
     frontend/
         src/
             App.jsx           Main layout with tab navigation, polls, notifications
@@ -173,6 +196,7 @@ fishtank-dashboard/
             tabs/
                 AnalyticsTab.jsx      Stock market, contestants, analytics, polls, system events
                 HiddenContentTab.jsx  Searchable hidden content archive
+                UserSearchTab.jsx     User activity search across all event types
         index.html
         package.json
         vite.config.js
@@ -188,6 +212,7 @@ fishtank-dashboard/
             test_api_probe2.py        REST endpoint discovery (round 2)
             test_cookie.py            Auth cookie validation
             test_initial_data.py      Initial-data event analysis
+    .gitignore
     TECHNICAL_WRITEUP.md      Reverse engineering process documentation
     DEPLOY_WINDOWS.md         Standalone logger setup (Windows)
     DEPLOY_FEDORA.md          Standalone logger setup (Fedora)
