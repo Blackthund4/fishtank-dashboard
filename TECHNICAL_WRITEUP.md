@@ -185,6 +185,33 @@ Several data quality issues emerged during live testing:
 
 **Selective event capture:** The full registry has 60+ events, but most are per-user (trading, DMs, inventory changes) and would add noise without value for a broadcast dashboard. Selecting the 18 show-critical events required understanding the domain well enough to distinguish signal from noise.
 
+### Phase 11: Reverse Engineering the Auth Flow
+
+The dashboard required a browser cookie that expired periodically. Running 24/7 on a VPS meant manually copying cookies was not viable. The Supabase-style cookie (`sb-wcsaaupukpdmqdjcgaoo-auth-token`) contained two JWTs: an access token (15-minute lifetime) and a refresh token (30-day lifetime).
+
+Initial attempts to refresh tokens directly through the Supabase GoTrue endpoint (`/auth/v1/token?grant_type=refresh_token`) failed with 401. The anon API key was needed but couldn't be found. Searching the production JavaScript, localStorage, and request headers all came up empty.
+
+The breakthrough came from logging out and back in with DevTools open. This revealed that fishtank.live wraps Supabase behind their own API at `/v1/auth/log-in`. A simple POST with `{email, password}` returns a full session object containing `access_token`, `refresh_token`, and `live_stream_token`. No API key required.
+
+This meant the entire auth flow could be automated:
+1. Store email/password in a `.env` file
+2. POST to `/v1/auth/log-in` on startup
+3. Construct the cookie from the returned tokens
+4. Cache tokens to disk for reuse across restarts
+5. Re-authenticate automatically when any REST poller gets a 401
+
+The token cache file uses `chmod 600` on Linux for owner-only access. Email is masked in console logs. Credentials are never exposed through any API endpoint.
+
+### Phase 12: Resilient Socket Reconnection
+
+During extended testing, a subtle failure mode emerged. The Socket.IO connection would drop (keepalive timeout, server restart, network blip), the listen thread would break out of its loop, but `is_connected` was never set to `False`. The reconnect loop polled this flag every 2 seconds to check if the connection was alive. Since it was never cleared, the loop assumed the connection was still active and never attempted to reconnect. The dashboard silently stopped capturing socket events while the web UI and REST pollers continued working normally.
+
+The fix had two parts: set `is_connected = False` in the listen thread on error, and rebuild the connection from scratch on each reconnect attempt rather than reusing the old client. Each reconnect gets fresh tokens from the auth manager, so stale token reconnections are eliminated. Exponential backoff (5s to 60s) prevents hammering the server during extended outages.
+
+### Phase 13: User Activity Search
+
+Added a cross-event-type search that queries chat messages, TTS, SFX, and fishtoy events by username. Each event type stores the username in a different JSON path (`$.user.displayName` for chat, `$.displayName` for TTS/SFX/fishtoys), so the search runs four separate parameterized queries and merges the results into a unified timeline. The frontend provides type filter buttons and displays room names, costs, and hidden fishtoy content inline.
+
 ### Key Takeaways
 
 1. **Documentation lies (sometimes).** The fishclient library documents `fishtoy:queued` and `fishtoy:update` as valid event names. They exist in the code but don't fire in Season 5. Trusting the docs without verification would have led to a system that silently captured nothing.
@@ -198,6 +225,10 @@ Several data quality issues emerged during live testing:
 5. **Source code is the ultimate documentation.** When passive observation couldn't reveal all event types, decompiling the client JavaScript gave us the complete registry in minutes. This applies broadly: when APIs are undocumented, the clients that consume them contain the answers.
 
 6. **Data quality requires domain knowledge.** Filtering contestants to the current season, excluding wartoys, resolving room codes, and removing duplicate events all required understanding the show's mechanics. Technical skill gets you the data; domain knowledge makes it useful.
+
+7. **Silent failures are the worst bugs.** The socket disconnect issue didn't crash, didn't log errors, and didn't affect the web UI. The only symptom was that new events stopped appearing. Without monitoring or alerting, this would go unnoticed for hours. Building in explicit state transitions and health logging is essential for unattended systems.
+
+8. **Auth flows are discoverable.** When the documented Supabase endpoints didn't work, watching the browser's actual network requests during login revealed the real endpoint in seconds. The browser is always the authoritative client for web API discovery.
 
 ### Relevance to Sales Engineering
 
@@ -214,3 +245,7 @@ This project exercises several skills that directly transfer to SE work:
 **Open source contribution.** Identifying bugs in a third-party library, writing clean fixes with detailed descriptions, and submitting a PR demonstrates the collaborative technical communication that SEs practice daily when working with engineering teams, partners, and customers.
 
 **Full-stack prototyping.** The dashboard spans Python backend, React frontend, SQLite storage, WebSocket communication, REST API design, and deployment automation. SEs regularly need to build demos and POCs that touch multiple layers of a stack to prove out an integration or show product value.
+
+**Authentication and security.** Reverse engineering the auth flow, building automatic token refresh, handling credential storage securely (`.env` files, file permissions, masked logging), and implementing re-authentication on failure are all skills SEs need when helping customers integrate with auth-protected APIs. Understanding OAuth-style token lifecycles is increasingly relevant as more products move to token-based auth.
+
+**Building for unattended operation.** Moving from a "works when I'm watching" prototype to a system that runs 24/7 without intervention required solving a different class of problems: silent failure detection, automatic recovery, credential management, and connection resilience. This mirrors the transition from POC to production that SEs help customers navigate.

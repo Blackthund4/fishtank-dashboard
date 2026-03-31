@@ -66,11 +66,39 @@ This creates a `dist\` folder with the compiled dashboard. The backend serves th
 
 ---
 
-## Step 5: Get your auth cookie
+## Step 5: Set up authentication
 
-Same as the logger. DevTools > **Network** tab > filter `api.fishtank.live` > click a request > Request Headers > Cookie header > copy the value after `sb-wcsaaupukpdmqdjcgaoo-auth-token=`.
+### Option A: Automatic auth (recommended)
 
-The value is ~33 characters. Do NOT use the Application/Cookies tab.
+```powershell
+cd C:\fishtank-dashboard\backend
+copy .env.example .env
+notepad .env
+```
+
+Edit `.env` with your fishtank.live email and password:
+```
+FISHTANK_EMAIL=your_email@example.com
+FISHTANK_PASSWORD=your_password
+```
+
+Save and close. The dashboard logs in automatically on startup and re-authenticates if the token expires. No manual cookie copying needed.
+
+### Option B: Manual cookie (legacy)
+
+If you prefer not to store credentials, get the cookie from DevTools:
+
+1. Log into fishtank.live, press F12, go to **Network** tab
+2. Filter by `api.fishtank.live`, click any request
+3. Find the `Cookie:` header in Request Headers
+4. Copy the value after `sb-wcsaaupukpdmqdjcgaoo-auth-token=` (~33 chars)
+
+Then set it before running:
+```powershell
+$env:FISHTANK_COOKIE = 'your_cookie_value_here'
+```
+
+**Important**: Copy from the Network tab, not Application/Cookies tab.
 
 ---
 
@@ -80,13 +108,17 @@ You only need **one terminal**. The backend serves both the API and the frontend
 
 ```powershell
 cd C:\fishtank-dashboard\backend
-$env:FISHTANK_COOKIE = 'your_cookie_value_here'
 python server.py
 ```
 
 You should see:
 
 ```
+[AUTH] Mode: automatic (email/password from .env)
+[AUTH] Logging in as you***@example.com...
+[AUTH] Login successful (login #1)
+[AUTH]   Access token expires:  2026-04-01 12:30:00 UTC
+[AUTH]   Refresh token expires: 2026-05-01 12:15:00 UTC
 Starting Fishtank Dashboard on http://localhost:8000
 [OK] Connected to fishtank.live
 ```
@@ -101,7 +133,7 @@ Open your browser and go to:
 http://localhost:8000
 ```
 
-You should see the dashboard with three panels (Fishtoys, Chat, Activity) and a stats sidebar. Events will appear in real-time.
+You should see the dashboard with four tabs (Dashboard, Analytics, Hidden Content, User Search). Director message banners and live poll bars appear at the top when active. Events arrive in real-time.
 
 ---
 
@@ -112,7 +144,6 @@ If you want to make changes to the frontend with live reload, run two terminals:
 **Terminal 1 (backend):**
 ```powershell
 cd C:\fishtank-dashboard\backend
-$env:FISHTANK_COOKIE = 'your_cookie_value_here'
 python server.py
 ```
 
@@ -132,7 +163,10 @@ Then open `http://localhost:3000` (the Vite dev server proxies API/WebSocket req
 |---|---|
 | `npm: command not found` | Install Node.js and reopen terminal |
 | `Module not found: fishclient` | Run `python -m pip install -r requirements.txt` in the backend folder |
-| Backend starts but no events | Cookie expired, re-copy from Network tab |
+| `[AUTH] Login failed: HTTP 401` | Wrong email or password in `.env`. Double-check credentials |
+| `[AUTH] Mode: none` | No `.env` file found and no `FISHTANK_COOKIE` set. Copy `.env.example` to `.env` and fill in your credentials |
+| Backend starts but no events | Auth failed or token expired. Check console for `[AUTH]` messages |
+| `[!] Socket disconnected` | Normal. The reconnect loop will re-establish the connection automatically |
 | Dashboard loads but panels are empty | Check the terminal for connection errors. Backend logs all events to console |
 | `EACCES` or permission errors | Run PowerShell as Administrator |
 | Frontend build fails | Make sure you ran `npm install` first |

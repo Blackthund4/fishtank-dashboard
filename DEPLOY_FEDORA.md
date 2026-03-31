@@ -124,7 +124,7 @@ python3 fishtank_logger.py
 ```
 [2026-03-29 01:00:00 UTC] Connecting to fishtank.live...
 Cookie:        ...last20charsofcookie
-Socket events: tts:queued, tts:update, sfx:queued, sfx:update, chat:message, happening
+Socket events: tts:update, tts:price, sfx:update, sfx:price, chat:message, happening, poll:start, poll:stop, poll:vote, notification:global, announcement, stock:update, stock:new, stock:remove, stock:split, feature-toggles:update
 Fishtoy poll:  /v1/items/recent every 2s
 Item catalog:  47 items loaded
 Log file:      fishtank_log.jsonl
