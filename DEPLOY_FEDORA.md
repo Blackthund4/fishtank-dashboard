@@ -149,7 +149,7 @@ Events are also saved to `fishtank_log.jsonl` in the same directory.
 
 ## First run recommendation
 
-For your first run, set `VERBOSE = True` on line 60 of the script:
+For your first run, set `VERBOSE = True` on line 70 of the script:
 
 ```python
 VERBOSE = True
