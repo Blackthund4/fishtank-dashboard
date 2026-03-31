@@ -3,8 +3,13 @@ import { Fish, ArrowRight, FileText, ChevronDown } from 'lucide-react'
 
 function formatTime(ts) {
   if (!ts) return ''
-  const ms = ts > 1e12 ? ts : ts * 1000
-  return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
+  if (isNaN(ms)) return ''
+  const d = new Date(ms)
+  const now = new Date()
+  const isToday = d.toDateString() === now.toDateString()
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return isToday ? time : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' + time
 }
 
 export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTargetClick }) {

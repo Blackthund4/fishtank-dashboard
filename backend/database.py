@@ -416,3 +416,65 @@ def get_price_changes(limit=100):
         }
         for row in rows
     ]
+
+
+# ============================================================
+# USER SEARCH
+# ============================================================
+
+
+def search_user(username, limit=500):
+    """Search across all event types for a specific username."""
+    conn = _get_conn()
+    results = {
+        "username": username,
+        "chat": [],
+        "tts": [],
+        "sfx": [],
+        "fishtoys": [],
+    }
+
+    # Chat messages
+    rows = conn.execute("""
+        SELECT id, timestamp_local, data FROM events
+        WHERE event_type = 'chat:message'
+        AND json_extract(data, '$.user.displayName') = ?
+        ORDER BY id DESC LIMIT ?
+    """, (username, limit)).fetchall()
+    results["chat"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
+
+    # TTS
+    rows = conn.execute("""
+        SELECT id, timestamp_local, data FROM events
+        WHERE event_type = 'tts:update'
+        AND json_extract(data, '$.displayName') = ?
+        ORDER BY id DESC LIMIT ?
+    """, (username, limit)).fetchall()
+    results["tts"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
+
+    # SFX
+    rows = conn.execute("""
+        SELECT id, timestamp_local, data FROM events
+        WHERE event_type = 'sfx:update'
+        AND json_extract(data, '$.displayName') = ?
+        ORDER BY id DESC LIMIT ?
+    """, (username, limit)).fetchall()
+    results["sfx"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
+
+    # Fishtoys
+    rows = conn.execute("""
+        SELECT id, timestamp_local, data FROM events
+        WHERE event_type LIKE 'fishtoy%'
+        AND json_extract(data, '$.displayName') = ?
+        ORDER BY id DESC LIMIT ?
+    """, (username, limit)).fetchall()
+    results["fishtoys"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
+
+    results["totals"] = {
+        "chat": len(results["chat"]),
+        "tts": len(results["tts"]),
+        "sfx": len(results["sfx"]),
+        "fishtoys": len(results["fishtoys"]),
+    }
+
+    return results

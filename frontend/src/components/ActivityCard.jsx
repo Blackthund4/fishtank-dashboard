@@ -2,14 +2,17 @@ import { Volume2, Music, Zap, Info } from 'lucide-react'
 
 function formatTime(ts) {
   if (!ts) return ''
-  const ms = ts > 1e12 ? ts : ts * 1000
-  return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
+  if (isNaN(ms)) return ''
+  const d = new Date(ms)
+  const now = new Date()
+  const isToday = d.toDateString() === now.toDateString()
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return isToday ? time : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' + time
 }
 
 const EVENT_CONFIG = {
-  'tts:queued': { icon: Volume2, color: 'text-purple-400', bg: 'bg-purple-500/10', label: 'TTS Queued' },
   'tts:update': { icon: Volume2, color: 'text-purple-400', bg: 'bg-purple-500/10', label: 'TTS' },
-  'sfx:queued': { icon: Music, color: 'text-indigo-400', bg: 'bg-indigo-500/10', label: 'SFX Queued' },
   'sfx:update': { icon: Music, color: 'text-indigo-400', bg: 'bg-indigo-500/10', label: 'SFX' },
   'happening': { icon: Zap, color: 'text-tank-warn', bg: 'bg-orange-500/10', label: 'Happening' },
   'item:new': { icon: Info, color: 'text-cyan-400', bg: 'bg-cyan-500/10', label: 'New Item' },

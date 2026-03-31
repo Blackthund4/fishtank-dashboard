@@ -620,6 +620,12 @@ def api_price_changes(limit: int = Query(100, le=500)):
     return database.get_price_changes(limit=limit)
 
 
+@app.get("/api/user/{username}")
+def api_user_search(username: str, limit: int = Query(500, le=2000)):
+    """Search all event types for a specific user."""
+    return database.search_user(username=username, limit=limit)
+
+
 # --- Serve frontend static files ---
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote } from 'lucide-react'
+import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User } from 'lucide-react'
 import { useWebSocket } from './useWebSocket'
 import StatusBar from './components/StatusBar'
 import Panel from './components/Panel'
@@ -8,6 +8,7 @@ import ChatMessage from './components/ChatMessage'
 import ActivityCard from './components/ActivityCard'
 import AnalyticsTab from './tabs/AnalyticsTab'
 import HiddenContentTab from './tabs/HiddenContentTab'
+import UserSearchTab from './tabs/UserSearchTab'
 
 const MAX_EVENTS = 500
 
@@ -277,6 +278,7 @@ export default function App() {
           { id: 'dashboard', label: 'Dashboard', icon: Fish },
           { id: 'analytics', label: 'Analytics', icon: BarChart3 },
           { id: 'hidden', label: 'Hidden Content', icon: FileText },
+          { id: 'users', label: 'User Search', icon: User },
         ].map(tab => (
           <button
             key={tab.id}
@@ -656,6 +658,10 @@ export default function App() {
 
       {activeTab === 'hidden' && (
         <HiddenContentTab itemCatalog={itemCatalog} />
+      )}
+
+      {activeTab === 'users' && (
+        <UserSearchTab itemCatalog={itemCatalog} roomMap={roomMap} />
       )}
     </div>
   )
