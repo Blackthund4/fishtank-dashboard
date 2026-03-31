@@ -598,7 +598,7 @@ export default function App() {
                 <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Stock Market</h3>
               </div>
               <div className="flex gap-2 overflow-x-auto">
-                {stocks.sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
+                {[...stocks].sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
                   const change = s.currentPrice - s.today
                   const changePct = s.today > 0 ? ((change / s.today) * 100).toFixed(1) : 0
                   const isUp = change > 0

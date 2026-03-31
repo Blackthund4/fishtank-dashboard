@@ -85,7 +85,10 @@ CAPTURE_TYPES = {"FISHTOY", "BIGTOY"}
 def _patched_handle_message(self, message):
     if isinstance(message, str):
         if message.startswith("2"):
-            self.websocket.send("3")
+            try:
+                self.websocket.send("3")
+            except Exception:
+                pass
     elif isinstance(message, bytes):
         try:
             self.handle_packed(message)
@@ -275,6 +278,11 @@ def load_catalog():
     # Load item catalog
     try:
         r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+        if r.status_code in (401, 403):
+            print("[!] Catalog load: auth expired. Attempting re-auth...")
+            if auth.handle_401():
+                session = auth.get_session()
+                r = session.get("https://api.fishtank.live/v1/items", timeout=10)
         if r.status_code == 200:
             raw = r.json()
             for key, val in raw.items():

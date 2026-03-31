@@ -4,12 +4,15 @@ import { TrendingUp, Volume2, MessageSquare, Users, Bell, Vote, Zap } from 'luci
 function formatTime(ts) {
   if (!ts) return ''
   const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
+  if (isNaN(ms)) return ''
   return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatDateTime(ts) {
   if (!ts) return ''
-  const d = new Date(typeof ts === 'string' ? ts : (ts > 1e12 ? ts : ts * 1000))
+  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
+  if (isNaN(ms)) return ''
+  const d = new Date(ms)
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' +
     d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
@@ -44,7 +47,7 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
       {/* Stock Market */}
       <Section title="Stock Market" icon={TrendingUp}>
         <div className="grid grid-cols-5 gap-2">
-          {stocks.sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
+          {[...stocks].sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
             const change = s.currentPrice - s.ipoPrice
             const changePct = s.ipoPrice > 0 ? ((change / s.ipoPrice) * 100).toFixed(0) : 0
             const dayChange = s.currentPrice - s.today
@@ -206,7 +209,7 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
       {/* Fishtoy Availability */}
       <Section title="Fishtoy Availability" icon={TrendingUp}>
         <div className="grid grid-cols-6 gap-1.5">
-          {fishtoyStatus.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(f => (
+          {[...fishtoyStatus].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(f => (
             <div key={f.id} className={`px-2 py-1.5 rounded border text-xs ${
               f.enabled
                 ? 'border-tank-accent/30 bg-tank-accent/5'

@@ -424,8 +424,9 @@ def get_price_changes(limit=100):
 
 
 def search_user(username, limit=500):
-    """Search across all event types for a specific username."""
+    """Search across all event types for a specific username (case-insensitive)."""
     conn = _get_conn()
+    username_lower = username.lower()
     results = {
         "username": username,
         "chat": [],
@@ -438,36 +439,36 @@ def search_user(username, limit=500):
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type = 'chat:message'
-        AND json_extract(data, '$.user.displayName') = ?
+        AND LOWER(json_extract(data, '$.user.displayName')) = ?
         ORDER BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
+    """, (username_lower, limit)).fetchall()
     results["chat"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
     # TTS
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type = 'tts:update'
-        AND json_extract(data, '$.displayName') = ?
+        AND LOWER(json_extract(data, '$.displayName')) = ?
         ORDER BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
+    """, (username_lower, limit)).fetchall()
     results["tts"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
     # SFX
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type = 'sfx:update'
-        AND json_extract(data, '$.displayName') = ?
+        AND LOWER(json_extract(data, '$.displayName')) = ?
         ORDER BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
+    """, (username_lower, limit)).fetchall()
     results["sfx"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
     # Fishtoys
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type LIKE 'fishtoy%'
-        AND json_extract(data, '$.displayName') = ?
+        AND LOWER(json_extract(data, '$.displayName')) = ?
         ORDER BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
+    """, (username_lower, limit)).fetchall()
     results["fishtoys"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
     results["totals"] = {
