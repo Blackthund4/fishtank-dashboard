@@ -42,11 +42,9 @@ EVENTS = [
     # Fishtoys are polled via REST (/v1/items/recent), not socket events
     # Chat
     "chat:message",
-    # TTS / SFX
-    "tts:queued",
+    # TTS / SFX (only :update, not :queued, to avoid duplicate logging)
     "tts:update",
     "tts:price",
-    "sfx:queued",
     "sfx:update",
     "sfx:price",
     # Polls
@@ -271,9 +269,12 @@ def load_catalog():
         r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
         if r.status_code == 200:
             data = r.json()
+            all_contestants = data.get("contestants", [])
+            # Filter to current season (5) only
+            season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
             _contestants.clear()
-            _contestants.extend(data.get("contestants", []))
-            print(f"[OK] Loaded {len(_contestants)} contestants")
+            _contestants.extend(season_5 if season_5 else all_contestants)
+            print(f"[OK] Loaded {len(_contestants)} contestants (season 5: {len(season_5)}, total: {len(all_contestants)})")
     except Exception as e:
         print(f"[WARN] Could not load contestants: {e}")
 

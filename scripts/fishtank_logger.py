@@ -47,10 +47,8 @@ COOKIE = os.environ.get("FISHTANK_COOKIE", "YOUR_COOKIE_HERE")
 LOG_FILE = "fishtank_log.jsonl"  # set to None to disable
 
 SOCKET_EVENTS = [
-    "tts:queued",
     "tts:update",
     "tts:price",
-    "sfx:queued",
     "sfx:update",
     "sfx:price",
     "chat:message",

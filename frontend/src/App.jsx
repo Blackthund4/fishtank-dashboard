@@ -14,7 +14,7 @@ const MAX_EVENTS = 500
 const FISHTOY_TYPES = new Set(['fishtoy:used', 'fishtoy:queued', 'fishtoy:update'])
 const CHAT_TYPES = new Set(['chat:message'])
 const ACTIVITY_TYPES = new Set([
-  'tts:queued', 'tts:update', 'sfx:queued', 'sfx:update',
+  'tts:update', 'sfx:update',
   'happening', 'item:new', 'item:update',
   'item-details:new', 'item-details:update',
 ])
@@ -30,8 +30,8 @@ function normalizeStats(raw) {
   return {
     fishtoys: raw.fishtoys?.total || 0,
     chats: byType['chat:message'] || 0,
-    tts: (byType['tts:queued'] || 0) + (byType['tts:update'] || 0),
-    sfx: (byType['sfx:queued'] || 0) + (byType['sfx:update'] || 0),
+    tts: byType['tts:update'] || 0,
+    sfx: byType['sfx:update'] || 0,
     total_spend: raw.total_spend || raw.fishtoys?.total_cost || 0,
     top_targets: (raw.top_targets || []).map(t => ({ target: t.name, count: t.count })),
     top_senders: (raw.top_senders || []).map(s => ({ name: s.name, count: s.count })),

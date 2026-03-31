@@ -245,7 +245,7 @@ def get_tts_sfx_analytics():
         SELECT json_extract(data, '$.displayName') as sender,
             COUNT(*) as count,
             COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
-        FROM events WHERE event_type LIKE 'tts%' AND sender IS NOT NULL
+        FROM events WHERE event_type = 'tts:update' AND sender IS NOT NULL
         GROUP BY sender ORDER BY spend DESC LIMIT 10
     """).fetchall()
 
@@ -253,7 +253,7 @@ def get_tts_sfx_analytics():
         SELECT json_extract(data, '$.displayName') as sender,
             COUNT(*) as count,
             COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
-        FROM events WHERE event_type LIKE 'sfx%' AND sender IS NOT NULL
+        FROM events WHERE event_type = 'sfx:update' AND sender IS NOT NULL
         GROUP BY sender ORDER BY spend DESC LIMIT 10
     """).fetchall()
 
