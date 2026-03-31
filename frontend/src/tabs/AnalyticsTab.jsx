@@ -24,17 +24,18 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
   const [priceChanges, setPriceChanges] = useState([])
 
   useEffect(() => {
-    fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
-    fetch('/api/stocks/history?limit=2000').then(r => r.json()).then(setStockHistory).catch(() => {})
-    fetch('/api/analytics/tts-sfx').then(r => r.json()).then(setTtsAnalytics).catch(() => {})
-    fetch('/api/analytics/chat').then(r => r.json()).then(setChatAnalytics).catch(() => {})
-    fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
-    fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
-    fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
-
-    const interval = setInterval(() => {
+    function fetchAll() {
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
-    }, 30000)
+      fetch('/api/stocks/history?limit=2000').then(r => r.json()).then(setStockHistory).catch(() => {})
+      fetch('/api/analytics/tts-sfx').then(r => r.json()).then(setTtsAnalytics).catch(() => {})
+      fetch('/api/analytics/chat').then(r => r.json()).then(setChatAnalytics).catch(() => {})
+      fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
+      fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
+      fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
+    }
+
+    fetchAll()
+    const interval = setInterval(fetchAll, 30000)
     return () => clearInterval(interval)
   }, [])
 

@@ -16,7 +16,6 @@ export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTarge
   if (!data || typeof data !== 'object') return null
   const [expanded, setExpanded] = useState(false)
 
-  const isQueued = eventType === 'fishtoy:queued'
   const hasMetadata = data.metadata && data.metadata !== 'null'
 
   const iid = String(data.itemId || '')

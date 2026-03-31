@@ -3,7 +3,8 @@ import { FileText, Search, X, ArrowRight } from 'lucide-react'
 
 function formatTime(ts) {
   if (!ts) return ''
-  const ms = ts > 1e12 ? ts : ts * 1000
+  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
+  if (isNaN(ms)) return ''
   const d = new Date(ms)
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' +
     d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })

@@ -12,7 +12,7 @@ import UserSearchTab from './tabs/UserSearchTab'
 
 const MAX_EVENTS = 500
 
-const FISHTOY_TYPES = new Set(['fishtoy:used', 'fishtoy:queued', 'fishtoy:update'])
+const FISHTOY_TYPES = new Set(['fishtoy:used'])
 const CHAT_TYPES = new Set(['chat:message'])
 const ACTIVITY_TYPES = new Set([
   'tts:update', 'sfx:update',
@@ -93,8 +93,8 @@ export default function App() {
       })
       .catch(() => {})
 
-    // Fetch other events
-    fetch('/api/events?type=chat:message,tts:queued,tts:update,sfx:queued,sfx:update,happening&limit=500')
+    // Fetch other events (chat + activity)
+    fetch('/api/events?type=chat:message,tts:update,sfx:update,happening&limit=500')
       .then(r => r.json())
       .then(events => {
         const ch = [], act = []
@@ -105,6 +105,14 @@ export default function App() {
         })
         setChats(ch)
         setActivity(act)
+      })
+      .catch(() => {})
+
+    // Fetch system events (stock changes, price changes, feature toggles)
+    fetch('/api/events?type=tts:price,sfx:price,stock:update,stock:new,stock:remove,stock:split,feature-toggles:update&limit=100')
+      .then(r => r.json())
+      .then(events => {
+        setSystemEvents(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
       })
       .catch(() => {})
   }, [])
