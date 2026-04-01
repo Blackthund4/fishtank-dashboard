@@ -25,11 +25,13 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
   const [fishtoyStatus, setFishtoyStatus] = useState([])
   const [polls, setPolls] = useState([])
   const [priceChanges, setPriceChanges] = useState([])
+  const [stockCount, setStockCount] = useState(0)
 
   useEffect(() => {
     function fetchAll() {
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/stocks/history?limit=2000').then(r => r.json()).then(setStockHistory).catch(() => {})
+      fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
       fetch('/api/analytics/tts-sfx').then(r => r.json()).then(setTtsAnalytics).catch(() => {})
       fetch('/api/analytics/chat').then(r => r.json()).then(setChatAnalytics).catch(() => {})
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
@@ -44,8 +46,8 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
-      {/* Stock Market */}
-      <Section title="Stock Market" icon={TrendingUp}>
+      {/* STO-X */}
+      <Section title="STO-X" icon={TrendingUp}>
         <div className="grid grid-cols-5 gap-2">
           {[...stocks].sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
             const change = s.currentPrice - s.ipoPrice
@@ -80,9 +82,9 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
             )
           })}
         </div>
-        {stockHistory.length > 0 && (
+        {stockCount > 0 && (
           <div className="mt-2 text-[10px] font-mono text-tank-muted">
-            {stockHistory.length} price snapshots recorded
+            {stockCount.toLocaleString()} price snapshots recorded
           </div>
         )}
       </Section>
@@ -90,7 +92,7 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
       {/* Contestant Timeline */}
       <Section title="Contestants" icon={Users}>
         <div className="grid grid-cols-5 gap-2">
-          {contestants.map(c => {
+          {[...contestants].sort((a, b) => (b.endorsements || 0) - (a.endorsements || 0)).map(c => {
             const stock = stocks.find(s => s.tickerSymbol === c.name?.toUpperCase() ||
               s.tickerSymbol === c.name?.substring(0, 4).toUpperCase())
             return (

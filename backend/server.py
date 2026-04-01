@@ -201,10 +201,70 @@ async def broadcast_to_browsers(event_type: str, data, db_id: int):
 fish_client: FishClient = None
 _loop: asyncio.AbstractEventLoop = None
 
+# Dedup tracking for TTS/SFX (fires twice per message)
+_recent_event_hashes: dict = {}  # hash -> timestamp
+_DEDUP_WINDOW = 5  # seconds
+
+
+def _event_hash(evt, data):
+    """Create a hash for deduplication of TTS/SFX events."""
+    if isinstance(data, dict):
+        parts = [evt, str(data.get("displayName", "")), str(data.get("message", "")),
+                 str(data.get("room", "")), str(data.get("cost", ""))]
+        return "|".join(parts)
+    return None
+
+
+def _is_duplicate(evt, data):
+    """Check if this event is a duplicate within the dedup window."""
+    if evt not in ("tts:update", "sfx:update"):
+        return False
+    h = _event_hash(evt, data)
+    if not h:
+        return False
+    now = datetime.now(timezone.utc).timestamp()
+    if h in _recent_event_hashes and (now - _recent_event_hashes[h]) < _DEDUP_WINDOW:
+        return True
+    _recent_event_hashes[h] = now
+    # Prune old entries
+    if len(_recent_event_hashes) > 200:
+        cutoff = now - _DEDUP_WINDOW
+        stale = [k for k, v in _recent_event_hashes.items() if v < cutoff]
+        for k in stale:
+            del _recent_event_hashes[k]
+    return False
+
+
+def _should_filter_chat(data):
+    """Filter chat messages that are TTS/SFX system echoes."""
+    if not isinstance(data, dict):
+        return False
+    user = data.get("user", {})
+    name = user.get("displayName", "") if isinstance(user, dict) else ""
+    return name.lower() in ("tts", "sfx")
+
+
+def _should_filter_notification(data):
+    """Filter season pass gift notifications."""
+    text = str(data).lower() if data else ""
+    return "gifted" in text and "season pass" in text
+
 
 def make_event_handler(evt):
     """Create an event handler for a specific socket event type."""
     def handler(data):
+        # Filter TTS/SFX system echo from chat
+        if evt == "chat:message" and _should_filter_chat(data):
+            return
+
+        # Filter season pass gift notifications
+        if evt == "notification:global" and _should_filter_notification(data):
+            return
+
+        # Dedup TTS/SFX (server fires twice per message)
+        if _is_duplicate(evt, data):
+            return
+
         # Store in database
         db_id = database.store_event(evt, data)
 
@@ -640,6 +700,26 @@ def api_price_changes(limit: int = Query(100, le=500)):
 def api_user_search(username: str, limit: int = Query(500, le=2000)):
     """Search all event types for a specific user."""
     return database.search_user(username=username, limit=limit)
+
+
+@app.get("/api/users/suggest")
+def api_user_suggest(q: str = Query("", description="Username prefix")):
+    """Autocomplete suggestions for usernames."""
+    if len(q) < 2:
+        return []
+    return database.suggest_users(prefix=q, limit=10)
+
+
+@app.get("/api/stocks/count")
+def api_stock_count():
+    """Return actual count of stock history snapshots."""
+    return {"count": database.get_stock_snapshot_count()}
+
+
+@app.get("/api/polls/latest")
+def api_poll_latest():
+    """Return reconstructed state of the most recent poll."""
+    return database.get_latest_poll_state()
 
 
 # --- Serve frontend static files ---

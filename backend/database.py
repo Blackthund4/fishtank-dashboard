@@ -479,3 +479,105 @@ def search_user(username, limit=500):
     }
 
     return results
+
+
+# ============================================================
+# USER AUTOCOMPLETE
+# ============================================================
+
+
+def suggest_users(prefix, limit=10):
+    """Return distinct displayNames matching a prefix (case-insensitive)."""
+    conn = _get_conn()
+    prefix_lower = prefix.lower() + "%"
+
+    # Search across chat and TTS/SFX senders
+    rows = conn.execute("""
+        SELECT DISTINCT name FROM (
+            SELECT json_extract(data, '$.user.displayName') as name
+            FROM events WHERE event_type = 'chat:message'
+            AND LOWER(name) LIKE ?
+            UNION
+            SELECT json_extract(data, '$.displayName') as name
+            FROM events WHERE event_type IN ('tts:update', 'sfx:update')
+            AND LOWER(name) LIKE ?
+            UNION
+            SELECT json_extract(data, '$.displayName') as name
+            FROM events WHERE event_type LIKE 'fishtoy%'
+            AND LOWER(name) LIKE ?
+        ) WHERE name IS NOT NULL
+        LIMIT ?
+    """, (prefix_lower, prefix_lower, prefix_lower, limit)).fetchall()
+    return [row["name"] for row in rows]
+
+
+# ============================================================
+# STOCK SNAPSHOT COUNT
+# ============================================================
+
+
+def get_stock_snapshot_count():
+    """Return actual count of stock history rows."""
+    conn = _get_conn()
+    return conn.execute("SELECT COUNT(*) FROM stock_history").fetchone()[0]
+
+
+# ============================================================
+# POLL STATE RECONSTRUCTION
+# ============================================================
+
+
+def get_latest_poll_state():
+    """Reconstruct the current/latest poll state from database.
+
+    Returns the most recent poll:start, its latest vote tallies,
+    and the poll:stop if it exists.
+    """
+    conn = _get_conn()
+
+    # Get the most recent poll:start
+    start = conn.execute("""
+        SELECT id, timestamp_local, data FROM events
+        WHERE event_type = 'poll:start'
+        ORDER BY id DESC LIMIT 1
+    """).fetchone()
+
+    if not start:
+        return None
+
+    start_data = json.loads(start["data"])
+    poll_info = start_data.get("poll", start_data)
+    pid = poll_info.get("pid", "")
+
+    # Check if there's a poll:stop after this start
+    stop = conn.execute("""
+        SELECT id, timestamp_local, data FROM events
+        WHERE event_type = 'poll:stop' AND id > ?
+        ORDER BY id ASC LIMIT 1
+    """, (start["id"],)).fetchone()
+
+    # Get the latest vote tallies after this start
+    last_vote = conn.execute("""
+        SELECT data FROM events
+        WHERE event_type = 'poll:vote' AND id > ?
+        ORDER BY id DESC LIMIT 1
+    """, (start["id"],)).fetchone()
+
+    result = {
+        "question": poll_info.get("question"),
+        "answers": poll_info.get("answers", []),
+        "pid": pid,
+        "started_at": start["timestamp_local"],
+        "active": stop is None,
+    }
+
+    if last_vote:
+        result["votes"] = json.loads(last_vote["data"])
+
+    if stop:
+        stop_data = json.loads(stop["data"])
+        result["winner"] = stop_data.get("winner")
+        result["ended_at"] = stop["timestamp_local"]
+        result["active"] = False
+
+    return result

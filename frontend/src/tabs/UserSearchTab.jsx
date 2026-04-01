@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Search, MessageSquare, Volume2, Music, Fish, User } from 'lucide-react'
 
 function formatTime(ts) {
@@ -15,9 +15,42 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
   const [activeFilter, setActiveFilter] = useState('all')
+  const [suggestions, setSuggestions] = useState([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const suggestTimer = useRef(null)
+
+  function handleQueryChange(val) {
+    setQuery(val)
+    if (val.trim().length < 2) {
+      setSuggestions([])
+      setShowSuggestions(false)
+      return
+    }
+    // Debounce autocomplete
+    if (suggestTimer.current) clearTimeout(suggestTimer.current)
+    suggestTimer.current = setTimeout(() => {
+      fetch(`/api/users/suggest?q=${encodeURIComponent(val.trim())}`)
+        .then(r => r.json())
+        .then(data => { setSuggestions(data || []); setShowSuggestions(true) })
+        .catch(() => setSuggestions([]))
+    }, 250)
+  }
+
+  function selectSuggestion(name) {
+    setQuery(name)
+    setSuggestions([])
+    setShowSuggestions(false)
+    // Auto-search
+    setLoading(true)
+    fetch(`/api/user/${encodeURIComponent(name)}`)
+      .then(r => r.json())
+      .then(data => { setResults(data); setLoading(false); setActiveFilter('all') })
+      .catch(() => { setResults(null); setLoading(false) })
+  }
 
   function handleSearch(e) {
     e.preventDefault()
+    setShowSuggestions(false)
     const q = query.trim()
     if (!q) return
     setLoading(true)
@@ -52,9 +85,25 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
             type="text"
             placeholder="Enter username..."
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={e => handleQueryChange(e.target.value)}
+            onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
             className="w-full bg-tank-bg border border-tank-border rounded-lg text-sm text-tank-text pl-10 pr-3 py-2 font-mono placeholder:text-tank-muted/50 focus:border-tank-accent/50 focus:outline-none"
           />
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-tank-surface border border-tank-border rounded-lg shadow-lg overflow-hidden">
+              {suggestions.map(name => (
+                <button
+                  key={name}
+                  type="button"
+                  onMouseDown={() => selectSuggestion(name)}
+                  className="w-full text-left px-3 py-1.5 text-sm font-mono text-tank-text hover:bg-tank-highlight transition-colors"
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <button type="submit" className="bg-tank-accent/10 border border-tank-accent/30 text-tank-accent text-sm font-mono px-4 py-2 rounded-lg hover:bg-tank-accent/20">
           Search

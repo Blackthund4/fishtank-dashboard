@@ -26,6 +26,22 @@ const SYSTEM_TYPES = new Set([
   'stock:remove', 'stock:split', 'feature-toggles:update',
 ])
 
+// Extract a sortable timestamp from event data
+function getEventTimestamp(item) {
+  const d = item.data
+  if (!d) return 0
+  const raw = d.createdAt || d.updatedAt || d.timestamp
+  if (!raw) return 0
+  if (typeof raw === 'number') return raw > 1e12 ? raw : raw * 1000
+  const ms = Date.parse(raw)
+  return isNaN(ms) ? 0 : ms
+}
+
+// Sort events newest first by actual timestamp
+function sortByTimestamp(arr) {
+  return [...arr].sort((a, b) => getEventTimestamp(b) - getEventTimestamp(a))
+}
+
 function normalizeStats(raw) {
   const byType = raw.by_type || {}
   return {
@@ -115,6 +131,25 @@ export default function App() {
         setSystemEvents(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
       })
       .catch(() => {})
+
+    // Reconstruct poll state from database
+    fetch('/api/polls/latest')
+      .then(r => r.json())
+      .then(poll => {
+        if (poll && poll.question) {
+          setActivePoll({
+            question: poll.question,
+            answers: poll.answers,
+            pid: poll.pid,
+            ended: !poll.active,
+            winner: poll.winner || null,
+          })
+          if (poll.votes) {
+            setPollVotes(poll.votes)
+          }
+        }
+      })
+      .catch(() => {})
   }, [])
 
   // Live events
@@ -171,7 +206,7 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Client-side filtered fishtoys
+  // Client-side filtered fishtoys (sorted by timestamp, newest first)
   const filteredFishtoys = useMemo(() => {
     let result = fishtoys
     if (filterTarget) {
@@ -195,8 +230,12 @@ export default function App() {
                (name && name.toLowerCase().includes(q))
       })
     }
-    return result
+    return sortByTimestamp(result)
   }, [fishtoys, filterTarget, filterCategory, filterItemId, searchText, itemCatalog])
+
+  // Sorted chat and activity arrays
+  const sortedChats = useMemo(() => sortByTimestamp(chats), [chats])
+  const sortedActivity = useMemo(() => sortByTimestamp(activity), [activity])
 
   // Unique item types seen in fishtoys for filter dropdown
   const seenItemTypes = useMemo(() => {
@@ -313,7 +352,12 @@ export default function App() {
             {new Date(notifications[0].timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
           </span>
           {notifications.length > 1 && (
-            <span className="text-[10px] font-mono text-yellow-400/60">+{notifications.length - 1} more</span>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className="text-[10px] font-mono text-yellow-400/60 hover:text-yellow-400 underline cursor-pointer"
+            >
+              +{notifications.length - 1} more
+            </button>
           )}
         </div>
       )}
@@ -591,11 +635,11 @@ export default function App() {
             </div>
           </div>
 
-          {/* Stock Market ticker */}
+          {/* STO-X ticker */}
           {stocks.length > 0 && (
             <div className="bg-tank-surface border border-tank-border rounded-lg p-2 shrink-0">
               <div className="flex items-center gap-2 mb-1.5">
-                <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Stock Market</h3>
+                <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">STO-X</h3>
               </div>
               <div className="flex gap-2 overflow-x-auto">
                 {[...stocks].sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
@@ -630,20 +674,20 @@ export default function App() {
           {/* Bottom: Chat + Activity side by side */}
           <div className="flex-1 flex gap-2 min-h-0">
             <Panel title="Chat" icon={MessageSquare} count={stats.chats} className="flex-1">
-              {chats.length === 0 ? (
+              {sortedChats.length === 0 ? (
                 <EmptyState text="Waiting for chat messages..." />
               ) : (
-                chats.map((item) => (
+                sortedChats.map((item) => (
                   <ChatMessage key={item.dbId || item.data?.id} data={item.data} />
                 ))
               )}
             </Panel>
 
             <Panel title="Activity" icon={Radio} count={stats.tts + stats.sfx} className="w-[340px] shrink-0">
-              {activity.length === 0 ? (
+              {sortedActivity.length === 0 ? (
                 <EmptyState text="Waiting for TTS / SFX / events..." />
               ) : (
-                activity.map((item) => (
+                sortedActivity.map((item) => (
                   <ActivityCard key={item.dbId || item.data?.id} data={item.data} eventType={item.event} roomMap={roomMap} />
                 ))
               )}

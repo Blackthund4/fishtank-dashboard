@@ -7,7 +7,9 @@ function formatTime(ts) {
   if (isNaN(ms)) return ''
   const d = new Date(ms)
   const now = new Date()
-  const isToday = d.toDateString() === now.toDateString()
+  // Compare dates in UTC to avoid timezone mismatch
+  const isToday = d.getUTCFullYear() === now.getUTCFullYear() &&
+    d.getUTCMonth() === now.getUTCMonth() && d.getUTCDate() === now.getUTCDate()
   const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   return isToday ? time : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' + time
 }
