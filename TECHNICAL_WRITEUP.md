@@ -210,7 +210,27 @@ The fix had two parts: set `is_connected = False` in the listen thread on error,
 
 ### Phase 13: User Activity Search
 
-Added a cross-event-type search that queries chat messages, TTS, SFX, and fishtoy events by username. Each event type stores the username in a different JSON path (`$.user.displayName` for chat, `$.displayName` for TTS/SFX/fishtoys), so the search runs four separate parameterized queries and merges the results into a unified timeline. The frontend provides type filter buttons and displays room names, costs, and hidden fishtoy content inline.
+Added a cross-event-type search that queries chat messages, TTS, SFX, and fishtoy events by username. Each event type stores the username in a different JSON path (`$.user.displayName` for chat, `$.displayName` for TTS/SFX/fishtoys), so the search runs four separate parameterized queries and merges the results into a unified timeline. The frontend provides type filter buttons and displays room names, costs, and hidden fishtoy content inline. Search is case-insensitive using SQLite's `LOWER()` function. An autocomplete system queries distinct displayNames across all event types with a prefix match, debounced at 250ms to avoid hammering the API.
+
+### Phase 14: Data Quality Filtering
+
+Three data quality problems emerged during extended testing that were corrupting analytics:
+
+**TTS/SFX system echoes in chat.** The server echoes every TTS and SFX message as a `chat:message` event with the displayName "tts" or "sfx". This meant every TTS appeared twice in the dashboard (once correctly as a TTS event, once as a fake chat message), and "tts" ranked as the most active chatter in analytics. The fix filters these at the event handler level before database storage, checking if the chat message's displayName matches a known system username.
+
+**TTS/SFX duplicate events.** The server fires `tts:update` twice per TTS message with identical content, timestamp, and cost. A content-hash deduplication system tracks a rolling window of recent event hashes (displayName + message + room + cost) and drops duplicates within a 5-second window. The hash map is pruned at 200 entries to prevent memory growth.
+
+**Season pass gift notification noise.** `notification:global` events include season pass gift announcements ("[user] gifted X season passes!") alongside actual director messages. These are filtered at ingestion by checking for "gifted" and "season pass" in the message text (case-insensitive).
+
+All three filters operate at the ingestion layer rather than the query or display layer. This prevents polluted data from entering the database, keeping analytics accurate and storage clean.
+
+### Phase 15: Poll Resilience and UI Polish
+
+The poll system had a fundamental fragility: `poll:start` and `poll:stop` are single-fire events. If the socket connection is briefly down at the exact moment either fires, that event is lost permanently. `poll:vote` events fire continuously (every time someone votes) so they're nearly impossible to miss, but without `poll:start` there's no question text, and without `poll:stop` there's no winner announcement.
+
+The fix reconstructs poll state from the database. A `/api/polls/latest` endpoint finds the most recent `poll:start`, checks for a matching `poll:stop`, and retrieves the last `poll:vote` entry. If the poll has no `poll:stop`, it's shown as active with the latest vote tallies. The frontend loads this on mount, so poll state survives page refreshes and reconnections.
+
+Additional UI improvements in this phase: events sorted by actual timestamp (not database insertion order) to fix chronological display, UTC-consistent date comparison in timestamp formatting to fix timezone mismatches, contestants sorted by endorsement count, "Stock Market" renamed to "STO-X" to match the product's actual branding, and the director notification banner's "+X more" text linked to the Analytics tab for viewing full history.
 
 ### Key Takeaways
 
@@ -229,6 +249,8 @@ Added a cross-event-type search that queries chat messages, TTS, SFX, and fishto
 7. **Silent failures are the worst bugs.** The socket disconnect issue didn't crash, didn't log errors, and didn't affect the web UI. The only symptom was that new events stopped appearing. Without monitoring or alerting, this would go unnoticed for hours. Building in explicit state transitions and health logging is essential for unattended systems.
 
 8. **Auth flows are discoverable.** When the documented Supabase endpoints didn't work, watching the browser's actual network requests during login revealed the real endpoint in seconds. The browser is always the authoritative client for web API discovery.
+
+9. **Filter at ingestion, not display.** When the server sends polluted data (system echo messages in chat, duplicate TTS events, gift notifications mixed with director messages), filtering at the display layer leaves dirty data in the database that corrupts analytics. Filtering at the ingestion layer keeps the database clean and makes every downstream query accurate without needing per-query workarounds.
 
 ### Relevance to Sales Engineering
 

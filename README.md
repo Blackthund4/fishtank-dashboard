@@ -1,6 +1,6 @@
 # Fishtank Dashboard
 
-Real-time event monitoring dashboard for [fishtank.live](https://www.fishtank.live), an interactive 24/7 reality show. Captures fishtoy redemptions (including hidden metadata like love letter contents), chat messages, TTS, SFX, polls, director messages, stock market data, and system events via a dual data source architecture built on reverse-engineered APIs.
+Real-time event monitoring dashboard for [fishtank.live](https://www.fishtank.live), an interactive 24/7 reality show. Captures fishtoy redemptions (including hidden metadata like love letter contents), chat messages, TTS, SFX, polls, director messages, STO-X (stock market) data, and system events via a dual data source architecture built on reverse-engineered APIs.
 
 ## Architecture
 
@@ -18,10 +18,10 @@ Browser (React)  <--WebSocket-->  Backend (FastAPI)  <--Socket.IO-->  fishtank.l
 On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/contestants`, filtered to current season), room name mappings (`/v1/live-streams`), and stock prices (`/v1/stocks`).
 
 **Frontend** is a React + Tailwind CSS dashboard with four tabs:
-- **Dashboard**: Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room names, stock ticker, target filtering, metadata search, and session stats. Director message banner and live poll bar appear at the top when active.
-- **Analytics**: Stock market cards, contestant grid, TTS/SFX analytics (top rooms, top spenders, hourly activity), chat analytics (top chatters, hourly volume), poll history, director message timeline, price change log, fishtoy availability status, and system events.
+- **Dashboard**: Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room names, STO-X ticker, target filtering, metadata search, and session stats. Director message banner and live poll bar with animated vote percentages appear at the top when active. All event panels sorted chronologically.
+- **Analytics**: STO-X cards with IPO/avg/bid-ask data, contestant grid sorted by endorsements, TTS/SFX analytics (top rooms, top spenders, hourly activity), chat analytics (top chatters, hourly volume), poll history with results, director message timeline, price change log, fishtoy availability status, and system events. All data auto-refreshes every 30 seconds.
 - **Hidden Content**: Searchable archive of fishtoy metadata (love letters, custom messages) with target filtering.
-- **User Search**: Search any username to see their unified activity timeline across chat, TTS, SFX, and fishtoys with type filters.
+- **User Search**: Search any username with autocomplete suggestions to see their unified activity timeline across chat, TTS, SFX, and fishtoys with type filters. Case-insensitive.
 
 ### Key Technical Details
 
@@ -39,6 +39,10 @@ On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/
 - **Stock price history**: Prices are polled every 60 seconds and stored in SQLite for historical tracking.
 - **Automatic authentication**: The dashboard logs in via `/v1/auth/log-in` using email/password from a `.env` file, caches tokens to disk, and automatically re-authenticates on 401 responses. No manual cookie copying required.
 - **Resilient socket reconnection**: If the Socket.IO connection drops, the reconnect loop gets fresh tokens from the auth manager and reconnects with exponential backoff (5s to 60s). Stale token reconnections are eliminated.
+- **Event deduplication**: The fishtank server fires `tts:update` and `sfx:update` twice per message. A content-hash dedup system with a 5-second window filters duplicates at the event handler level before storage.
+- **Chat noise filtering**: The server echoes TTS/SFX messages as `chat:message` events with system usernames ("tts", "sfx"). These are filtered at ingestion to prevent polluting chat data and analytics.
+- **Notification filtering**: Season pass gift notifications (`"[user] gifted X season passes!"`) are filtered from director messages at ingestion.
+- **Poll state reconstruction**: Since `poll:stop` is a single-fire event easily missed during reconnections, the dashboard reconstructs poll state from the database on mount, inferring results from the last `poll:vote` entry when `poll:stop` is missing.
 
 ## Setup
 
@@ -138,16 +142,19 @@ Open http://localhost:3000 (Vite proxies API/WebSocket to the backend)
 | `GET /api/items` | Item catalog (itemId to name/description/icon mapping) |
 | `GET /api/contestants` | Current season contestant list (filtered to active season) |
 | `GET /api/rooms` | Room code to name mapping (e.g. `hwdn-5` to `Hallway`) |
-| `GET /api/stocks` | Live stock market data (refreshes from fishtank API on each call) |
-| `GET /api/stocks/history` | Stock price history from SQLite. Query params: `ticker`, `limit` |
+| `GET /api/stocks` | Current STO-X data (updated by poller every 60s) |
+| `GET /api/stocks/history` | STO-X price history from SQLite. Query params: `ticker`, `limit` |
+| `GET /api/stocks/count` | Actual count of stock history snapshots in database |
 | `GET /api/analytics/tts-sfx` | TTS/SFX analytics: top rooms, top senders, hourly activity |
 | `GET /api/analytics/chat` | Chat analytics: top chatters, hourly volume |
 | `GET /api/hidden-content` | Fishtoy events with metadata only. Query params: `target`, `search`, `limit`, `offset` |
 | `GET /api/fishtoy-availability` | Fishtoy/bigtoy items with enabled/cooldown/cost status |
 | `GET /api/polls` | Poll events (start, stop, vote). Query params: `limit` |
+| `GET /api/polls/latest` | Reconstructed state of the most recent poll |
 | `GET /api/notifications` | Director messages and announcements. Query params: `limit` |
 | `GET /api/price-changes` | TTS/SFX price change history. Query params: `limit` |
-| `GET /api/user/{username}` | Search all event types for a specific user's activity |
+| `GET /api/user/{username}` | Search all event types for a specific user's activity (case-insensitive) |
+| `GET /api/users/suggest` | Username autocomplete suggestions. Query params: `q` (min 2 chars) |
 | `GET /api/status` | Connection status, browser client count, and auth status |
 | `WS /ws` | Live event stream via WebSocket |
 
@@ -194,9 +201,9 @@ fishtank-dashboard/
                 ChatMessage.jsx   Chat message display
                 ActivityCard.jsx  TTS/SFX display with room names
             tabs/
-                AnalyticsTab.jsx      Stock market, contestants, analytics, polls, system events
+                AnalyticsTab.jsx      STO-X, contestants, analytics, polls, system events
                 HiddenContentTab.jsx  Searchable hidden content archive
-                UserSearchTab.jsx     User activity search across all event types
+                UserSearchTab.jsx     User activity search with autocomplete
         index.html
         package.json
         vite.config.js
