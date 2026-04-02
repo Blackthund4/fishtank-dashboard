@@ -82,6 +82,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
   // Fetch data that doesn't depend on time filters
   useEffect(() => {
     function fetchStatic() {
+      if (document.hidden) return  // Skip if tab not visible
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/stocks/history?limit=2000').then(r => r.json()).then(setStockHistory).catch(() => {})
       fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
@@ -91,31 +92,33 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       fetch('/api/analytics/peak-hours').then(r => r.json()).then(setPeakHours).catch(() => {})
     }
     fetchStatic()
-    const interval = setInterval(fetchStatic, 30000)
+    const interval = setInterval(fetchStatic, 120000)
     return () => clearInterval(interval)
   }, [])
 
   // TTS/SFX analytics with its own time filter
   useEffect(() => {
     function fetchTts() {
+      if (document.hidden) return
       const since = getSinceISO(ttsPeriod)
       const param = since ? `?since=${encodeURIComponent(since)}` : ''
       fetch(`/api/analytics/tts-sfx${param}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
     }
     fetchTts()
-    const interval = setInterval(fetchTts, 30000)
+    const interval = setInterval(fetchTts, 120000)
     return () => clearInterval(interval)
   }, [ttsPeriod])
 
   // Chat analytics with its own time filter
   useEffect(() => {
     function fetchChat() {
+      if (document.hidden) return
       const since = getSinceISO(chatPeriod)
       const param = since ? `?since=${encodeURIComponent(since)}` : ''
       fetch(`/api/analytics/chat${param}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
     }
     fetchChat()
-    const interval = setInterval(fetchChat, 30000)
+    const interval = setInterval(fetchChat, 120000)
     return () => clearInterval(interval)
   }, [chatPeriod])
 
@@ -589,6 +592,7 @@ function StackedHourlyBar({ data }) {
               title={`${hour}:00 UTC\nTTS: ${entry.tts}\nSFX: ${entry.sfx}\nFishtoys: ${entry.fishtoys}\nTotal: ${entry.total}`}
             >
               <div className="w-full flex flex-col-reverse" style={{ height: '64px' }}>
+                <div className="w-full bg-purple-400/70 rounded-t-sm" style={{ height: `${ttsPct}%` }} />
                 <div className="w-full bg-purple-400/70" style={{ height: `${ttsPct}%` }} />
                 <div className="w-full bg-indigo-400/70" style={{ height: `${sfxPct}%` }} />
                 <div className="w-full bg-emerald-400/70" style={{ height: `${fishPct}%` }} />

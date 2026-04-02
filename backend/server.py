@@ -81,6 +81,33 @@ _stocks = []        # [{tickerSymbol, currentPrice, ...}]
 CAPTURE_TYPES = {"FISHTOY", "BIGTOY"}
 
 # ============================================================
+# ANALYTICS CACHE
+# ============================================================
+
+_analytics_cache = {}  # key -> (timestamp, data)
+CACHE_TTL = 60  # seconds
+CACHE_MAX_ENTRIES = 50  # max cache entries before pruning
+
+
+def _cached_query(key, func, *args):
+    """Return cached result if fresh, otherwise run func and cache."""
+    now = _time.time()
+    if key in _analytics_cache:
+        cached_at, data = _analytics_cache[key]
+        if now - cached_at < CACHE_TTL:
+            return data
+
+    # Prune expired entries if cache is getting large
+    if len(_analytics_cache) > CACHE_MAX_ENTRIES:
+        expired = [k for k, (ts, _) in _analytics_cache.items() if now - ts >= CACHE_TTL]
+        for k in expired:
+            del _analytics_cache[k]
+
+    result = func(*args)
+    _analytics_cache[key] = (now, result)
+    return result
+
+# ============================================================
 # RATE LIMITING
 # ============================================================
 
@@ -786,7 +813,7 @@ def api_events(
 
 @app.get("/api/stats")
 def api_stats(since: str = Query(None, description="ISO timestamp to filter from")):
-    return database.get_stats(since=since)
+    return _cached_query(f"stats:{since}", database.get_stats, since)
 
 
 @app.get("/api/status")
@@ -906,19 +933,19 @@ def api_stock_history(
 @app.get("/api/analytics/tts-sfx")
 def api_tts_sfx_analytics(since: str = Query(None)):
     """TTS and SFX analytics: top rooms, top senders, hourly activity."""
-    return database.get_tts_sfx_analytics(since=since)
+    return _cached_query(f"tts-sfx:{since}", database.get_tts_sfx_analytics, since)
 
 
 @app.get("/api/analytics/chat")
 def api_chat_analytics(since: str = Query(None)):
     """Chat analytics: top chatters, hourly volume."""
-    return database.get_chat_analytics(since=since)
+    return _cached_query(f"chat:{since}", database.get_chat_analytics, since)
 
 
 @app.get("/api/analytics/peak-hours")
 def api_peak_hours():
     """Combined hourly activity across all event types with peak/quietest hours."""
-    return database.get_peak_hours()
+    return _cached_query("peak-hours", database.get_peak_hours)
 
 
 @app.get("/api/hidden-content")

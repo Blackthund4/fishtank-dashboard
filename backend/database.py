@@ -37,6 +37,8 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp_server);
+        CREATE INDEX IF NOT EXISTS idx_events_type_ts_local ON events(event_type, timestamp_local);
+        CREATE INDEX IF NOT EXISTS idx_events_ts_local ON events(timestamp_local);
 
         CREATE TABLE IF NOT EXISTS stock_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
