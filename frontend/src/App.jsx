@@ -110,28 +110,33 @@ export default function App() {
       })
       .catch(() => {})
 
-    // Fetch other events (chat + activity)
-    fetch('/api/events?type=chat:message,tts:update,sfx:update,happening&limit=500')
+    // Fetch chat messages
+    fetch('/api/events?type=chat:message&limit=500')
       .then(r => r.json())
       .then(events => {
-        const ch = [], act = []
-        events.forEach(e => {
-          const item = { event: e.event_type, data: e.data, dbId: e.id }
-          if (CHAT_TYPES.has(e.event_type)) ch.push(item)
-          else if (ACTIVITY_TYPES.has(e.event_type)) act.push(item)
-        })
-        setChats(ch)
-        setActivity(act)
+        setChats(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
       })
       .catch(() => {})
 
-    // Fetch system events (stock changes, price changes, feature toggles)
-    fetch('/api/events?type=tts:price,sfx:price,stock:update,stock:new,stock:remove,stock:split,feature-toggles:update&limit=100')
+    // Fetch activity (TTS/SFX/happening) separately so chat doesn't crowd them out
+    fetch('/api/events?type=tts:update,sfx:update,happening&limit=500')
       .then(r => r.json())
       .then(events => {
-        setSystemEvents(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
+        setActivity(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
       })
       .catch(() => {})
+
+    // Fetch system events separately so one type doesn't crowd out others
+    Promise.all([
+      fetch('/api/events?type=tts:price,sfx:price&limit=50').then(r => r.json()).catch(() => []),
+      fetch('/api/events?type=stock:update,stock:new,stock:remove,stock:split&limit=50').then(r => r.json()).catch(() => []),
+      fetch('/api/events?type=feature-toggles:update&limit=50').then(r => r.json()).catch(() => []),
+    ]).then(([prices, stocks, toggles]) => {
+      const all = [...prices, ...stocks, ...toggles]
+        .map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))
+        .sort((a, b) => (b.dbId || 0) - (a.dbId || 0))
+      setSystemEvents(all)
+    })
 
     // Reconstruct poll state from database
     fetch('/api/polls/latest')
