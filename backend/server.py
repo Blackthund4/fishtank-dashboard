@@ -434,6 +434,9 @@ def fishtoy_poller():
     prev_poll_ids = []
     first_poll = True
 
+    # Load known fishtoy IDs from database for backfill detection
+    known_ids = database.get_known_fishtoy_ids()
+
     while not _poller_stop.is_set():
         try:
             r = session.get("https://api.fishtank.live/v1/items/recent", timeout=10)
@@ -454,6 +457,7 @@ def fishtoy_poller():
             items = r.json().get("items", [])
             _last_fishtoy_poll = datetime.now(timezone.utc)
             this_poll_ids = set()
+            backfilled = 0
 
             for item in items:
                 item_id = item.get("id")
@@ -462,8 +466,12 @@ def fishtoy_poller():
                 if item_id in seen_ids:
                     continue
 
+                # On first poll, check DB for backfill instead of skipping
                 if first_poll:
-                    continue
+                    if str(item_id) in known_ids:
+                        continue
+                    # This item happened while we were down - backfill it
+                    backfilled += 1
 
                 # Filter: only capture FISHTOY and BIGTOY
                 iid = str(item.get("itemId", ""))
@@ -482,7 +490,8 @@ def fishtoy_poller():
                 item_name = cat_entry.get("name", f"#{iid}")
                 meta = item.get("metadata", "")
                 meta_str = str(meta) if meta else ""
-                print(f"[{t}] {item_type or '?'}: {name} -> {target} ({item_name}){f' [{meta_str[:50]}]' if meta_str else ''}")
+                prefix = "[BACKFILL] " if first_poll else ""
+                print(f"[{t}] {prefix}{item_type or '?'}: {name} -> {target} ({item_name}){f' [{meta_str[:50]}]' if meta_str else ''}")
 
                 # Broadcast to browsers
                 if _loop and _loop.is_running():
@@ -498,7 +507,10 @@ def fishtoy_poller():
 
             if first_poll:
                 first_poll = False
-                print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: {len(items)} items in snapshot. Watching...")
+                if backfilled:
+                    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: backfilled {backfilled} missed events from {len(items)} items")
+                else:
+                    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: {len(items)} items in snapshot, no gaps detected. Watching...")
 
         except http_requests.RequestException as e:
             print(f"[!] Fishtoy poll error: {e}")
@@ -541,8 +553,8 @@ def catalog_refresh_poller():
     if not auth.is_configured:
         return
 
-    # Wait 30 minutes before first refresh (load_catalog already ran on startup)
-    _poller_stop.wait(1800)
+    # Wait 10 minutes before first refresh (load_catalog already ran on startup)
+    _poller_stop.wait(600)
 
     while not _poller_stop.is_set():
         session = auth.get_session()
@@ -584,7 +596,7 @@ def catalog_refresh_poller():
         except Exception as e:
             print(f"[WARN] Catalog refresh failed (contestants): {e}")
 
-        _poller_stop.wait(1800)  # 30 minutes
+        _poller_stop.wait(600)  # 10 minutes
 
 
 # ============================================================
@@ -793,6 +805,12 @@ def api_tts_sfx_analytics(since: str = Query(None)):
 def api_chat_analytics(since: str = Query(None)):
     """Chat analytics: top chatters, hourly volume."""
     return database.get_chat_analytics(since=since)
+
+
+@app.get("/api/analytics/peak-hours")
+def api_peak_hours():
+    """Combined hourly activity across all event types with peak/quietest hours."""
+    return database.get_peak_hours()
 
 
 @app.get("/api/hidden-content")

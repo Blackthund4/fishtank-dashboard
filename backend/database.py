@@ -707,3 +707,60 @@ def get_event_count():
     """Return total event count."""
     conn = _get_conn()
     return conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+
+# ============================================================
+# BACKFILL DETECTION
+# ============================================================
+
+
+def get_known_fishtoy_ids(limit=200):
+    """Return set of event_ids for recent fishtoy events."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT event_id FROM events
+        WHERE event_type LIKE 'fishtoy%%' AND event_id IS NOT NULL
+        ORDER BY id DESC LIMIT ?
+    """, (limit,)).fetchall()
+    return {row["event_id"] for row in rows}
+
+
+# ============================================================
+# PEAK HOURS
+# ============================================================
+
+
+def get_peak_hours():
+    """Return combined hourly activity across all event types."""
+    conn = _get_conn()
+
+    hourly = conn.execute("""
+        SELECT strftime('%H', timestamp_local) as hour,
+            SUM(CASE WHEN event_type = 'chat:message' THEN 1 ELSE 0 END) as chat,
+            SUM(CASE WHEN event_type = 'tts:update' THEN 1 ELSE 0 END) as tts,
+            SUM(CASE WHEN event_type = 'sfx:update' THEN 1 ELSE 0 END) as sfx,
+            SUM(CASE WHEN event_type LIKE 'fishtoy%%' THEN 1 ELSE 0 END) as fishtoys,
+            COUNT(*) as total
+        FROM events
+        WHERE event_type IN ('chat:message', 'tts:update', 'sfx:update')
+            OR event_type LIKE 'fishtoy%%'
+        GROUP BY hour ORDER BY hour
+    """).fetchall()
+
+    hours = [{"hour": r["hour"], "chat": r["chat"], "tts": r["tts"],
+              "sfx": r["sfx"], "fishtoys": r["fishtoys"], "total": r["total"]}
+             for r in hourly]
+
+    # Find peak hours
+    if hours:
+        peak = sorted(hours, key=lambda h: h["total"], reverse=True)[:3]
+        quietest = sorted(hours, key=lambda h: h["total"])[:3]
+    else:
+        peak = []
+        quietest = []
+
+    return {
+        "hourly": hours,
+        "peak": [{"hour": h["hour"], "total": h["total"]} for h in peak],
+        "quietest": [{"hour": h["hour"], "total": h["total"]} for h in quietest],
+    }

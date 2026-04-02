@@ -60,6 +60,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
   const [polls, setPolls] = useState([])
   const [priceChanges, setPriceChanges] = useState([])
   const [stockCount, setStockCount] = useState(0)
+  const [peakHours, setPeakHours] = useState(null)
 
   // Per-section time filters
   const [ttsPeriod, setTtsPeriod] = useState(null)
@@ -87,6 +88,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
       fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
       fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
+      fetch('/api/analytics/peak-hours').then(r => r.json()).then(setPeakHours).catch(() => {})
     }
     fetchStatic()
     const interval = setInterval(fetchStatic, 30000)
@@ -245,6 +247,35 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
           })}
         </div>
       </Section>
+
+      {/* Peak Hours */}
+      {peakHours && peakHours.hourly.length > 0 && (
+        <Section title="Peak Activity Hours (UTC)" icon={Zap}>
+          <div className="flex gap-4 mb-3">
+            <div>
+              <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Busiest</h4>
+              <div className="flex gap-2">
+                {peakHours.peak.map(h => (
+                  <span key={h.hour} className="text-xs font-mono px-2 py-1 rounded bg-green-500/10 text-green-400 border border-green-500/20">
+                    {h.hour}:00 ({h.total.toLocaleString()})
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Quietest</h4>
+              <div className="flex gap-2">
+                {peakHours.quietest.map(h => (
+                  <span key={h.hour} className="text-xs font-mono px-2 py-1 rounded bg-tank-highlight text-tank-muted border border-tank-border">
+                    {h.hour}:00 ({h.total.toLocaleString()})
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <StackedHourlyBar data={peakHours.hourly} />
+        </Section>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         {/* TTS/SFX Analytics */}
@@ -536,6 +567,47 @@ function HourlyBar({ data, color }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function StackedHourlyBar({ data }) {
+  const max = Math.max(...data.map(d => d.total), 1)
+  return (
+    <div>
+      <div className="flex items-end gap-px h-20">
+        {Array.from({ length: 24 }, (_, i) => {
+          const hour = String(i).padStart(2, '0')
+          const entry = data.find(d => d.hour === hour) || { chat: 0, tts: 0, sfx: 0, fishtoys: 0, total: 0 }
+          const chatPct = (entry.chat / max) * 100
+          const ttsPct = (entry.tts / max) * 100
+          const sfxPct = (entry.sfx / max) * 100
+          const fishPct = (entry.fishtoys / max) * 100
+          return (
+            <div
+              key={hour}
+              className="flex-1 flex flex-col items-center"
+              title={`${hour}:00 UTC\nChat: ${entry.chat}\nTTS: ${entry.tts}\nSFX: ${entry.sfx}\nFishtoys: ${entry.fishtoys}\nTotal: ${entry.total}`}
+            >
+              <div className="w-full flex flex-col-reverse" style={{ height: '64px' }}>
+                <div className="w-full bg-blue-400/70 rounded-t-sm" style={{ height: `${Math.max(chatPct, 0.5)}%` }} />
+                <div className="w-full bg-purple-400/70" style={{ height: `${ttsPct}%` }} />
+                <div className="w-full bg-indigo-400/70" style={{ height: `${sfxPct}%` }} />
+                <div className="w-full bg-emerald-400/70" style={{ height: `${fishPct}%` }} />
+              </div>
+              {i % 3 === 0 && (
+                <span className="text-[8px] text-tank-muted mt-0.5">{hour}</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex items-center gap-3 mt-2">
+        <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-blue-400/70" />Chat</span>
+        <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-purple-400/70" />TTS</span>
+        <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-indigo-400/70" />SFX</span>
+        <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-emerald-400/70" />Fishtoys</span>
+      </div>
     </div>
   )
 }
