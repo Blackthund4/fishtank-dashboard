@@ -282,7 +282,15 @@ With the show on day 19 of 30, capturing events 24/7 became urgent. The dashboar
 
 **Backfill detection.** The fishtoy poller previously skipped everything on its first poll to establish a baseline. This meant any fishtoys that happened during server downtime were silently lost. The fix loads known fishtoy event IDs from the database before the first poll and compares each API item against them. Items not in the database are stored and logged with a `[BACKFILL]` prefix.
 
-**VPS deployment.** Vultr Cloud Compute ($3.50/month, Ubuntu 24.04 with Docker marketplace app). Server hardening: UFW firewall allowing only ports 22 (SSH) and 8000, SSH key-based auth with password login disabled, Docker log rotation (50MB max, 3 files), Ubuntu unattended security upgrades. Historical database (291k events) uploaded via SCP. UptimeRobot configured for external monitoring on `/api/health`.
+**VPS deployment.** Vultr Cloud Compute ($3.50/month, Ubuntu 24.04 with Docker marketplace app). Server hardening: SSH key-based auth with password login disabled, Docker log rotation (50MB max, 3 files), Ubuntu unattended security upgrades. Historical database (291k events) uploaded via SCP. UptimeRobot configured for external monitoring on `/api/health`.
+
+**Custom domain and Cloudflare.** Registered `fish-dash.com` through Cloudflare Registrar and configured it as a reverse proxy to the VPS. DNS A records for `@` and `www` point to the VPS IP with Cloudflare's proxy enabled (orange cloud), providing automatic SSL termination, DDoS protection, and CDN caching of static assets. SSL mode set to Flexible (Cloudflare terminates HTTPS, connects to VPS over HTTP on port 80).
+
+Cloudflare security settings: HSTS enabled with 6-month max-age, Always Use HTTPS enforced, minimum TLS 1.2, Browser Integrity Check on, Security Level medium, Bot Fight Mode off (required for UptimeRobot compatibility), Email Address Obfuscation off (can corrupt API JSON responses), Hotlink Protection on. A cache bypass rule prevents Cloudflare from caching `/api/*` and `/ws` paths. A redirect rule sends `www.fish-dash.com` to the apex domain with a 301.
+
+The UFW firewall was tightened to accept port 80 connections only from Cloudflare's published IP ranges, preventing anyone from bypassing Cloudflare by hitting the VPS IP directly. Port 8000 was closed entirely. The only public entry points are port 22 (SSH, key-only) and port 80 (Cloudflare-only).
+
+An unexpected issue surfaced with UptimeRobot: it sends HEAD requests by default, but FastAPI's `@app.get()` decorator only handles GET. HEAD requests returned 405 Method Not Allowed. The fix required two changes: adding HEAD to the CORS allowed methods, and changing the health endpoint's decorator from `@app.get()` to `@app.api_route("/api/health", methods=["GET", "HEAD"])`. Cloudflare's Bot Fight Mode also blocked UptimeRobot's automated requests until it was disabled.
 
 ### Key Takeaways
 
@@ -309,6 +317,8 @@ With the show on day 19 of 30, capturing events 24/7 became urgent. The dashboar
 11. **Tests catch assumptions.** Writing unit tests for `get_latest_poll_state` immediately revealed that the function didn't include a `winner` key when no `poll:stop` existed. The test expected `state["winner"]` to be `None`, but the key was absent entirely. This is the kind of bug that works in the UI (optional chaining handles it) but breaks downstream consumers that expect a consistent schema.
 
 12. **Shared queries with limits are a silent data loss vector.** When one event type has 50x the volume of another and they share a query with `LIMIT 500`, the low-volume type effectively doesn't exist in the results. This bug appeared three separate times (polls, activity, system events) before being recognized as a pattern. The rule is simple: never mix event types with different orders of magnitude in a single limited query.
+
+13. **Third-party services make assumptions you didn't plan for.** UptimeRobot sends HEAD requests; FastAPI's `@app.get()` rejects them with 405. Cloudflare's Bot Fight Mode blocks the same monitoring service you're relying on for uptime alerts. Each integration layer adds constraints that only surface in production. Testing locally with `curl` wouldn't have caught either issue because curl defaults to GET and doesn't route through Cloudflare.
 
 ### Relevance to Sales Engineering
 
