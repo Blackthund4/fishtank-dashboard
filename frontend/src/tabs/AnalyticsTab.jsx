@@ -578,8 +578,7 @@ function StackedHourlyBar({ data }) {
       <div className="flex items-end gap-px h-20">
         {Array.from({ length: 24 }, (_, i) => {
           const hour = String(i).padStart(2, '0')
-          const entry = data.find(d => d.hour === hour) || { chat: 0, tts: 0, sfx: 0, fishtoys: 0, total: 0 }
-          const chatPct = (entry.chat / max) * 100
+          const entry = data.find(d => d.hour === hour) || { tts: 0, sfx: 0, fishtoys: 0, total: 0 }
           const ttsPct = (entry.tts / max) * 100
           const sfxPct = (entry.sfx / max) * 100
           const fishPct = (entry.fishtoys / max) * 100
@@ -587,10 +586,9 @@ function StackedHourlyBar({ data }) {
             <div
               key={hour}
               className="flex-1 flex flex-col items-center"
-              title={`${hour}:00 UTC\nChat: ${entry.chat}\nTTS: ${entry.tts}\nSFX: ${entry.sfx}\nFishtoys: ${entry.fishtoys}\nTotal: ${entry.total}`}
+              title={`${hour}:00 UTC\nTTS: ${entry.tts}\nSFX: ${entry.sfx}\nFishtoys: ${entry.fishtoys}\nTotal: ${entry.total}`}
             >
               <div className="w-full flex flex-col-reverse" style={{ height: '64px' }}>
-                <div className="w-full bg-blue-400/70 rounded-t-sm" style={{ height: `${Math.max(chatPct, 0.5)}%` }} />
                 <div className="w-full bg-purple-400/70" style={{ height: `${ttsPct}%` }} />
                 <div className="w-full bg-indigo-400/70" style={{ height: `${sfxPct}%` }} />
                 <div className="w-full bg-emerald-400/70" style={{ height: `${fishPct}%` }} />
@@ -603,7 +601,6 @@ function StackedHourlyBar({ data }) {
         })}
       </div>
       <div className="flex items-center gap-3 mt-2">
-        <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-blue-400/70" />Chat</span>
         <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-purple-400/70" />TTS</span>
         <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-indigo-400/70" />SFX</span>
         <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-emerald-400/70" />Fishtoys</span>
