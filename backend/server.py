@@ -19,16 +19,19 @@ Legacy usage:
 import asyncio
 import json
 import logging
+import os
+import time as _time
 import types
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from threading import Thread, Event
 
 import requests as http_requests
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 
 from fishclient import FishClient
@@ -76,6 +79,79 @@ _contestants = []   # [{id, name, color, photo, ...}]
 _room_map = {}      # room code -> room name (e.g. "hwdn-5" -> "Hallway")
 _stocks = []        # [{tickerSymbol, currentPrice, ...}]
 CAPTURE_TYPES = {"FISHTOY", "BIGTOY"}
+
+# ============================================================
+# RATE LIMITING
+# ============================================================
+
+MAX_WS_CLIENTS = 50  # Max concurrent WebSocket connections
+
+# Per-IP rate limiting: requests per window
+_rate_limits: dict = defaultdict(list)  # ip -> [timestamps]
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 120    # max requests per window per IP
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if the request should be rejected."""
+    now = _time.time()
+    timestamps = _rate_limits[ip]
+    # Prune old entries
+    cutoff = now - RATE_LIMIT_WINDOW
+    _rate_limits[ip] = [t for t in timestamps if t > cutoff]
+    if len(_rate_limits[ip]) >= RATE_LIMIT_MAX:
+        return True
+    _rate_limits[ip].append(now)
+    return False
+
+
+def _prune_rate_limits():
+    """Periodic cleanup of stale rate limit entries."""
+    now = _time.time()
+    cutoff = now - RATE_LIMIT_WINDOW
+    stale_ips = [ip for ip, ts in _rate_limits.items() if not ts or ts[-1] < cutoff]
+    for ip in stale_ips:
+        del _rate_limits[ip]
+
+
+# ============================================================
+# DATABASE BACKUP
+# ============================================================
+
+BACKUP_INTERVAL = 21600  # 6 hours
+_last_backup = None
+
+
+def db_backup_poller():
+    """Periodically back up the SQLite database using SQLite's online backup API."""
+    global _last_backup
+    import sqlite3
+
+    # First backup after 5 minutes (don't wait 6 hours)
+    _poller_stop.wait(300)
+
+    while not _poller_stop.is_set():
+        try:
+            db_path = database.DB_PATH
+            if str(db_path) == ":memory:" or not Path(db_path).exists():
+                _poller_stop.wait(BACKUP_INTERVAL)
+                continue
+
+            backup_path = str(db_path) + ".backup"
+            # Use SQLite online backup API for a consistent copy
+            src = sqlite3.connect(str(db_path))
+            dst = sqlite3.connect(backup_path)
+            src.backup(dst)
+            dst.close()
+            src.close()
+
+            _last_backup = datetime.now(timezone.utc)
+            size_mb = Path(backup_path).stat().st_size / (1024 * 1024)
+            print(f"[OK] Database backup: {backup_path} ({size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"[!] Database backup failed: {e}")
+
+        _poller_stop.wait(BACKUP_INTERVAL)
 
 # ============================================================
 # FISHCLIENT PATCHES (same as the logger script)
@@ -623,8 +699,11 @@ async def lifespan(app: FastAPI):
     # Start stock price history poller in background thread
     Thread(target=stock_poller, daemon=True).start()
 
-    # Start catalog refresh poller (contestants + items every 30 min)
+    # Start catalog refresh poller (contestants + items every 10 min)
     Thread(target=catalog_refresh_poller, daemon=True).start()
+
+    # Start database backup poller (every 6 hours)
+    Thread(target=db_backup_poller, daemon=True).start()
 
     yield
 
@@ -634,12 +713,44 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
 
+# CORS: configurable via ALLOWED_ORIGINS env var (comma-separated)
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For local dev. On a VPS, set to your domain.
-    allow_methods=["*"],
+    allow_origins=[o.strip() for o in _allowed_origins],
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+# Rate limiting middleware
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Skip rate limiting for static files
+    if request.url.path.startswith("/assets") or request.url.path == "/":
+        return await call_next(request)
+
+    ip = request.client.host if request.client else "unknown"
+    if _check_rate_limit(ip):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many requests. Try again later."},
+        )
+
+    # Periodic cleanup
+    if len(_rate_limits) > 1000:
+        _prune_rate_limits()
+
+    return await call_next(request)
+
+
+# Suppress stack traces in production
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 # --- WebSocket for live browser updates ---
@@ -647,11 +758,13 @@ app.add_middleware(
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    if len(browser_clients) >= MAX_WS_CLIENTS:
+        await ws.close(code=1013, reason="Too many connections")
+        return
     await ws.accept()
     browser_clients.add(ws)
     try:
         while True:
-            # Keep connection alive, ignore incoming messages
             await ws.receive_text()
     except WebSocketDisconnect:
         pass
@@ -682,13 +795,14 @@ def api_status():
     return {
         "connected": fc is not None and fc.is_connected,
         "browser_clients": len(browser_clients),
-        "auth": auth.status(),
+        "auth_mode": auth.mode,
+        "auth_configured": auth.is_configured,
     }
 
 
 @app.get("/api/health")
 def api_health():
-    """Comprehensive health check for monitoring."""
+    """Health check for monitoring. Sensitive details omitted."""
     now = datetime.now(timezone.utc)
     fc = fish_client
 
@@ -708,11 +822,9 @@ def api_health():
 
     # Database health
     try:
-        event_types = database.get_last_event_per_type()
         total_events = database.get_event_count()
         db_ok = True
-    except Exception as e:
-        event_types = {}
+    except Exception:
         total_events = 0
         db_ok = False
 
@@ -734,23 +846,19 @@ def api_health():
     return {
         "status": "healthy" if not issues else "degraded",
         "issues": issues,
-        "uptime": {
-            "socket_connected": socket_connected,
-            "socket_uptime_seconds": socket_uptime,
-            "socket_connected_at": _socket_connected_at.isoformat() if _socket_connected_at else None,
-        },
+        "socket_connected": socket_connected,
+        "socket_uptime_seconds": socket_uptime,
         "pollers": {
-            "fishtoy_last_poll": _last_fishtoy_poll.isoformat() if _last_fishtoy_poll else None,
             "fishtoy_age_seconds": fishtoy_age,
-            "stock_last_poll": _last_stock_poll.isoformat() if _last_stock_poll else None,
             "stock_age_seconds": stock_age,
         },
         "database": {
             "ok": db_ok,
             "total_events": total_events,
-            "event_types": event_types,
         },
-        "auth": auth.status(),
+        "backup": {
+            "last_backup": _last_backup.isoformat() if _last_backup else None,
+        },
         "browser_clients": len(browser_clients),
         "checked_at": now.isoformat(),
     }

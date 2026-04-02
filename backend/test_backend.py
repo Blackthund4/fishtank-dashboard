@@ -22,6 +22,7 @@ import database
 # Import filter functions from server (without starting the app)
 sys.path.insert(0, os.path.dirname(__file__))
 from server import _should_filter_chat, _should_filter_notification, _is_duplicate, _seen_tts_sfx_ids
+from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX
 
 
 # ============================================================
@@ -41,8 +42,9 @@ def fresh_db():
     """)
     database.init_db()
     yield
-    # Clear dedup state between tests
+    # Clear dedup and rate limit state between tests
     _seen_tts_sfx_ids.clear()
+    _rate_limits.clear()
 
 
 # ============================================================
@@ -411,3 +413,41 @@ def test_dedup_handles_no_id():
 def test_dedup_handles_bad_data():
     assert _is_duplicate("tts:update", None) is False
     assert _is_duplicate("tts:update", "string") is False
+
+
+# ============================================================
+# RATE LIMITING
+# ============================================================
+
+
+def test_rate_limit_allows_normal_traffic():
+    for _ in range(10):
+        assert _check_rate_limit("192.168.1.1") is False
+
+
+def test_rate_limit_rejects_over_limit():
+    for _ in range(RATE_LIMIT_MAX):
+        _check_rate_limit("10.0.0.1")
+    assert _check_rate_limit("10.0.0.1") is True
+
+
+def test_rate_limit_per_ip():
+    for _ in range(RATE_LIMIT_MAX):
+        _check_rate_limit("10.0.0.2")
+    # Different IP should still be allowed
+    assert _check_rate_limit("10.0.0.3") is False
+
+
+def test_rate_limit_prune_cleans_stale():
+    _check_rate_limit("10.0.0.4")
+    assert "10.0.0.4" in _rate_limits
+    # Manually expire the entry
+    _rate_limits["10.0.0.4"] = [0]  # timestamp 0 = long ago
+    _prune_rate_limits()
+    assert "10.0.0.4" not in _rate_limits
+
+
+def test_rate_limit_prune_keeps_active():
+    _check_rate_limit("10.0.0.5")
+    _prune_rate_limits()
+    assert "10.0.0.5" in _rate_limits
