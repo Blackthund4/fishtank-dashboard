@@ -19,7 +19,6 @@ const ACTIVITY_TYPES = new Set([
   'happening', 'item:new', 'item:update',
   'item-details:new', 'item-details:update',
 ])
-const POLL_TYPES = new Set(['poll:start', 'poll:stop', 'poll:vote'])
 const NOTIFICATION_TYPES = new Set(['notification:global', 'announcement'])
 const SYSTEM_TYPES = new Set([
   'tts:price', 'sfx:price', 'stock:update', 'stock:new',
@@ -178,8 +177,13 @@ export default function App() {
           setStats(s => ({ ...s, sfx: s.sfx + 1, total_spend: s.total_spend + (msg.data?.cost || 0) }))
         }
       } else if (msg.event_type === 'poll:start') {
-        setActivePoll(msg.data)
-        setPollVotes([])
+        const pollData = msg.data?.poll || msg.data
+        setActivePoll({
+          question: pollData.question,
+          answers: pollData.answers,
+          pid: pollData.pid,
+        })
+        setPollVotes(msg.data?.scores || [])
       } else if (msg.event_type === 'poll:vote') {
         setPollVotes(Array.isArray(msg.data) ? msg.data : [])
       } else if (msg.event_type === 'poll:stop') {
@@ -369,7 +373,7 @@ export default function App() {
             <button
               onClick={() => {
                 setActiveTab('analytics')
-                setTimeout(() => analyticsRef.current?.scrollToDirector(), 100)
+                setTimeout(() => analyticsRef.current?.scrollToDirector(), 400)
               }}
               className="text-[10px] font-mono text-yellow-400/60 hover:text-yellow-400 underline cursor-pointer"
             >

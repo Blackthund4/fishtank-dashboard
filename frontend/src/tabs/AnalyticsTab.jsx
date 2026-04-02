@@ -68,10 +68,13 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
   const directorRef = useRef(null)
+  const [directorHighlight, setDirectorHighlight] = useState(false)
 
   useImperativeHandle(ref, () => ({
     scrollToDirector: () => {
-      directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+      directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setDirectorHighlight(true)
+      setTimeout(() => setDirectorHighlight(false), 2000)
     }
   }))
 
@@ -378,7 +381,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
       <div className="grid grid-cols-2 gap-3">
         {/* Director Messages */}
-        <div ref={directorRef}>
+        <div ref={directorRef} className={directorHighlight ? 'animate-highlight-pulse rounded-lg' : ''}>
           <Section title="Director Messages" icon={Bell}>
             {notifications.length > 0 ? (
               <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
