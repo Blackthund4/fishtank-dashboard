@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { TrendingUp, Volume2, MessageSquare, Users, Bell, Vote, Zap } from 'lucide-react'
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
+import { TrendingUp, Volume2, MessageSquare, Users, Bell, Vote, Zap, Fish } from 'lucide-react'
 
 function formatTime(ts) {
   if (!ts) return ''
@@ -17,7 +17,28 @@ function formatDateTime(ts) {
     d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifications = [], systemEvents = [] }) {
+function getSinceISO(period) {
+  if (!period) return null
+  const now = new Date()
+  const hours = period === '24h' ? 24 : period === '3d' ? 72 : period === '7d' ? 168 : 0
+  if (!hours) return null
+  return new Date(now.getTime() - hours * 3600000).toISOString()
+}
+
+const TIME_FILTERS = [
+  { id: null, label: 'All' },
+  { id: '7d', label: '7d' },
+  { id: '3d', label: '3d' },
+  { id: '24h', label: '24h' },
+]
+
+const STOCK_SORTS = [
+  { id: 'value', label: 'Highest' },
+  { id: 'up', label: 'Movers Up' },
+  { id: 'down', label: 'Movers Down' },
+]
+
+const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, itemCatalog, notifications = [], systemEvents = [], featureToggles = {} }, ref) {
   const [stockHistory, setStockHistory] = useState([])
   const [stocks, setStocks] = useState([])
   const [ttsAnalytics, setTtsAnalytics] = useState(null)
@@ -26,14 +47,27 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
   const [polls, setPolls] = useState([])
   const [priceChanges, setPriceChanges] = useState([])
   const [stockCount, setStockCount] = useState(0)
+  const [timePeriod, setTimePeriod] = useState(null)
+  const [stockSort, setStockSort] = useState('value')
+  const [contestantSort, setContestantSort] = useState('endorsements')
+  const directorRef = useRef(null)
+
+  useImperativeHandle(ref, () => ({
+    scrollToDirector: () => {
+      directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }))
 
   useEffect(() => {
     function fetchAll() {
+      const since = getSinceISO(timePeriod)
+      const sinceParam = since ? `?since=${encodeURIComponent(since)}` : ''
+
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/stocks/history?limit=2000').then(r => r.json()).then(setStockHistory).catch(() => {})
       fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
-      fetch('/api/analytics/tts-sfx').then(r => r.json()).then(setTtsAnalytics).catch(() => {})
-      fetch('/api/analytics/chat').then(r => r.json()).then(setChatAnalytics).catch(() => {})
+      fetch(`/api/analytics/tts-sfx${sinceParam}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
+      fetch(`/api/analytics/chat${sinceParam}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
       fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
       fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
@@ -42,14 +76,65 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
     fetchAll()
     const interval = setInterval(fetchAll, 30000)
     return () => clearInterval(interval)
-  }, [])
+  }, [timePeriod])
+
+  const sortedStocks = [...stocks].sort((a, b) => {
+    if (stockSort === 'up') return (b.currentPrice - b.today) - (a.currentPrice - a.today)
+    if (stockSort === 'down') return (a.currentPrice - a.today) - (b.currentPrice - b.today)
+    return b.currentPrice - a.currentPrice
+  })
+
+  const sortedContestants = [...contestants].sort((a, b) => {
+    if (contestantSort === 'stox') {
+      const aStock = stocks.find(s => s.tickerSymbol === a.name?.toUpperCase() || s.tickerSymbol === a.name?.substring(0, 4).toUpperCase())
+      const bStock = stocks.find(s => s.tickerSymbol === b.name?.toUpperCase() || s.tickerSymbol === b.name?.substring(0, 4).toUpperCase())
+      return (bStock?.currentPrice || 0) - (aStock?.currentPrice || 0)
+    }
+    return (b.endorsements || 0) - (a.endorsements || 0)
+  })
+
+  const fishtoyToggle = featureToggles.fishtoys
+  const ttsToggle = featureToggles.tts
+  const sfxToggle = featureToggles.sfx
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      {/* Time filter bar */}
+      <div className="flex items-center gap-2 shrink-0">
+        <span className="text-[10px] font-mono text-tank-muted uppercase">Time Range:</span>
+        {TIME_FILTERS.map(f => (
+          <button
+            key={f.id || 'all'}
+            onClick={() => setTimePeriod(f.id)}
+            className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
+              timePeriod === f.id
+                ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                : 'bg-tank-highlight text-tank-muted border border-tank-border hover:text-tank-text'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {/* STO-X */}
-      <Section title="STO-X" icon={TrendingUp}>
+      <Section title="STO-X" icon={TrendingUp} extra={
+        <div className="flex gap-1">
+          {STOCK_SORTS.map(s => (
+            <button
+              key={s.id}
+              onClick={() => setStockSort(s.id)}
+              className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                stockSort === s.id ? 'bg-tank-accent/15 text-tank-accent' : 'text-tank-muted hover:text-tank-text'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      }>
         <div className="grid grid-cols-5 gap-2">
-          {[...stocks].sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
+          {sortedStocks.map(s => {
             const change = s.currentPrice - s.ipoPrice
             const changePct = s.ipoPrice > 0 ? ((change / s.ipoPrice) * 100).toFixed(0) : 0
             const dayChange = s.currentPrice - s.today
@@ -89,10 +174,24 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
         )}
       </Section>
 
-      {/* Contestant Timeline */}
-      <Section title="Contestants" icon={Users}>
+      {/* Contestants */}
+      <Section title="Contestants" icon={Users} extra={
+        <div className="flex gap-1">
+          {[{ id: 'endorsements', label: 'Endorsements' }, { id: 'stox', label: 'STO-X Price' }].map(s => (
+            <button
+              key={s.id}
+              onClick={() => setContestantSort(s.id)}
+              className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                contestantSort === s.id ? 'bg-tank-accent/15 text-tank-accent' : 'text-tank-muted hover:text-tank-text'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      }>
         <div className="grid grid-cols-5 gap-2">
-          {[...contestants].sort((a, b) => (b.endorsements || 0) - (a.endorsements || 0)).map(c => {
+          {sortedContestants.map(c => {
             const stock = stocks.find(s => s.tickerSymbol === c.name?.toUpperCase() ||
               s.tickerSymbol === c.name?.substring(0, 4).toUpperCase())
             return (
@@ -128,14 +227,27 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
 
       <div className="grid grid-cols-2 gap-3">
         {/* TTS/SFX Analytics */}
-        <Section title="TTS / SFX Analytics" icon={Volume2}>
+        <Section title="TTS / SFX Analytics" icon={Volume2} extra={
+          <div className="flex gap-2">
+            {ttsToggle !== undefined && (
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ttsToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                TTS: {ttsToggle?.enabled ? 'ON' : 'OFF'}{ttsToggle?.metadata ? ` (${ttsToggle.metadata}t)` : ''}
+              </span>
+            )}
+            {sfxToggle !== undefined && (
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${sfxToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                SFX: {sfxToggle?.enabled ? 'ON' : 'OFF'}{sfxToggle?.metadata ? ` (${sfxToggle.metadata}t)` : ''}
+              </span>
+            )}
+          </div>
+        }>
           {ttsAnalytics ? (
             <div className="space-y-3">
               {ttsAnalytics.top_rooms.length > 0 && (
                 <div>
                   <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Most Active Rooms</h4>
                   <div className="space-y-1">
-                    {ttsAnalytics.top_rooms.map((r, i) => (
+                    {ttsAnalytics.top_rooms.map(r => (
                       <div key={r.room} className="flex items-center justify-between text-xs">
                         <span className="text-tank-bright">{roomMap[r.room] || r.room}</span>
                         <span className="font-mono text-cyan-400">{r.count}</span>
@@ -181,15 +293,12 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
               </div>
               {chatAnalytics.top_chatters.length > 0 && (
                 <div>
-                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Most Active Chatters</h4>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Top Chatters</h4>
                   <div className="space-y-1">
-                    {chatAnalytics.top_chatters.map((c, i) => (
+                    {chatAnalytics.top_chatters.map(c => (
                       <div key={c.name} className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] font-mono text-tank-muted w-4">{i + 1}.</span>
-                          <span className="text-tank-bright">{c.name}</span>
-                        </div>
-                        <span className="font-mono text-blue-400">{c.count}</span>
+                        <span className="text-tank-bright">{c.name}</span>
+                        <span className="font-mono text-blue-400">{c.count.toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
@@ -209,7 +318,18 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
       </div>
 
       {/* Fishtoy Availability */}
-      <Section title="Fishtoy Availability" icon={TrendingUp}>
+      <Section title="Fishtoy Availability" icon={Fish} extra={
+        fishtoyToggle !== undefined && (
+          <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${fishtoyToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+            Fishtoys: {fishtoyToggle?.enabled ? 'Enabled' : 'Disabled'}
+          </span>
+        )
+      }>
+        {fishtoyToggle && !fishtoyToggle.enabled && (
+          <div className="text-xs text-red-400 font-mono mb-2 p-2 bg-red-500/5 border border-red-500/20 rounded">
+            Fishtoys are currently disabled. Items below may show as ON but cannot be used until the category is re-enabled.
+          </div>
+        )}
         <div className="grid grid-cols-6 gap-1.5">
           {[...fishtoyStatus].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(f => (
             <div key={f.id} className={`px-2 py-1.5 rounded border text-xs ${
@@ -224,6 +344,9 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
                   {f.enabled ? 'ON' : 'OFF'}
                 </span>
               </div>
+              {f.enabled && fishtoyToggle && !fishtoyToggle.enabled && (
+                <span className="text-[8px] text-red-400/70 font-mono">(category disabled)</span>
+              )}
               {f.type === 'BIGTOY' && (
                 <span className="text-[9px] text-purple-400 font-mono">BIGTOY</span>
               )}
@@ -233,24 +356,26 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
       </Section>
 
       <div className="grid grid-cols-2 gap-3">
-        {/* Director Messages / Notifications Timeline */}
-        <Section title="Director Messages" icon={Bell}>
-          {notifications.length > 0 ? (
-            <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
-              {notifications.map(n => (
-                <div key={n.id} className="flex items-start gap-2 p-2 bg-yellow-500/5 border border-yellow-500/20 rounded">
-                  <Bell className="w-3.5 h-3.5 text-yellow-400 shrink-0 mt-0.5" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-tank-bright break-words">{n.message}</p>
-                    <span className="text-[10px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
+        {/* Director Messages */}
+        <div ref={directorRef}>
+          <Section title="Director Messages" icon={Bell}>
+            {notifications.length > 0 ? (
+              <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
+                {notifications.map(n => (
+                  <div key={n.id} className="flex items-start gap-2 p-2 bg-yellow-500/5 border border-yellow-500/20 rounded">
+                    <Bell className="w-3.5 h-3.5 text-yellow-400 shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-tank-bright break-words">{n.message}</p>
+                      <span className="text-[10px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-xs text-tank-muted font-mono">No director messages yet</div>
-          )}
-        </Section>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-tank-muted font-mono">No director messages yet</div>
+            )}
+          </Section>
+        </div>
 
         {/* Poll History */}
         <Section title="Poll History" icon={Vote}>
@@ -296,7 +421,7 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        {/* TTS/SFX Price Changes */}
+        {/* Price Changes */}
         <Section title="Price Changes" icon={Zap}>
           {priceChanges.length > 0 ? (
             <div className="space-y-1 max-h-[200px] overflow-y-auto">
@@ -339,14 +464,19 @@ export default function AnalyticsTab({ contestants, roomMap, itemCatalog, notifi
       </div>
     </div>
   )
-}
+})
 
-function Section({ title, icon: Icon, children }) {
+export default AnalyticsTab
+
+function Section({ title, icon: Icon, extra, children }) {
   return (
     <div className="bg-tank-surface border border-tank-border rounded-lg p-3">
-      <div className="flex items-center gap-2 mb-2.5">
-        {Icon && <Icon className="w-4 h-4 text-tank-muted" />}
-        <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">{title}</h3>
+      <div className="flex items-center justify-between mb-2.5">
+        <div className="flex items-center gap-2">
+          {Icon && <Icon className="w-4 h-4 text-tank-muted" />}
+          <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">{title}</h3>
+        </div>
+        {extra}
       </div>
       {children}
     </div>

@@ -201,47 +201,44 @@ async def broadcast_to_browsers(event_type: str, data, db_id: int):
 fish_client: FishClient = None
 _loop: asyncio.AbstractEventLoop = None
 
-# Dedup tracking for TTS/SFX (fires twice per message)
-_recent_event_hashes: dict = {}  # hash -> timestamp
-_DEDUP_WINDOW = 5  # seconds
+# Dedup tracking for TTS/SFX (server fires "approved" then "played" for same ID)
+_seen_tts_sfx_ids: dict = {}  # event_id -> timestamp
+_DEDUP_WINDOW = 300  # 5 minutes (status transitions can be 30-60s apart)
 
-
-def _event_hash(evt, data):
-    """Create a hash for deduplication of TTS/SFX events."""
-    if isinstance(data, dict):
-        parts = [evt, str(data.get("displayName", "")), str(data.get("message", "")),
-                 str(data.get("room", "")), str(data.get("cost", ""))]
-        return "|".join(parts)
-    return None
+# Feature toggle state (fishtoys, tts, sfx, etc.)
+_feature_toggles: dict = {}  # feature_name -> {enabled, metadata, updated_at}
 
 
 def _is_duplicate(evt, data):
-    """Check if this event is a duplicate within the dedup window."""
+    """Check if this TTS/SFX event ID has already been seen."""
     if evt not in ("tts:update", "sfx:update"):
         return False
-    h = _event_hash(evt, data)
-    if not h:
+    if not isinstance(data, dict):
         return False
+    event_id = data.get("id")
+    if not event_id:
+        return False
+    event_id = str(event_id)
     now = datetime.now(timezone.utc).timestamp()
-    if h in _recent_event_hashes and (now - _recent_event_hashes[h]) < _DEDUP_WINDOW:
+    if event_id in _seen_tts_sfx_ids:
         return True
-    _recent_event_hashes[h] = now
+    _seen_tts_sfx_ids[event_id] = now
     # Prune old entries
-    if len(_recent_event_hashes) > 200:
+    if len(_seen_tts_sfx_ids) > 500:
         cutoff = now - _DEDUP_WINDOW
-        stale = [k for k, v in _recent_event_hashes.items() if v < cutoff]
+        stale = [k for k, v in _seen_tts_sfx_ids.items() if v < cutoff]
         for k in stale:
-            del _recent_event_hashes[k]
+            del _seen_tts_sfx_ids[k]
     return False
 
 
 def _should_filter_chat(data):
-    """Filter chat messages that are TTS/SFX system echoes."""
+    """Filter chat messages that are TTS/SFX/emote system echoes."""
     if not isinstance(data, dict):
         return False
     user = data.get("user", {})
     name = user.get("displayName", "") if isinstance(user, dict) else ""
-    return name.lower() in ("tts", "sfx")
+    return name.lower() in ("tts", "sfx", "emote")
 
 
 def _should_filter_notification(data):
@@ -250,10 +247,23 @@ def _should_filter_notification(data):
     return "gifted" in text and "season pass" in text
 
 
+def _track_feature_toggle(data):
+    """Track feature toggle state changes."""
+    if not isinstance(data, dict):
+        return
+    feature = data.get("feature", "")
+    if feature:
+        _feature_toggles[feature] = {
+            "enabled": data.get("enabled", False),
+            "metadata": data.get("metadata"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+
 def make_event_handler(evt):
     """Create an event handler for a specific socket event type."""
     def handler(data):
-        # Filter TTS/SFX system echo from chat
+        # Filter TTS/SFX/emote system echo from chat
         if evt == "chat:message" and _should_filter_chat(data):
             return
 
@@ -261,9 +271,13 @@ def make_event_handler(evt):
         if evt == "notification:global" and _should_filter_notification(data):
             return
 
-        # Dedup TTS/SFX (server fires twice per message)
+        # Dedup TTS/SFX (server sends "approved" then "played" for same ID)
         if _is_duplicate(evt, data):
             return
+
+        # Track feature toggle state
+        if evt == "feature-toggles:update":
+            _track_feature_toggle(data)
 
         # Store in database
         db_id = database.store_event(evt, data)
@@ -391,6 +405,16 @@ def load_catalog():
             print(f"[OK] Loaded {len(_stocks)} stocks")
     except Exception as e:
         print(f"[WARN] Could not load stocks: {e}")
+
+    # Load feature toggle state from database
+    try:
+        toggles = database.get_latest_feature_toggles()
+        _feature_toggles.update(toggles)
+        if toggles:
+            status_parts = [f"{k}={'ON' if v['enabled'] else 'OFF'}" for k, v in toggles.items()]
+            print(f"[OK] Loaded {len(toggles)} feature toggle states: {', '.join(status_parts)}")
+    except Exception as e:
+        print(f"[WARN] Could not load feature toggles: {e}")
 
 
 def fishtoy_poller():
@@ -572,8 +596,8 @@ def api_events(
 
 
 @app.get("/api/stats")
-def api_stats():
-    return database.get_stats()
+def api_stats(since: str = Query(None, description="ISO timestamp to filter from")):
+    return database.get_stats(since=since)
 
 
 @app.get("/api/status")
@@ -610,6 +634,12 @@ def api_stocks():
     return _stocks
 
 
+@app.get("/api/feature-toggles")
+def api_feature_toggles():
+    """Return current feature toggle states."""
+    return _feature_toggles
+
+
 @app.get("/api/stocks/history")
 def api_stock_history(
     ticker: str = Query(None, description="Filter by ticker symbol"),
@@ -620,15 +650,15 @@ def api_stock_history(
 
 
 @app.get("/api/analytics/tts-sfx")
-def api_tts_sfx_analytics():
+def api_tts_sfx_analytics(since: str = Query(None)):
     """TTS and SFX analytics: top rooms, top senders, hourly activity."""
-    return database.get_tts_sfx_analytics()
+    return database.get_tts_sfx_analytics(since=since)
 
 
 @app.get("/api/analytics/chat")
-def api_chat_analytics():
+def api_chat_analytics(since: str = Query(None)):
     """Chat analytics: top chatters, hourly volume."""
-    return database.get_chat_analytics()
+    return database.get_chat_analytics(since=since)
 
 
 @app.get("/api/hidden-content")

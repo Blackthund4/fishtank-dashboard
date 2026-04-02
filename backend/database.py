@@ -109,38 +109,45 @@ def get_events(event_type=None, limit=200, since_id=None):
     ]
 
 
-def get_stats():
+def get_stats(since=None):
     conn = _get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    since_clause = ""
+    since_params = []
+    if since:
+        since_clause = " AND timestamp_local >= ?"
+        since_params = [since]
+
+    total = conn.execute(
+        "SELECT COUNT(*) FROM events WHERE 1=1" + since_clause, since_params
+    ).fetchone()[0]
 
     type_counts = conn.execute(
-        "SELECT event_type, COUNT(*) as count FROM events GROUP BY event_type ORDER BY count DESC"
+        "SELECT event_type, COUNT(*) as count FROM events WHERE 1=1" + since_clause +
+        " GROUP BY event_type ORDER BY count DESC", since_params
     ).fetchall()
 
     fishtoy_stats = conn.execute("""
         SELECT COUNT(*) as total,
             COALESCE(SUM(CASE WHEN json_extract(data, '$.cost') IS NOT NULL
                 THEN CAST(json_extract(data, '$.cost') AS INTEGER) ELSE 0 END), 0) as total_cost
-        FROM events WHERE event_type LIKE 'fishtoy%'
-    """).fetchone()
+        FROM events WHERE event_type LIKE 'fishtoy%%'
+    """ + since_clause, since_params).fetchone()
 
     all_spend = conn.execute("""
         SELECT COALESCE(SUM(CASE WHEN json_extract(data, '$.cost') IS NOT NULL
             THEN CAST(json_extract(data, '$.cost') AS INTEGER) ELSE 0 END), 0) as total
-        FROM events
-    """).fetchone()
+        FROM events WHERE 1=1
+    """ + since_clause, since_params).fetchone()
 
     top_targets = conn.execute("""
         SELECT json_extract(data, '$.target') as target, COUNT(*) as count
-        FROM events WHERE event_type LIKE 'fishtoy%' AND target IS NOT NULL
-        GROUP BY target ORDER BY count DESC LIMIT 10
-    """).fetchall()
+        FROM events WHERE event_type LIKE 'fishtoy%%' AND target IS NOT NULL
+    """ + since_clause + " GROUP BY target ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
     top_senders = conn.execute("""
         SELECT json_extract(data, '$.displayName') as sender, COUNT(*) as count
-        FROM events WHERE event_type LIKE 'fishtoy%' AND sender IS NOT NULL
-        GROUP BY sender ORDER BY count DESC LIMIT 10
-    """).fetchall()
+        FROM events WHERE event_type LIKE 'fishtoy%%' AND sender IS NOT NULL
+    """ + since_clause + " GROUP BY sender ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
     return {
         "total_events": total,
@@ -231,37 +238,38 @@ def get_stock_history(ticker=None, limit=500):
 # ============================================================
 
 
-def get_tts_sfx_analytics():
+def get_tts_sfx_analytics(since=None):
     """Aggregate analytics for TTS and SFX events."""
     conn = _get_conn()
+    since_clause = ""
+    since_params = []
+    if since:
+        since_clause = " AND timestamp_local >= ?"
+        since_params = [since]
 
     top_rooms = conn.execute("""
         SELECT json_extract(data, '$.room') as room, COUNT(*) as count
         FROM events WHERE event_type IN ('tts:update', 'sfx:update') AND room IS NOT NULL
-        GROUP BY room ORDER BY count DESC LIMIT 10
-    """).fetchall()
+    """ + since_clause + " GROUP BY room ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
     top_tts_senders = conn.execute("""
         SELECT json_extract(data, '$.displayName') as sender,
             COUNT(*) as count,
             COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
         FROM events WHERE event_type = 'tts:update' AND sender IS NOT NULL
-        GROUP BY sender ORDER BY spend DESC LIMIT 10
-    """).fetchall()
+    """ + since_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", since_params).fetchall()
 
     top_sfx_senders = conn.execute("""
         SELECT json_extract(data, '$.displayName') as sender,
             COUNT(*) as count,
             COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
         FROM events WHERE event_type = 'sfx:update' AND sender IS NOT NULL
-        GROUP BY sender ORDER BY spend DESC LIMIT 10
-    """).fetchall()
+    """ + since_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", since_params).fetchall()
 
     hourly = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour, COUNT(*) as count
         FROM events WHERE event_type IN ('tts:update', 'sfx:update')
-        GROUP BY hour ORDER BY hour
-    """).fetchall()
+    """ + since_clause + " GROUP BY hour ORDER BY hour", since_params).fetchall()
 
     return {
         "top_rooms": [{"room": r["room"], "count": r["count"]} for r in top_rooms],
@@ -276,25 +284,28 @@ def get_tts_sfx_analytics():
 # ============================================================
 
 
-def get_chat_analytics():
+def get_chat_analytics(since=None):
     """Aggregate analytics for chat messages."""
     conn = _get_conn()
+    since_clause = ""
+    since_params = []
+    if since:
+        since_clause = " AND timestamp_local >= ?"
+        since_params = [since]
 
     total = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE event_type = 'chat:message'"
+        "SELECT COUNT(*) FROM events WHERE event_type = 'chat:message'" + since_clause, since_params
     ).fetchone()[0]
 
     top_chatters = conn.execute("""
         SELECT json_extract(data, '$.user.displayName') as name, COUNT(*) as count
         FROM events WHERE event_type = 'chat:message' AND name IS NOT NULL
-        GROUP BY name ORDER BY count DESC LIMIT 15
-    """).fetchall()
+    """ + since_clause + " GROUP BY name ORDER BY count DESC LIMIT 15", since_params).fetchall()
 
     hourly = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour, COUNT(*) as count
         FROM events WHERE event_type = 'chat:message'
-        GROUP BY hour ORDER BY hour
-    """).fetchall()
+    """ + since_clause + " GROUP BY hour ORDER BY hour", since_params).fetchall()
 
     return {
         "total": total,
@@ -581,3 +592,96 @@ def get_latest_poll_state():
         result["active"] = False
 
     return result
+
+
+# ============================================================
+# FEATURE TOGGLES
+# ============================================================
+
+
+def get_latest_feature_toggles():
+    """Get the most recent state for each feature toggle."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT e.data FROM events e
+        INNER JOIN (
+            SELECT json_extract(data, '$.feature') as feature, MAX(id) as max_id
+            FROM events WHERE event_type = 'feature-toggles:update'
+            GROUP BY feature
+        ) latest ON e.id = latest.max_id
+    """).fetchall()
+    result = {}
+    for row in rows:
+        d = json.loads(row["data"])
+        feature = d.get("feature", "")
+        if feature:
+            result[feature] = {
+                "enabled": d.get("enabled", False),
+                "metadata": d.get("metadata"),
+                "updated_at": d.get("updatedAt"),
+            }
+    return result
+
+
+# ============================================================
+# DATA CLEANUP
+# ============================================================
+
+
+def dedup_tts_sfx():
+    """Remove duplicate TTS/SFX events, keeping the first entry per event_id.
+    Returns count of deleted rows."""
+    conn = _get_conn()
+    # Find duplicates: same event_id, keep lowest db id
+    result = conn.execute("""
+        DELETE FROM events WHERE id IN (
+            SELECT e.id FROM events e
+            INNER JOIN (
+                SELECT event_id, MIN(id) as keep_id
+                FROM events
+                WHERE event_type IN ('tts:update', 'sfx:update')
+                AND event_id IS NOT NULL
+                GROUP BY event_id
+                HAVING COUNT(*) > 1
+            ) dups ON e.event_id = dups.event_id AND e.id != dups.keep_id
+            WHERE e.event_type IN ('tts:update', 'sfx:update')
+        )
+    """)
+    deleted = result.rowcount
+    conn.commit()
+    return deleted
+
+
+def purge_system_chat():
+    """Remove chat messages from system users (tts, sfx, emote).
+    Returns count of deleted rows."""
+    conn = _get_conn()
+    result = conn.execute("""
+        DELETE FROM events WHERE event_type = 'chat:message'
+        AND LOWER(json_extract(data, '$.user.displayName')) IN ('tts', 'sfx', 'emote')
+    """)
+    deleted = result.rowcount
+    conn.commit()
+    return deleted
+
+
+def purge_gift_notifications():
+    """Remove season pass gift notifications.
+    Returns count of deleted rows."""
+    conn = _get_conn()
+    result = conn.execute("""
+        DELETE FROM events WHERE event_type = 'notification:global'
+        AND LOWER(json_extract(data, '$.message')) LIKE '%gifted%'
+        AND LOWER(json_extract(data, '$.message')) LIKE '%season pass%'
+    """)
+    deleted = result.rowcount
+    if deleted == 0:
+        # Try with data as string
+        result = conn.execute("""
+            DELETE FROM events WHERE event_type = 'notification:global'
+            AND LOWER(data) LIKE '%gifted%'
+            AND LOWER(data) LIKE '%season pass%'
+        """)
+        deleted = result.rowcount
+        conn.commit()
+    return deleted

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User } from 'lucide-react'
 import { useWebSocket } from './useWebSocket'
 import StatusBar from './components/StatusBar'
@@ -84,7 +84,8 @@ export default function App() {
   const [pollVotes, setPollVotes] = useState([])
   const [notifications, setNotifications] = useState([])
   const [systemEvents, setSystemEvents] = useState([])
-
+  const [featureToggles, setFeatureToggles] = useState({})
+  const analyticsRef = useRef(null)
   // Load catalog + historical data on mount
   useEffect(() => {
     fetch('/api/items').then(r => r.json()).then(setItemCatalog).catch(() => {})
@@ -92,6 +93,7 @@ export default function App() {
     fetch('/api/rooms').then(r => r.json()).then(setRoomMap).catch(() => {})
     fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
     fetch('/api/stats').then(r => r.json()).then(raw => setStats(normalizeStats(raw))).catch(() => {})
+    fetch('/api/feature-toggles').then(r => r.json()).then(setFeatureToggles).catch(() => {})
     fetch('/api/notifications').then(r => r.json()).then(data => {
       setNotifications(data.map(n => ({
         id: n.id,
@@ -192,6 +194,17 @@ export default function App() {
         setNotifications(prev => [notif, ...prev].slice(0, 50))
       } else if (SYSTEM_TYPES.has(msg.event_type)) {
         setSystemEvents(prev => [item, ...prev].slice(0, 100))
+        // Update feature toggle state in real-time
+        if (msg.event_type === 'feature-toggles:update' && msg.data?.feature) {
+          setFeatureToggles(prev => ({
+            ...prev,
+            [msg.data.feature]: {
+              enabled: msg.data.enabled,
+              metadata: msg.data.metadata,
+              updated_at: new Date().toISOString(),
+            }
+          }))
+        }
       }
     })
     return remove
@@ -202,6 +215,7 @@ export default function App() {
     const interval = setInterval(() => {
       fetch('/api/stats').then(r => r.json()).then(raw => setStats(normalizeStats(raw))).catch(() => {})
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
+      fetch('/api/feature-toggles').then(r => r.json()).then(setFeatureToggles).catch(() => {})
     }, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -353,7 +367,10 @@ export default function App() {
           </span>
           {notifications.length > 1 && (
             <button
-              onClick={() => setActiveTab('analytics')}
+              onClick={() => {
+                setActiveTab('analytics')
+                setTimeout(() => analyticsRef.current?.scrollToDirector(), 100)
+              }}
               className="text-[10px] font-mono text-yellow-400/60 hover:text-yellow-400 underline cursor-pointer"
             >
               +{notifications.length - 1} more
@@ -700,11 +717,13 @@ export default function App() {
 
       {activeTab === 'analytics' && (
         <AnalyticsTab
+          ref={analyticsRef}
           contestants={contestants}
           roomMap={roomMap}
           itemCatalog={itemCatalog}
           notifications={notifications}
           systemEvents={systemEvents}
+          featureToggles={featureToggles}
         />
       )}
 
