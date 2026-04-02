@@ -88,7 +88,7 @@ def token_is_expired(token, buffer_seconds=60):
 
 AUTH_URL = "https://api.fishtank.live/v1/auth/log-in"
 COOKIE_NAME = "sb-wcsaaupukpdmqdjcgaoo-auth-token"
-TOKEN_CACHE_FILE = Path(__file__).parent / "token_cache.json"
+TOKEN_CACHE_FILE = Path(os.environ.get("FISHTANK_TOKEN_CACHE", Path(__file__).parent / "token_cache.json"))
 
 
 class AuthManager:

@@ -4,12 +4,13 @@ Uses SQLite with WAL mode for concurrent read/write.
 """
 
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "fishtank.db"
+DB_PATH = Path(os.environ.get("FISHTANK_DB_PATH", Path(__file__).parent / "fishtank.db"))
 
 _local = threading.local()
 

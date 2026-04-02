@@ -1,0 +1,16 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - fishtank-data:/app/data
+    environment:
+      - FISHTANK_DB_PATH=/app/data/fishtank.db
+      - FISHTANK_TOKEN_CACHE=/app/data/token_cache.json
+      - FISHTANK_EMAIL=${FISHTANK_EMAIL}
+      - FISHTANK_PASSWORD=${FISHTANK_PASSWORD}
+    restart: unless-stopped
+
+volumes:
+  fishtank-data:

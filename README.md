@@ -132,6 +132,21 @@ npm run dev
 
 Open http://localhost:3000 (Vite proxies API/WebSocket to the backend)
 
+### Docker (recommended for deployment)
+
+```bash
+# Create .env file with your credentials
+echo "FISHTANK_EMAIL=your_email@example.com" > .env
+echo "FISHTANK_PASSWORD=your_password" >> .env
+
+# Build and run
+docker-compose up -d
+```
+
+Open http://localhost:8000
+
+The database and token cache persist in a Docker volume (`fishtank-data`). To stop: `docker-compose down`. To rebuild after code changes: `docker-compose up -d --build`.
+
 ## API
 
 | Endpoint | Description |
@@ -220,6 +235,9 @@ fishtank-dashboard/
             test_cookie.py            Auth cookie validation
             test_initial_data.py      Initial-data event analysis
     .gitignore
+    .dockerignore
+    Dockerfile                Multi-stage build (Node frontend + Python backend)
+    docker-compose.yml        Single-command deployment with persistent volume
     TECHNICAL_WRITEUP.md      Reverse engineering process documentation
     DEPLOY_WINDOWS.md         Standalone logger setup (Windows)
     DEPLOY_FEDORA.md          Standalone logger setup (Fedora)

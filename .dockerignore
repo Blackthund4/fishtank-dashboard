@@ -1,0 +1,15 @@
+node_modules
+frontend/dist
+frontend/node_modules
+__pycache__
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+.env
+token_cache.json
+.git
+.gitignore
+*.md
+scripts/
