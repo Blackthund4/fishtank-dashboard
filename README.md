@@ -147,6 +147,16 @@ Open http://localhost:8000
 
 The database and token cache persist in a Docker volume (`fishtank-data`). To stop: `docker-compose down`. To rebuild after code changes: `docker-compose up -d --build`.
 
+## Testing
+
+```bash
+cd backend
+pip install pytest
+python -m pytest test_backend.py -v
+```
+
+45 tests covering database operations (store, query, analytics, dedup, purge), filter functions (chat echo, notification, TTS dedup), poll state reconstruction, and user search. Tests run against an in-memory SQLite database.
+
 ## API
 
 Interactive API documentation is available at `/docs` (Swagger UI) and `/redoc` (ReDoc) when the server is running.
