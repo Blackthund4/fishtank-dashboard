@@ -736,18 +736,17 @@ def get_peak_hours():
 
     hourly = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
-            SUM(CASE WHEN event_type = 'chat:message' THEN 1 ELSE 0 END) as chat,
             SUM(CASE WHEN event_type = 'tts:update' THEN 1 ELSE 0 END) as tts,
             SUM(CASE WHEN event_type = 'sfx:update' THEN 1 ELSE 0 END) as sfx,
             SUM(CASE WHEN event_type LIKE 'fishtoy%%' THEN 1 ELSE 0 END) as fishtoys,
             COUNT(*) as total
         FROM events
-        WHERE event_type IN ('chat:message', 'tts:update', 'sfx:update')
+        WHERE event_type IN ('tts:update', 'sfx:update')
             OR event_type LIKE 'fishtoy%%'
         GROUP BY hour ORDER BY hour
     """).fetchall()
 
-    hours = [{"hour": r["hour"], "chat": r["chat"], "tts": r["tts"],
+    hours = [{"hour": r["hour"], "tts": r["tts"],
               "sfx": r["sfx"], "fishtoys": r["fishtoys"], "total": r["total"]}
              for r in hourly]
 
