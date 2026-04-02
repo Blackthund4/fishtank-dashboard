@@ -11,7 +11,7 @@ services:
       - FISHTANK_EMAIL=${FISHTANK_EMAIL}
       - FISHTANK_PASSWORD=${FISHTANK_PASSWORD}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
-    mem_limit: 512m
+    mem_limit: 1g
     memswap_limit: 512m
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; r=requests.get('http://localhost:8000/api/health'); exit(0 if r.ok else 1)"]
