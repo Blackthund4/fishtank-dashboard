@@ -1,6 +1,7 @@
 # Fishtank Dashboard
 
-Live dashboard: https://fish-dash.com
+**Live: [https://fish-dash.com](https://fish-dash.com)**
+
 Real-time event monitoring dashboard for [fishtank.live](https://www.fishtank.live), an interactive 24/7 reality show. Captures fishtoy redemptions (including hidden metadata like love letter contents), chat messages, TTS, SFX, polls, director messages, STO-X (stock market) data, and system events via a dual data source architecture built on reverse-engineered APIs.
 
 ## Architecture
@@ -279,7 +280,7 @@ fishtank-dashboard/
 
 Currently hosted on a Vultr Cloud Compute VPS (Ubuntu 24.04 with Docker) for 24/7 event capture. Security hardening includes:
 
-- UFW firewall (ports 22 and 8000 only)
+- UFW firewall (ports 22 and 80, port 80 restricted to Cloudflare IPs only)
 - SSH key-based auth with password login disabled
 - CORS restricted to server origin
 - Per-IP rate limiting (120 req/60s)
