@@ -1,5 +1,6 @@
 # Fishtank Dashboard
 
+Live dashboard: https://fish-dash.com
 Real-time event monitoring dashboard for [fishtank.live](https://www.fishtank.live), an interactive 24/7 reality show. Captures fishtoy redemptions (including hidden metadata like love letter contents), chat messages, TTS, SFX, polls, director messages, STO-X (stock market) data, and system events via a dual data source architecture built on reverse-engineered APIs.
 
 ## Architecture
