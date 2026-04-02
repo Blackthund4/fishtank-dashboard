@@ -536,6 +536,57 @@ def stock_poller():
         _poller_stop.wait(60)
 
 
+def catalog_refresh_poller():
+    """Refresh contestants and item catalog every 30 minutes."""
+    if not auth.is_configured:
+        return
+
+    # Wait 30 minutes before first refresh (load_catalog already ran on startup)
+    _poller_stop.wait(1800)
+
+    while not _poller_stop.is_set():
+        session = auth.get_session()
+
+        # Refresh item catalog
+        try:
+            r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+            if r.status_code in (401, 403):
+                if auth.handle_401():
+                    session = auth.get_session()
+                    r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+            if r.status_code == 200:
+                raw = r.json()
+                new_count = 0
+                for key, val in raw.items():
+                    if isinstance(val, dict) and "id" in val:
+                        sid = str(val["id"])
+                        if sid not in _item_catalog:
+                            new_count += 1
+                        _item_catalog[sid] = val
+                if new_count:
+                    print(f"[OK] Catalog refresh: {new_count} new items added ({len(_item_catalog)} total)")
+        except Exception as e:
+            print(f"[WARN] Catalog refresh failed (items): {e}")
+
+        # Refresh contestants
+        try:
+            r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                all_contestants = data.get("contestants", [])
+                season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
+                new_list = season_5 if season_5 else all_contestants
+                old_count = len(_contestants)
+                _contestants.clear()
+                _contestants.extend(new_list)
+                if len(_contestants) != old_count:
+                    print(f"[OK] Catalog refresh: contestants updated ({old_count} -> {len(_contestants)})")
+        except Exception as e:
+            print(f"[WARN] Catalog refresh failed (contestants): {e}")
+
+        _poller_stop.wait(1800)  # 30 minutes
+
+
 # ============================================================
 # FASTAPI APP
 # ============================================================
@@ -559,6 +610,9 @@ async def lifespan(app: FastAPI):
 
     # Start stock price history poller in background thread
     Thread(target=stock_poller, daemon=True).start()
+
+    # Start catalog refresh poller (contestants + items every 30 min)
+    Thread(target=catalog_refresh_poller, daemon=True).start()
 
     yield
 
