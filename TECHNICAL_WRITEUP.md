@@ -232,6 +232,38 @@ The fix reconstructs poll state from the database. A `/api/polls/latest` endpoin
 
 Additional UI improvements in this phase: events sorted by actual timestamp (not database insertion order) to fix chronological display, UTC-consistent date comparison in timestamp formatting to fix timezone mismatches, contestants sorted by endorsement count, "Stock Market" renamed to "STO-X" to match the product's actual branding, and the director notification banner's "+X more" text linked to the Analytics tab for viewing full history.
 
+### Phase 16: TTS Dedup Revisited
+
+The initial content-hash dedup (Phase 14) used a 5-second window matching displayName, message, room, and cost. It failed because the server sends the same TTS as two separate `tts:update` events: first with `status: "approved"`, then 30-60 seconds later with `status: "played"`. Same event ID, same content, but different `updatedAt` and `status` fields, arriving far outside the 5-second window.
+
+The fix was much simpler than the original approach. Every TTS/SFX event has a unique `id` field. Deduplication by event ID with a 5-minute rolling window catches both status transitions regardless of timing. The old content-hash system was replaced entirely. A database cleanup script (`cleanup_db.py`) was also created to retroactively deduplicate historical data and purge system chat echoes and gift notifications in one pass.
+
+A related issue surfaced in the poll history: `get_polls` queried `poll:start`, `poll:stop`, AND `poll:vote` with a limit of 50. A single poll generates hundreds of vote events, so the 50 most recent rows were all votes, pushing the start/stop entries out of results entirely. The fix was to query only `poll:start` and `poll:stop` in the SQL, since vote data is handled separately by the poll reconstruction endpoint.
+
+### Phase 17: Feature Toggle Monitoring
+
+The `feature-toggles:update` socket events contain `{feature, enabled, metadata}` payloads. The `feature` field identifies the category (fishtoys, tts, sfx, ai-sfx), `enabled` is a boolean, and `metadata` sometimes contains the current price (e.g. "425" for SFX cost). These fire in bursts when production toggles categories on and off.
+
+The backend tracks the latest state per feature name in a dict, loads initial state from the database on startup, and exposes it via `/api/feature-toggles`. The frontend displays status badges on the TTS/SFX and Fishtoy Availability panels, showing ON/OFF with pricing where available. When fishtoys are globally disabled, individual items marked ON show "(fishtoys are currently disabled)" and a banner explains the items can't be used until production re-enables them.
+
+### Phase 18: Analytics Refinement
+
+Two usability issues in the Analytics tab: all analytics showed all-time data with no way to focus on recent activity, and STO-X cards had a fixed sort order.
+
+Per-section time filters (All/7d/3d/24h) were added as independent controls on the TTS/SFX and Chat Analytics panels. Each filter has its own React state and useEffect, so changing one doesn't trigger a refetch for the other. The backend's `get_stats`, `get_tts_sfx_analytics`, and `get_chat_analytics` functions accept an optional `since` ISO timestamp parameter, appending `AND timestamp_local >= ?` to the WHERE clause.
+
+STO-X sort options (Highest Value, Movers Up, Movers Down) sort by `currentPrice`, `currentPrice - today` descending, or ascending respectively. Contestant sort toggles between endorsement count and STO-X price. Both use spread copies to avoid React state mutation.
+
+### Phase 19: Production Readiness
+
+Three additions to make the project deployable and maintainable:
+
+**Docker.** A multi-stage Dockerfile uses Node 20 to build the frontend and Python 3.12-slim to run the backend. The final image contains no Node.js runtime. `docker-compose.yml` mounts a persistent volume for the SQLite database and token cache, reads credentials from environment variables, and auto-restarts. Database and token cache paths are configurable via `FISHTANK_DB_PATH` and `FISHTANK_TOKEN_CACHE` environment variables, with defaults that preserve the existing non-Docker behavior.
+
+**Health endpoint.** `/api/health` reports socket connection status and uptime, fishtoy poller staleness (flagged at >30s), stock poller staleness (flagged at >120s), last event timestamp per event type, total event count, database accessibility, and auth status. Returns an overall "healthy" or "degraded" status with a specific issues list. Designed for external monitoring tools or a quick manual check.
+
+**Unit tests.** 45 pytest tests covering database operations (store, query, filter, paginate, analytics with time ranges, dedup, purge), filter functions (chat echo detection for tts/sfx/emote, notification gift detection, TTS event ID dedup), poll state reconstruction (complete, missing stop, empty), and user search (case-insensitive, cross-event-type, autocomplete). All tests run against an in-memory SQLite database with a fresh schema per test.
+
 ### Key Takeaways
 
 1. **Documentation lies (sometimes).** The fishclient library documents `fishtoy:queued` and `fishtoy:update` as valid event names. They exist in the code but don't fire in Season 5. Trusting the docs without verification would have led to a system that silently captured nothing.
@@ -252,6 +284,10 @@ Additional UI improvements in this phase: events sorted by actual timestamp (not
 
 9. **Filter at ingestion, not display.** When the server sends polluted data (system echo messages in chat, duplicate TTS events, gift notifications mixed with director messages), filtering at the display layer leaves dirty data in the database that corrupts analytics. Filtering at the ingestion layer keeps the database clean and makes every downstream query accurate without needing per-query workarounds.
 
+10. **The obvious dedup strategy isn't always right.** Content hashing seemed like the natural approach for TTS dedup, but it failed because the duplicates had different status fields and arrived minutes apart. Understanding the actual data model (same event ID, different lifecycle stages) led to a simpler and more reliable solution. When a dedup strategy fails, inspect the raw data side by side before building a more complex version of the same approach.
+
+11. **Tests catch assumptions.** Writing unit tests for `get_latest_poll_state` immediately revealed that the function didn't include a `winner` key when no `poll:stop` existed. The test expected `state["winner"]` to be `None`, but the key was absent entirely. This is the kind of bug that works in the UI (optional chaining handles it) but breaks downstream consumers that expect a consistent schema.
+
 ### Relevance to Sales Engineering
 
 This project exercises several skills that directly transfer to SE work:
@@ -271,3 +307,7 @@ This project exercises several skills that directly transfer to SE work:
 **Authentication and security.** Reverse engineering the auth flow, building automatic token refresh, handling credential storage securely (`.env` files, file permissions, masked logging), and implementing re-authentication on failure are all skills SEs need when helping customers integrate with auth-protected APIs. Understanding OAuth-style token lifecycles is increasingly relevant as more products move to token-based auth.
 
 **Building for unattended operation.** Moving from a "works when I'm watching" prototype to a system that runs 24/7 without intervention required solving a different class of problems: silent failure detection, automatic recovery, credential management, and connection resilience. This mirrors the transition from POC to production that SEs help customers navigate.
+
+**Containerization and deployment.** Packaging the application with Docker (multi-stage build, persistent volumes, environment-based configuration) demonstrates the deployment skills SEs need when helping customers run integrations in their own infrastructure. A health endpoint that reports component-level status is the kind of operational tooling that separates a demo from a production system.
+
+**Testing and quality assurance.** Writing unit tests that exercise the data layer and filter logic against an in-memory database shows the discipline to verify behavior, not just observe it. SEs who can write and explain tests earn credibility with engineering teams during technical evaluations.

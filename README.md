@@ -19,7 +19,7 @@ On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/
 
 **Frontend** is a React + Tailwind CSS dashboard with four tabs:
 - **Dashboard**: Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room names, STO-X ticker, target filtering, metadata search, and session stats. Director message banner and live poll bar with animated vote percentages appear at the top when active. All event panels sorted chronologically.
-- **Analytics**: STO-X cards with IPO/avg/bid-ask data, contestant grid sorted by endorsements, TTS/SFX analytics (top rooms, top spenders, hourly activity), chat analytics (top chatters, hourly volume), poll history with results, director message timeline, price change log, fishtoy availability status, and system events. All data auto-refreshes every 30 seconds.
+- **Analytics**: STO-X cards with sort options (highest value, movers up/down), contestant grid sortable by endorsements or STO-X price, TTS/SFX analytics with toggle status badges and per-section time filters (All/7d/3d/24h), chat analytics with time filters, poll history, director message timeline, price change log, fishtoy availability with category-level enable/disable status, and system events. All data auto-refreshes every 30 seconds.
 - **Hidden Content**: Searchable archive of fishtoy metadata (love letters, custom messages) with target filtering.
 - **User Search**: Search any username with autocomplete suggestions to see their unified activity timeline across chat, TTS, SFX, and fishtoys with type filters. Case-insensitive.
 
@@ -39,10 +39,13 @@ On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/
 - **Stock price history**: Prices are polled every 60 seconds and stored in SQLite for historical tracking.
 - **Automatic authentication**: The dashboard logs in via `/v1/auth/log-in` using email/password from a `.env` file, caches tokens to disk, and automatically re-authenticates on 401 responses. No manual cookie copying required.
 - **Resilient socket reconnection**: If the Socket.IO connection drops, the reconnect loop gets fresh tokens from the auth manager and reconnects with exponential backoff (5s to 60s). Stale token reconnections are eliminated.
-- **Event deduplication**: The fishtank server fires `tts:update` and `sfx:update` twice per message. A content-hash dedup system with a 5-second window filters duplicates at the event handler level before storage.
-- **Chat noise filtering**: The server echoes TTS/SFX messages as `chat:message` events with system usernames ("tts", "sfx"). These are filtered at ingestion to prevent polluting chat data and analytics.
+- **Event deduplication**: The fishtank server fires `tts:update` and `sfx:update` twice per message (once as "approved", again as "played"). Events are deduplicated by their unique event ID at the handler level before storage.
+- **Chat noise filtering**: The server echoes TTS, SFX, and emote actions as `chat:message` events with system usernames ("tts", "sfx", "emote"). These are filtered at ingestion to prevent polluting chat data and analytics.
 - **Notification filtering**: Season pass gift notifications (`"[user] gifted X season passes!"`) are filtered from director messages at ingestion.
 - **Poll state reconstruction**: Since `poll:stop` is a single-fire event easily missed during reconnections, the dashboard reconstructs poll state from the database on mount, inferring results from the last `poll:vote` entry when `poll:stop` is missing.
+- **Feature toggle monitoring**: Tracks real-time fishtoy/TTS/SFX category enable/disable state from `feature-toggles:update` events. Displays status badges with pricing on Analytics panels and shows category-level warnings on individual items.
+- **Per-section time filters**: Analytics panels have independent All/7d/3d/24h filters so TTS and chat analytics can be viewed over different time ranges without affecting each other.
+- **Health endpoint**: `/api/health` reports socket uptime, poller staleness, last event per type, database status, and overall healthy/degraded assessment for monitoring.
 
 ## Setup
 
@@ -178,13 +181,13 @@ Interactive API documentation is available at `/docs` (Swagger UI) and `/redoc` 
 | `GET /api/analytics/chat` | Chat analytics: top chatters, hourly volume |
 | `GET /api/hidden-content` | Fishtoy events with metadata only. Query params: `target`, `search`, `limit`, `offset` |
 | `GET /api/fishtoy-availability` | Fishtoy/bigtoy items with enabled/cooldown/cost status |
-| `GET /api/polls` | Poll events (start, stop, vote). Query params: `limit` |
+| `GET /api/polls` | Poll start and stop events. Query params: `limit` |
 | `GET /api/polls/latest` | Reconstructed state of the most recent poll |
 | `GET /api/notifications` | Director messages and announcements. Query params: `limit` |
 | `GET /api/price-changes` | TTS/SFX price change history. Query params: `limit` |
+| `GET /api/feature-toggles` | Current feature toggle states (fishtoys, TTS, SFX enable/disable + pricing) |
 | `GET /api/user/{username}` | Search all event types for a specific user's activity (case-insensitive) |
 | `GET /api/users/suggest` | Username autocomplete suggestions. Query params: `q` (min 2 chars) |
-| `GET /api/status` | Connection status, browser client count, and auth status |
 | `WS /ws` | Live event stream via WebSocket |
 
 ## Socket Events Captured
@@ -216,6 +219,8 @@ fishtank-dashboard/
         server.py             FastAPI server + fishclient bridge + REST pollers
         database.py           SQLite storage layer with analytics queries
         auth.py               Automatic login, token caching, 401 re-auth
+        cleanup_db.py         One-time DB cleanup (dedup TTS, purge system chat/gifts)
+        test_backend.py       45 unit tests for database and filter functions
         import_logs.py        Backfill JSONL logs into SQLite
         requirements.txt
         .env.example          Template for credentials
