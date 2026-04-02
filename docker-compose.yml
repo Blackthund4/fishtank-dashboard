@@ -10,6 +10,15 @@ services:
       - FISHTANK_TOKEN_CACHE=/app/data/token_cache.json
       - FISHTANK_EMAIL=${FISHTANK_EMAIL}
       - FISHTANK_PASSWORD=${FISHTANK_PASSWORD}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+    mem_limit: 512m
+    memswap_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; r=requests.get('http://localhost:8000/api/health'); exit(0 if r.ok else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
