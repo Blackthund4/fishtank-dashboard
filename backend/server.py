@@ -800,7 +800,7 @@ def api_status():
     }
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def api_health():
     """Health check for monitoring. Sensitive details omitted."""
     now = datetime.now(timezone.utc)
