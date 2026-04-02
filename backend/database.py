@@ -686,3 +686,24 @@ def purge_gift_notifications():
         deleted = result.rowcount
         conn.commit()
     return deleted
+
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+
+def get_last_event_per_type():
+    """Return the most recent timestamp for each event type."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT event_type, MAX(timestamp_local) as last_seen, COUNT(*) as total
+        FROM events GROUP BY event_type
+    """).fetchall()
+    return {row["event_type"]: {"last_seen": row["last_seen"], "total": row["total"]} for row in rows}
+
+
+def get_event_count():
+    """Return total event count."""
+    conn = _get_conn()
+    return conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]

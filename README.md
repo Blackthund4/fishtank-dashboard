@@ -149,11 +149,15 @@ The database and token cache persist in a Docker volume (`fishtank-data`). To st
 
 ## API
 
+Interactive API documentation is available at `/docs` (Swagger UI) and `/redoc` (ReDoc) when the server is running.
+
 | Endpoint | Description |
 |---|---|
 | `GET /api/events` | List events. Query params: `type` (comma-separated), `limit`, `since_id` |
 | `GET /api/fishtoys` | Fishtoy events with filters. Query params: `target`, `item_id`, `search`, `limit`, `offset` |
-| `GET /api/stats` | Summary statistics (counts, top targets, top senders, total spend) |
+| `GET /api/stats` | Summary statistics. Query params: `since` (ISO timestamp) |
+| `GET /api/health` | Comprehensive health check: socket uptime, poller status, last event per type, DB stats |
+| `GET /api/status` | Connection status, browser client count, and auth status |
 | `GET /api/items` | Item catalog (itemId to name/description/icon mapping) |
 | `GET /api/contestants` | Current season contestant list (filtered to active season) |
 | `GET /api/rooms` | Room code to name mapping (e.g. `hwdn-5` to `Hallway`) |

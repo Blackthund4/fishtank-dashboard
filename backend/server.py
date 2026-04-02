@@ -114,7 +114,7 @@ def _patched_listen(self):
 
 def reconnect_loop():
     """Continuously maintain the fishclient connection with fresh tokens."""
-    global fish_client
+    global fish_client, _socket_connected_at
     _logger = logging.getLogger("fishclient.reconnect")
     backoff = 5
 
@@ -148,6 +148,7 @@ def reconnect_loop():
 
             client.connect()
             fish_client = client
+            _socket_connected_at = datetime.now(timezone.utc)
             backoff = 5  # Reset backoff on successful connect
             print(f"[OK] Connected to fishtank.live")
 
@@ -339,6 +340,11 @@ def stop_fish_client():
 
 _poller_stop = Event()
 
+# Health tracking
+_last_fishtoy_poll = None   # datetime of last successful fishtoy poll
+_last_stock_poll = None     # datetime of last successful stock poll
+_socket_connected_at = None # datetime when current socket connection was established
+
 
 def load_catalog():
     """Fetch item catalog, contestants, room mapping, and stocks from fishtank API."""
@@ -419,6 +425,7 @@ def load_catalog():
 
 def fishtoy_poller():
     """Poll /v1/items/recent for fishtoy redemptions."""
+    global _last_fishtoy_poll
     if not auth.is_configured:
         return
 
@@ -445,6 +452,7 @@ def fishtoy_poller():
                 continue
 
             items = r.json().get("items", [])
+            _last_fishtoy_poll = datetime.now(timezone.utc)
             this_poll_ids = set()
 
             for item in items:
@@ -500,6 +508,7 @@ def fishtoy_poller():
 
 def stock_poller():
     """Poll /v1/stocks every 60s and store price history."""
+    global _last_stock_poll
     if not auth.is_configured:
         return
 
@@ -520,6 +529,7 @@ def stock_poller():
                     _stocks.clear()
                     _stocks.extend(stocks)
                     database.store_stock_snapshot(stocks)
+                    _last_stock_poll = datetime.now(timezone.utc)
         except http_requests.RequestException:
             pass
 
@@ -607,6 +617,76 @@ def api_status():
         "connected": fc is not None and fc.is_connected,
         "browser_clients": len(browser_clients),
         "auth": auth.status(),
+    }
+
+
+@app.get("/api/health")
+def api_health():
+    """Comprehensive health check for monitoring."""
+    now = datetime.now(timezone.utc)
+    fc = fish_client
+
+    # Socket health
+    socket_connected = fc is not None and fc.is_connected
+    socket_uptime = None
+    if socket_connected and _socket_connected_at:
+        socket_uptime = int((now - _socket_connected_at).total_seconds())
+
+    # Poller health
+    fishtoy_age = None
+    if _last_fishtoy_poll:
+        fishtoy_age = int((now - _last_fishtoy_poll).total_seconds())
+    stock_age = None
+    if _last_stock_poll:
+        stock_age = int((now - _last_stock_poll).total_seconds())
+
+    # Database health
+    try:
+        event_types = database.get_last_event_per_type()
+        total_events = database.get_event_count()
+        db_ok = True
+    except Exception as e:
+        event_types = {}
+        total_events = 0
+        db_ok = False
+
+    # Overall status
+    issues = []
+    if not socket_connected:
+        issues.append("socket disconnected")
+    if fishtoy_age is not None and fishtoy_age > 30:
+        issues.append(f"fishtoy poller stale ({fishtoy_age}s)")
+    elif fishtoy_age is None and auth.is_configured:
+        issues.append("fishtoy poller not started")
+    if stock_age is not None and stock_age > 120:
+        issues.append(f"stock poller stale ({stock_age}s)")
+    elif stock_age is None and auth.is_configured:
+        issues.append("stock poller not started")
+    if not db_ok:
+        issues.append("database error")
+
+    return {
+        "status": "healthy" if not issues else "degraded",
+        "issues": issues,
+        "uptime": {
+            "socket_connected": socket_connected,
+            "socket_uptime_seconds": socket_uptime,
+            "socket_connected_at": _socket_connected_at.isoformat() if _socket_connected_at else None,
+        },
+        "pollers": {
+            "fishtoy_last_poll": _last_fishtoy_poll.isoformat() if _last_fishtoy_poll else None,
+            "fishtoy_age_seconds": fishtoy_age,
+            "stock_last_poll": _last_stock_poll.isoformat() if _last_stock_poll else None,
+            "stock_age_seconds": stock_age,
+        },
+        "database": {
+            "ok": db_ok,
+            "total_events": total_events,
+            "event_types": event_types,
+        },
+        "auth": auth.status(),
+        "browser_clients": len(browser_clients),
+        "checked_at": now.isoformat(),
     }
 
 
