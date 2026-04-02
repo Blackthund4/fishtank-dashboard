@@ -262,7 +262,27 @@ Three additions to make the project deployable and maintainable:
 
 **Health endpoint.** `/api/health` reports socket connection status and uptime, fishtoy poller staleness (flagged at >30s), stock poller staleness (flagged at >120s), last event timestamp per event type, total event count, database accessibility, and auth status. Returns an overall "healthy" or "degraded" status with a specific issues list. Designed for external monitoring tools or a quick manual check.
 
-**Unit tests.** 45 pytest tests covering database operations (store, query, filter, paginate, analytics with time ranges, dedup, purge), filter functions (chat echo detection for tts/sfx/emote, notification gift detection, TTS event ID dedup), poll state reconstruction (complete, missing stop, empty), and user search (case-insensitive, cross-event-type, autocomplete). All tests run against an in-memory SQLite database with a fresh schema per test.
+**Unit tests.** 50 pytest tests covering database operations (store, query, filter, paginate, analytics with time ranges, dedup, purge), filter functions (chat echo detection for tts/sfx/emote, notification gift detection, TTS event ID dedup), rate limiting (allows traffic, rejects over limit, per-IP isolation, prune lifecycle), poll state reconstruction (complete, missing stop, empty), and user search (case-insensitive, cross-event-type, autocomplete). All tests run against an in-memory SQLite database with a fresh schema per test.
+
+### Phase 20: Security Hardening and VPS Deployment
+
+With the show on day 19 of 30, capturing events 24/7 became urgent. The dashboard needed to move from a local Windows machine to a VPS that runs unattended.
+
+**Security hardening (pre-deployment).** Seven code-level changes before exposing the server publicly:
+
+1. CORS: configurable via `ALLOWED_ORIGINS` env var, methods restricted to GET and HEAD only. HEAD was added specifically for UptimeRobot health monitoring, which sends HEAD requests by default.
+2. Rate limiting: custom middleware tracking per-IP request counts in a time-windowed dict. 120 requests per 60 seconds per IP, returns 429 when exceeded, skips static file serving, auto-prunes stale entries when the IP count exceeds 1000.
+3. Endpoint sanitization: `/api/health` and `/api/status` stripped of auth token expiry timestamps, login counts, event type breakdowns, and socket connection timestamps. Only operational status exposed publicly.
+4. WebSocket limit: max 50 concurrent browser connections, rejects with close code 1013 when exceeded.
+5. Database backup: periodic SQLite backup using the online backup API (`conn.backup()`) every 6 hours, with the first backup 5 minutes after startup. Initial implementation used `shutil.copy2` which risks corruption during active writes; switched to SQLite's built-in backup API for consistent copies.
+6. Docker limits: 512MB memory cap with no swap, healthcheck via `/api/health` every 60 seconds with auto-restart on failure.
+7. Generic exception handler: suppresses Python stack traces in production, returning "Internal server error" instead of exposing file paths and library versions.
+
+**Query limit crowding.** A recurring bug class surfaced across three features: polls, activity panel, and system events. When multiple event types share a single database query with a row limit, high-volume types consume the entire limit and push low-volume types out of results entirely. Chat messages (278k) crowded TTS/SFX (5.8k) out of the activity panel. Feature toggle events (108) crowded stock events (2) out of system events. Poll votes (4.7k) crowded poll start/stop (8 total) out of the poll query. The fix in every case was the same: fetch each event type category independently with its own limit, then merge on the frontend if needed. This is now a design rule for the project: never mix event types with different volumes in a single limited query.
+
+**Backfill detection.** The fishtoy poller previously skipped everything on its first poll to establish a baseline. This meant any fishtoys that happened during server downtime were silently lost. The fix loads known fishtoy event IDs from the database before the first poll and compares each API item against them. Items not in the database are stored and logged with a `[BACKFILL]` prefix.
+
+**VPS deployment.** Vultr Cloud Compute ($3.50/month, Ubuntu 24.04 with Docker marketplace app). Server hardening: UFW firewall allowing only ports 22 (SSH) and 8000, SSH key-based auth with password login disabled, Docker log rotation (50MB max, 3 files), Ubuntu unattended security upgrades. Historical database (291k events) uploaded via SCP. UptimeRobot configured for external monitoring on `/api/health`.
 
 ### Key Takeaways
 
@@ -288,6 +308,8 @@ Three additions to make the project deployable and maintainable:
 
 11. **Tests catch assumptions.** Writing unit tests for `get_latest_poll_state` immediately revealed that the function didn't include a `winner` key when no `poll:stop` existed. The test expected `state["winner"]` to be `None`, but the key was absent entirely. This is the kind of bug that works in the UI (optional chaining handles it) but breaks downstream consumers that expect a consistent schema.
 
+12. **Shared queries with limits are a silent data loss vector.** When one event type has 50x the volume of another and they share a query with `LIMIT 500`, the low-volume type effectively doesn't exist in the results. This bug appeared three separate times (polls, activity, system events) before being recognized as a pattern. The rule is simple: never mix event types with different orders of magnitude in a single limited query.
+
 ### Relevance to Sales Engineering
 
 This project exercises several skills that directly transfer to SE work:
@@ -308,6 +330,8 @@ This project exercises several skills that directly transfer to SE work:
 
 **Building for unattended operation.** Moving from a "works when I'm watching" prototype to a system that runs 24/7 without intervention required solving a different class of problems: silent failure detection, automatic recovery, credential management, and connection resilience. This mirrors the transition from POC to production that SEs help customers navigate.
 
-**Containerization and deployment.** Packaging the application with Docker (multi-stage build, persistent volumes, environment-based configuration) demonstrates the deployment skills SEs need when helping customers run integrations in their own infrastructure. A health endpoint that reports component-level status is the kind of operational tooling that separates a demo from a production system.
+**Containerization and deployment.** Packaging the application with Docker (multi-stage build, persistent volumes, environment-based configuration) and deploying to a VPS with firewall rules, SSH hardening, and uptime monitoring demonstrates the deployment skills SEs need when helping customers run integrations in their own infrastructure. A health endpoint that reports component-level status is the kind of operational tooling that separates a demo from a production system.
 
-**Testing and quality assurance.** Writing unit tests that exercise the data layer and filter logic against an in-memory database shows the discipline to verify behavior, not just observe it. SEs who can write and explain tests earn credibility with engineering teams during technical evaluations.
+**Security hardening for production.** Implementing CORS restrictions, rate limiting, endpoint sanitization, connection caps, and exception handling before going public shows awareness of the security considerations involved in exposing any service to the internet. SEs who understand these concerns can have informed conversations with security teams during technical evaluations.
+
+**Testing and quality assurance.** Writing unit tests that exercise the data layer, filter logic, and rate limiting against an in-memory database shows the discipline to verify behavior, not just observe it. SEs who can write and explain tests earn credibility with engineering teams during technical evaluations.
