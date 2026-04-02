@@ -718,7 +718,7 @@ _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _allowed_origins],
-    allow_methods=["GET"],
+    allow_methods=["GET", "HEAD"],
     allow_headers=["*"],
 )
 
