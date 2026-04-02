@@ -1,13 +1,6 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import { TrendingUp, Volume2, MessageSquare, Users, Bell, Vote, Zap, Fish } from 'lucide-react'
 
-function formatTime(ts) {
-  if (!ts) return ''
-  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
-  if (isNaN(ms)) return ''
-  return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-}
-
 function formatDateTime(ts) {
   if (!ts) return ''
   const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
@@ -25,7 +18,7 @@ function getSinceISO(period) {
   return new Date(now.getTime() - hours * 3600000).toISOString()
 }
 
-const TIME_FILTERS = [
+const TIME_OPTIONS = [
   { id: null, label: 'All' },
   { id: '7d', label: '7d' },
   { id: '3d', label: '3d' },
@@ -38,6 +31,26 @@ const STOCK_SORTS = [
   { id: 'down', label: 'Movers Down' },
 ]
 
+function TimeFilter({ value, onChange }) {
+  return (
+    <div className="flex gap-1">
+      {TIME_OPTIONS.map(f => (
+        <button
+          key={f.id || 'all'}
+          onClick={() => onChange(f.id)}
+          className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+            value === f.id
+              ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+              : 'text-tank-muted hover:text-tank-text'
+          }`}
+        >
+          {f.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, itemCatalog, notifications = [], systemEvents = [], featureToggles = {} }, ref) {
   const [stockHistory, setStockHistory] = useState([])
   const [stocks, setStocks] = useState([])
@@ -47,36 +60,59 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
   const [polls, setPolls] = useState([])
   const [priceChanges, setPriceChanges] = useState([])
   const [stockCount, setStockCount] = useState(0)
-  const [timePeriod, setTimePeriod] = useState(null)
+
+  // Per-section time filters
+  const [ttsPeriod, setTtsPeriod] = useState(null)
+  const [chatPeriod, setChatPeriod] = useState(null)
+
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
   const directorRef = useRef(null)
 
   useImperativeHandle(ref, () => ({
     scrollToDirector: () => {
-      directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
   }))
 
+  // Fetch data that doesn't depend on time filters
   useEffect(() => {
-    function fetchAll() {
-      const since = getSinceISO(timePeriod)
-      const sinceParam = since ? `?since=${encodeURIComponent(since)}` : ''
-
+    function fetchStatic() {
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/stocks/history?limit=2000').then(r => r.json()).then(setStockHistory).catch(() => {})
       fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
-      fetch(`/api/analytics/tts-sfx${sinceParam}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
-      fetch(`/api/analytics/chat${sinceParam}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
       fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
       fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
     }
-
-    fetchAll()
-    const interval = setInterval(fetchAll, 30000)
+    fetchStatic()
+    const interval = setInterval(fetchStatic, 30000)
     return () => clearInterval(interval)
-  }, [timePeriod])
+  }, [])
+
+  // TTS/SFX analytics with its own time filter
+  useEffect(() => {
+    function fetchTts() {
+      const since = getSinceISO(ttsPeriod)
+      const param = since ? `?since=${encodeURIComponent(since)}` : ''
+      fetch(`/api/analytics/tts-sfx${param}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
+    }
+    fetchTts()
+    const interval = setInterval(fetchTts, 30000)
+    return () => clearInterval(interval)
+  }, [ttsPeriod])
+
+  // Chat analytics with its own time filter
+  useEffect(() => {
+    function fetchChat() {
+      const since = getSinceISO(chatPeriod)
+      const param = since ? `?since=${encodeURIComponent(since)}` : ''
+      fetch(`/api/analytics/chat${param}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
+    }
+    fetchChat()
+    const interval = setInterval(fetchChat, 30000)
+    return () => clearInterval(interval)
+  }, [chatPeriod])
 
   const sortedStocks = [...stocks].sort((a, b) => {
     if (stockSort === 'up') return (b.currentPrice - b.today) - (a.currentPrice - a.today)
@@ -99,24 +135,6 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
-      {/* Time filter bar */}
-      <div className="flex items-center gap-2 shrink-0">
-        <span className="text-[10px] font-mono text-tank-muted uppercase">Time Range:</span>
-        {TIME_FILTERS.map(f => (
-          <button
-            key={f.id || 'all'}
-            onClick={() => setTimePeriod(f.id)}
-            className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
-              timePeriod === f.id
-                ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
-                : 'bg-tank-highlight text-tank-muted border border-tank-border hover:text-tank-text'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
       {/* STO-X */}
       <Section title="STO-X" icon={TrendingUp} extra={
         <div className="flex gap-1">
@@ -228,7 +246,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       <div className="grid grid-cols-2 gap-3">
         {/* TTS/SFX Analytics */}
         <Section title="TTS / SFX Analytics" icon={Volume2} extra={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             {ttsToggle !== undefined && (
               <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ttsToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
                 TTS: {ttsToggle?.enabled ? 'ON' : 'OFF'}{ttsToggle?.metadata ? ` (${ttsToggle.metadata}t)` : ''}
@@ -239,6 +257,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                 SFX: {sfxToggle?.enabled ? 'ON' : 'OFF'}{sfxToggle?.metadata ? ` (${sfxToggle.metadata}t)` : ''}
               </span>
             )}
+            <TimeFilter value={ttsPeriod} onChange={setTtsPeriod} />
           </div>
         }>
           {ttsAnalytics ? (
@@ -285,7 +304,9 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         </Section>
 
         {/* Chat Analytics */}
-        <Section title="Chat Analytics" icon={MessageSquare}>
+        <Section title="Chat Analytics" icon={MessageSquare} extra={
+          <TimeFilter value={chatPeriod} onChange={setChatPeriod} />
+        }>
           {chatAnalytics ? (
             <div className="space-y-3">
               <div className="text-xs text-tank-muted">
@@ -327,7 +348,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       }>
         {fishtoyToggle && !fishtoyToggle.enabled && (
           <div className="text-xs text-red-400 font-mono mb-2 p-2 bg-red-500/5 border border-red-500/20 rounded">
-            Fishtoys are currently disabled. Items below may show as ON but cannot be used until the category is re-enabled.
+            Fishtoys are currently disabled. Items below may show as ON but cannot be used until Production re-enable the toys.
           </div>
         )}
         <div className="grid grid-cols-6 gap-1.5">
@@ -345,7 +366,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                 </span>
               </div>
               {f.enabled && fishtoyToggle && !fishtoyToggle.enabled && (
-                <span className="text-[8px] text-red-400/70 font-mono">(category disabled)</span>
+                <span className="text-[8px] text-red-400/70 font-mono">(fishtoys are currently disabled)</span>
               )}
               {f.type === 'BIGTOY' && (
                 <span className="text-[9px] text-purple-400 font-mono">BIGTOY</span>
@@ -381,8 +402,10 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         <Section title="Poll History" icon={Vote}>
           {polls.length > 0 ? (
             <div className="space-y-2 max-h-[300px] overflow-y-auto">
-              {polls.filter(p => p.event_type === 'poll:start' || p.event_type === 'poll:stop').map(p => {
+              {polls.map(p => {
                 const d = p.data || {}
+                const question = d.question || d.poll?.question
+                const answers = d.answers || d.poll?.answers
                 return (
                   <div key={p.id} className={`p-2 rounded border ${
                     p.event_type === 'poll:stop'
@@ -399,15 +422,15 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                       </span>
                       <span className="text-[10px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
                     </div>
-                    {d.question && <p className="text-xs text-tank-bright mb-1">{d.question}</p>}
+                    {question && <p className="text-xs text-tank-bright mb-1">{question}</p>}
                     {d.winner && (
                       <div className="text-xs">
                         Winner: <span className="font-semibold text-purple-400">{d.winner}</span>
                       </div>
                     )}
-                    {d.answers && !d.winner && (
+                    {answers && !d.winner && (
                       <div className="text-[10px] text-tank-muted">
-                        Options: {d.answers.join(', ')}
+                        Options: {answers.join(', ')}
                       </div>
                     )}
                   </div>

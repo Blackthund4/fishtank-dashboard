@@ -363,11 +363,11 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
 
 
 def get_polls(limit=50):
-    """Get poll events (start, stop, vote)."""
+    """Get poll start and stop events (excludes vote tallies)."""
     conn = _get_conn()
     rows = conn.execute("""
         SELECT id, event_type, event_id, timestamp_server, timestamp_local, data
-        FROM events WHERE event_type IN ('poll:start', 'poll:stop', 'poll:vote')
+        FROM events WHERE event_type IN ('poll:start', 'poll:stop')
         ORDER BY id DESC LIMIT ?
     """, (limit,)).fetchall()
     return [
