@@ -52,6 +52,8 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_stock_ticker ON stock_history(ticker);
         CREATE INDEX IF NOT EXISTS idx_stock_ts ON stock_history(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_events_sentiment ON events(event_type, timestamp_local)
+            WHERE json_extract(data, '$.sentiment') IS NOT NULL;
     """)
     conn.commit()
 
@@ -769,3 +771,91 @@ def get_peak_hours():
         "peak": [{"hour": h["hour"], "total": h["total"]} for h in peak],
         "quietest": [{"hour": h["hour"], "total": h["total"]} for h in quietest],
     }
+
+
+def _mood_label(avg):
+    """Map compound score to a mood label."""
+    if avg >= 0.5: return "Excited"
+    if avg >= 0.15: return "Happy"
+    if avg >= -0.15: return "Neutral"
+    if avg >= -0.5: return "Grumpy"
+    return "Hostile"
+
+
+def _sentiment_base(conn, type_clause, since=None):
+    """Shared sentiment query logic for a given event type filter."""
+    since_clause = ""
+    params = []
+    if since:
+        since_clause = " AND timestamp_local >= ?"
+        params.append(since)
+
+    base_where = f"{type_clause} AND json_extract(data, '$.sentiment') IS NOT NULL"
+
+    hourly = conn.execute(f"""
+        SELECT strftime('%H', timestamp_local) as hour,
+            AVG(CAST(json_extract(data, '$.sentiment') AS REAL)) as avg_sentiment,
+            COUNT(*) as message_count
+        FROM events
+        WHERE {base_where}{since_clause}
+        GROUP BY hour ORDER BY hour
+    """, params).fetchall()
+
+    overall_row = conn.execute(f"""
+        SELECT
+            AVG(CAST(json_extract(data, '$.sentiment') AS REAL)) as avg,
+            SUM(CASE WHEN CAST(json_extract(data, '$.sentiment') AS REAL) >= 0.05 THEN 1 ELSE 0 END) as positive,
+            SUM(CASE WHEN CAST(json_extract(data, '$.sentiment') AS REAL) <= -0.05 THEN 1 ELSE 0 END) as negative,
+            SUM(CASE WHEN CAST(json_extract(data, '$.sentiment') AS REAL) > -0.05 AND CAST(json_extract(data, '$.sentiment') AS REAL) < 0.05 THEN 1 ELSE 0 END) as neutral,
+            COUNT(*) as total
+        FROM events
+        WHERE {base_where}{since_clause}
+    """, params).fetchone()
+
+    total = overall_row["total"] if overall_row["total"] else 0
+    avg = round(overall_row["avg"] or 0, 4)
+    overall = {
+        "avg": avg,
+        "positive_pct": round((overall_row["positive"] or 0) / total * 100, 1) if total > 0 else 0,
+        "neutral_pct": round((overall_row["neutral"] or 0) / total * 100, 1) if total > 0 else 0,
+        "negative_pct": round((overall_row["negative"] or 0) / total * 100, 1) if total > 0 else 0,
+    }
+
+    return {
+        "hourly": [{"hour": r["hour"], "avg_sentiment": round(r["avg_sentiment"], 4), "message_count": r["message_count"]} for r in hourly],
+        "overall": overall,
+        "label": _mood_label(avg),
+    }
+
+
+def get_chat_sentiment(since=None):
+    """Sentiment analytics for chat messages."""
+    conn = _get_conn()
+    return _sentiment_base(conn, "event_type = 'chat:message'", since)
+
+
+def get_tts_sentiment(since=None):
+    """Sentiment analytics for TTS messages, including per-target breakdown."""
+    conn = _get_conn()
+    result = _sentiment_base(conn, "event_type = 'tts:update'", since)
+
+    since_clause = ""
+    params = []
+    if since:
+        since_clause = " AND timestamp_local >= ?"
+        params.append(since)
+
+    by_target = conn.execute(f"""
+        SELECT json_extract(data, '$.target') as target,
+            AVG(CAST(json_extract(data, '$.sentiment') AS REAL)) as avg_sentiment,
+            COUNT(*) as message_count
+        FROM events
+        WHERE event_type = 'tts:update'
+            AND json_extract(data, '$.sentiment') IS NOT NULL
+            AND json_extract(data, '$.target') IS NOT NULL
+            {since_clause}
+        GROUP BY target ORDER BY avg_sentiment DESC
+    """, params).fetchall()
+
+    result["by_target"] = [{"target": r["target"], "avg_sentiment": round(r["avg_sentiment"], 4), "message_count": r["message_count"]} for r in by_target]
+    return result

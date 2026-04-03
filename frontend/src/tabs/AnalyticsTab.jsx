@@ -72,6 +72,14 @@ const STOCK_SORTS = [
   { id: 'down', label: 'Movers Down' },
 ]
 
+function getMoodLabel(score) {
+  if (score >= 0.5) return { label: 'Excited', color: 'bg-green-400/70', textColor: 'text-green-400' }
+  if (score >= 0.15) return { label: 'Happy', color: 'bg-lime-400/70', textColor: 'text-lime-400' }
+  if (score >= -0.15) return { label: 'Neutral', color: 'bg-tank-muted/70', textColor: 'text-tank-muted' }
+  if (score >= -0.5) return { label: 'Grumpy', color: 'bg-orange-400/70', textColor: 'text-orange-400' }
+  return { label: 'Hostile', color: 'bg-red-500/70', textColor: 'text-red-400' }
+}
+
 function TimeFilter({ value, onChange }) {
   return (
     <div className="flex gap-1">
@@ -107,6 +115,8 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
   const [ttsPeriod, setTtsPeriod] = useState(null)
   const [chatPeriod, setChatPeriod] = useState(null)
   const [stockPeriod, setStockPeriod] = useState(null)
+  const [chatSentiment, setChatSentiment] = useState(null)
+  const [ttsSentiment, setTtsSentiment] = useState(null)
 
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
@@ -164,6 +174,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       const since = getSinceISO(ttsPeriod)
       const param = since ? `?since=${encodeURIComponent(since)}` : ''
       fetch(`/api/analytics/tts-sfx${param}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
+      fetch(`/api/analytics/tts-sentiment${param}`).then(r => r.json()).then(setTtsSentiment).catch(() => {})
     }
     fetchTts()
     const interval = setInterval(fetchTts, 120000)
@@ -177,6 +188,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       const since = getSinceISO(chatPeriod)
       const param = since ? `?since=${encodeURIComponent(since)}` : ''
       fetch(`/api/analytics/chat${param}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
+      fetch(`/api/analytics/chat-sentiment${param}`).then(r => r.json()).then(setChatSentiment).catch(() => {})
     }
     fetchChat()
     const interval = setInterval(fetchChat, 120000)
@@ -385,6 +397,15 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         {/* TTS/SFX Analytics */}
         <Section title="TTS / SFX Analytics" icon={Volume2} extra={
           <div className="flex items-center gap-2">
+            {ttsSentiment && (() => {
+              const { label, color } = getMoodLabel(ttsSentiment.overall.avg)
+              return (
+                <div className="flex items-center gap-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${color}`} />
+                  <span className="text-[9px] font-mono text-tank-bright">{label}</span>
+                </div>
+              )
+            })()}
             {ttsToggle !== undefined && (
               <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ttsToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
                 TTS: {ttsToggle?.enabled ? 'ON' : 'OFF'}{ttsToggle?.metadata ? ` (${ttsToggle.metadata}t)` : ''}
@@ -434,6 +455,30 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                   <HourlyBar data={ttsAnalytics.hourly} color="bg-purple-400" />
                 </div>
               )}
+              {ttsSentiment && ttsSentiment.hourly.length > 0 && (
+                <div>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Sentiment (UTC)</h4>
+                  <SentimentHourlyBar data={ttsSentiment.hourly} />
+                </div>
+              )}
+              {ttsSentiment && ttsSentiment.by_target && ttsSentiment.by_target.length > 0 && (
+                <div>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Mood by Contestant</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-0.5">
+                    {ttsSentiment.by_target.map(t => {
+                      const { textColor } = getMoodLabel(t.avg_sentiment)
+                      return (
+                        <div key={t.target} className="flex items-center justify-between text-xs">
+                          <span className="text-tank-bright truncate">{t.target}</span>
+                          <span className={`font-mono shrink-0 ml-1 ${textColor}`}>
+                            {t.avg_sentiment >= 0 ? '+' : ''}{t.avg_sentiment.toFixed(2)}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-xs text-tank-muted font-mono">Loading analytics...</div>
@@ -442,7 +487,18 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
         {/* Chat Analytics */}
         <Section title="Chat Analytics" icon={MessageSquare} extra={
-          <TimeFilter value={chatPeriod} onChange={setChatPeriod} />
+          <div className="flex items-center gap-2">
+            {chatSentiment && (() => {
+              const { label, color } = getMoodLabel(chatSentiment.overall.avg)
+              return (
+                <div className="flex items-center gap-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${color}`} />
+                  <span className="text-[9px] font-mono text-tank-bright">{label}</span>
+                </div>
+              )
+            })()}
+            <TimeFilter value={chatPeriod} onChange={setChatPeriod} />
+          </div>
         }>
           {chatAnalytics ? (
             <div className="space-y-3">
@@ -466,6 +522,12 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                 <div>
                   <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Volume (UTC)</h4>
                   <HourlyBar data={chatAnalytics.hourly} color="bg-blue-400" />
+                </div>
+              )}
+              {chatSentiment && chatSentiment.hourly.length > 0 && (
+                <div>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Sentiment (UTC)</h4>
+                  <SentimentHourlyBar data={chatSentiment.hourly} />
                 </div>
               )}
             </div>
@@ -641,6 +703,36 @@ function Section({ title, icon: Icon, extra, children }) {
         {extra}
       </div>
       {children}
+    </div>
+  )
+}
+
+function SentimentHourlyBar({ data }) {
+  const maxAbs = Math.max(...data.map(d => Math.abs(d.avg_sentiment)), 0.01)
+  const halfHeight = 20
+  return (
+    <div className="flex gap-px" style={{ height: `${halfHeight * 2}px` }}>
+      {Array.from({ length: 24 }, (_, i) => {
+        const hour = String(i).padStart(2, '0')
+        const entry = data.find(d => d.hour === hour)
+        const score = entry?.avg_sentiment || 0
+        const count = entry?.message_count || 0
+        const barH = (Math.abs(score) / maxAbs) * halfHeight
+        const isPositive = score >= 0
+        return (
+          <div
+            key={hour}
+            className="flex-1 flex flex-col relative"
+            title={`${hour}:00 UTC\nSentiment: ${score.toFixed(3)}\nMessages: ${count}`}
+          >
+            {isPositive ? (
+              <div className="absolute w-full bg-green-400/70 rounded-t-sm" style={{ bottom: `${halfHeight}px`, height: `${Math.max(barH, 1)}px` }} />
+            ) : (
+              <div className="absolute w-full bg-red-400/70 rounded-b-sm" style={{ top: `${halfHeight}px`, height: `${Math.max(barH, 1)}px` }} />
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

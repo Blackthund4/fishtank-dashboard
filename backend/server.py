@@ -36,8 +36,12 @@ from pathlib import Path
 
 from fishclient import FishClient
 
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
 import database
 from auth import AuthManager
+
+_sentiment_analyzer = SentimentIntensityAnalyzer()
 
 # ============================================================
 # CONFIG
@@ -375,6 +379,13 @@ def _track_feature_toggle(data):
         }
 
 
+def _score_sentiment(text):
+    """Return VADER compound sentiment score (-1.0 to 1.0). Returns 0.0 for empty/None text."""
+    if not text or not isinstance(text, str):
+        return 0.0
+    return _sentiment_analyzer.polarity_scores(text)["compound"]
+
+
 def make_event_handler(evt):
     """Create an event handler for a specific socket event type."""
     def handler(data):
@@ -384,7 +395,7 @@ def make_event_handler(evt):
             if isinstance(data, (int, float)):
                 _fishtank_online = int(data)
             return
-        
+
         # Filter TTS/SFX/emote system echo from chat
         if evt == "chat:message" and _should_filter_chat(data):
             return
@@ -400,6 +411,11 @@ def make_event_handler(evt):
         # Track feature toggle state
         if evt == "feature-toggles:update":
             _track_feature_toggle(data)
+
+        # Score sentiment for chat and TTS messages
+        if isinstance(data, dict):
+            if evt in ("chat:message", "tts:update"):
+                data["sentiment"] = _score_sentiment(data.get("message"))
 
         # Store in database
         db_id = database.store_event(evt, data)
@@ -985,6 +1001,18 @@ def api_tts_sfx_analytics(since: str = Query(None)):
 def api_chat_analytics(since: str = Query(None)):
     """Chat analytics: top chatters, hourly volume."""
     return _cached_query(f"chat:{since}", database.get_chat_analytics, since)
+
+
+@app.get("/api/analytics/chat-sentiment")
+def api_chat_sentiment(since: str = Query(None)):
+    """Chat sentiment analytics: overall mood, hourly breakdown."""
+    return _cached_query(f"chat-sentiment:{since}", database.get_chat_sentiment, since)
+
+
+@app.get("/api/analytics/tts-sentiment")
+def api_tts_sentiment(since: str = Query(None)):
+    """TTS sentiment analytics: overall mood, hourly breakdown, mood by contestant."""
+    return _cached_query(f"tts-sentiment:{since}", database.get_tts_sentiment, since)
 
 
 @app.get("/api/analytics/peak-hours")

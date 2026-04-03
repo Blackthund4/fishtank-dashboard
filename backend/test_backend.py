@@ -23,6 +23,7 @@ import database
 sys.path.insert(0, os.path.dirname(__file__))
 from server import _should_filter_chat, _should_filter_notification, _is_duplicate, _seen_tts_sfx_ids
 from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX
+from server import _score_sentiment
 
 
 # ============================================================
@@ -801,3 +802,123 @@ def test_get_price_changes_limit():
         database.store_event("tts:price", {"price": i * 100})
     result = database.get_price_changes(limit=2)
     assert len(result) == 2
+
+
+# ============================================================
+# SENTIMENT: _score_sentiment
+# ============================================================
+
+
+def test_score_sentiment_positive():
+    score = _score_sentiment("This is amazing and wonderful!")
+    assert score > 0
+
+
+def test_score_sentiment_negative():
+    score = _score_sentiment("This is terrible and awful!")
+    assert score < 0
+
+
+def test_score_sentiment_empty():
+    assert _score_sentiment("") == 0.0
+    assert _score_sentiment(None) == 0.0
+
+
+def test_score_sentiment_non_string():
+    assert _score_sentiment(123) == 0.0
+    assert _score_sentiment(["list"]) == 0.0
+
+
+# ============================================================
+# DATABASE: get_sentiment_analytics
+# ============================================================
+
+
+def test_chat_sentiment_empty():
+    result = database.get_chat_sentiment()
+    assert result["hourly"] == []
+    assert result["overall"]["avg"] == 0
+    assert result["label"] == "Neutral"
+
+
+def test_chat_sentiment_overall():
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "great", "sentiment": 0.8})
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "ok", "sentiment": 0.0})
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "bad", "sentiment": -0.6})
+    result = database.get_chat_sentiment()
+    assert result["overall"]["positive_pct"] > 0
+    assert result["overall"]["neutral_pct"] > 0
+    assert result["overall"]["negative_pct"] > 0
+    total_pct = result["overall"]["positive_pct"] + result["overall"]["neutral_pct"] + result["overall"]["negative_pct"]
+    assert 99.5 <= total_pct <= 100.5
+    assert "by_target" not in result
+
+
+def test_chat_sentiment_hourly():
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "hi", "sentiment": 0.5})
+    result = database.get_chat_sentiment()
+    assert len(result["hourly"]) >= 1
+    assert result["hourly"][0]["message_count"] == 1
+    assert result["hourly"][0]["avg_sentiment"] == 0.5
+
+
+def test_chat_sentiment_excludes_tts():
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "hello", "sentiment": 0.5})
+    database.store_event("tts:update", {"displayName": "U", "target": "T", "message": "tts", "sentiment": -0.5})
+    result = database.get_chat_sentiment()
+    assert result["overall"]["avg"] == 0.5
+    assert result["hourly"][0]["message_count"] == 1
+
+
+def test_chat_sentiment_with_since():
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "hi", "sentiment": 0.5})
+    result = database.get_chat_sentiment(since="2099-01-01T00:00:00Z")
+    assert result["hourly"] == []
+    assert result["overall"]["avg"] == 0
+
+
+def test_chat_sentiment_excludes_no_sentiment():
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "old"})
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "new", "sentiment": 0.3})
+    result = database.get_chat_sentiment()
+    assert result["overall"]["avg"] == 0.3
+    assert result["hourly"][0]["message_count"] == 1
+
+
+def test_chat_sentiment_label():
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "amazing", "sentiment": 0.6})
+    result = database.get_chat_sentiment()
+    assert result["label"] == "Excited"
+
+
+def test_tts_sentiment_empty():
+    result = database.get_tts_sentiment()
+    assert result["hourly"] == []
+    assert result["by_target"] == []
+    assert result["label"] == "Neutral"
+
+
+def test_tts_sentiment_by_target():
+    database.store_event("tts:update", {"displayName": "U", "target": "Alice", "message": "love", "sentiment": 0.9})
+    database.store_event("tts:update", {"displayName": "U", "target": "Bob", "message": "hate", "sentiment": -0.8})
+    result = database.get_tts_sentiment()
+    assert len(result["by_target"]) == 2
+    assert result["by_target"][0]["target"] == "Alice"
+    assert result["by_target"][0]["avg_sentiment"] > 0
+    assert result["by_target"][1]["target"] == "Bob"
+    assert result["by_target"][1]["avg_sentiment"] < 0
+
+
+def test_tts_sentiment_excludes_chat():
+    database.store_event("tts:update", {"displayName": "U", "target": "T", "message": "tts", "sentiment": -0.5})
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "chat", "sentiment": 0.5})
+    result = database.get_tts_sentiment()
+    assert result["overall"]["avg"] == -0.5
+    assert result["hourly"][0]["message_count"] == 1
+
+
+def test_tts_sentiment_hourly():
+    database.store_event("tts:update", {"displayName": "U", "target": "T", "message": "hi", "sentiment": 0.3})
+    result = database.get_tts_sentiment()
+    assert len(result["hourly"]) >= 1
+    assert result["hourly"][0]["avg_sentiment"] == 0.3
