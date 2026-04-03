@@ -21,6 +21,9 @@ function formatSystemEvent(e) {
     return { badge: 'TOGGLE', badgeClass: d.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400', message: `${name} ${state}${price}`, time }
   }
   if (e.event === 'stock:update') {
+    if (d.oldTickerSymbol && d.newTickerSymbol) {
+      return { badge: 'STO-X', badgeClass: 'bg-blue-500/10 text-blue-400', message: `${d.oldTickerSymbol} renamed to ${d.newTickerSymbol}`, time }
+    }
     const ticker = d.tickerSymbol || '?'
     const price = d.currentPrice ?? '?'
     return { badge: 'STO-X', badgeClass: 'bg-blue-500/10 text-blue-400', message: `${ticker} price updated to ${price}`, time }
@@ -560,7 +563,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
             </div>
           ) : (
             <div className="text-xs text-tank-muted font-mono">No system events yet</div>
-          )}}
+          )}
         </Section>
       </div>
     </div>
