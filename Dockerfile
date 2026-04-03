@@ -12,6 +12,9 @@ FROM python:3.12.7-slim
 
 WORKDIR /app
 
+# Install gosu for dropping privileges at runtime
+RUN apt-get update && apt-get install -y gosu && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
@@ -26,10 +29,12 @@ COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 RUN groupadd -r dashboard && useradd -r -g dashboard dashboard \
     && mkdir -p /app/data && chown -R dashboard:dashboard /app/data
 
-USER dashboard
+# Copy entrypoint
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 WORKDIR /app/backend
 
 EXPOSE 8000
 
-CMD ["python", "server.py"]
+ENTRYPOINT ["/app/entrypoint.sh"]
