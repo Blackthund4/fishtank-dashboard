@@ -10,6 +10,45 @@ function formatDateTime(ts) {
     d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
+function formatSystemEvent(e) {
+  const d = e.data || {}
+  const time = formatDateTime(d.updatedAt || d.createdAt || d.timestamp)
+
+  if (e.event === 'feature-toggles:update') {
+    const name = (d.feature || '').toUpperCase() || 'Unknown'
+    const state = d.enabled ? 'enabled' : 'disabled'
+    const price = d.metadata ? ` (${d.metadata} tokens)` : ''
+    return { badge: 'TOGGLE', badgeClass: d.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400', message: `${name} ${state}${price}`, time }
+  }
+  if (e.event === 'stock:update') {
+    const ticker = d.tickerSymbol || '?'
+    const price = d.currentPrice ?? '?'
+    return { badge: 'STO-X', badgeClass: 'bg-blue-500/10 text-blue-400', message: `${ticker} price updated to ${price}`, time }
+  }
+  if (e.event === 'stock:new') {
+    const ticker = d.tickerSymbol || '?'
+    return { badge: 'STO-X', badgeClass: 'bg-green-500/10 text-green-400', message: `${ticker} added to market`, time }
+  }
+  if (e.event === 'stock:remove') {
+    const ticker = d.tickerSymbol || '?'
+    return { badge: 'STO-X', badgeClass: 'bg-red-500/10 text-red-400', message: `${ticker} removed from market`, time }
+  }
+  if (e.event === 'stock:split') {
+    const ticker = d.tickerSymbol || '?'
+    return { badge: 'STO-X', badgeClass: 'bg-yellow-500/10 text-yellow-400', message: `${ticker} stock split`, time }
+  }
+  if (e.event === 'tts:price') {
+    const price = typeof d === 'number' ? d : d.price || d.cost || JSON.stringify(d)
+    return { badge: 'TTS', badgeClass: 'bg-purple-500/10 text-purple-400', message: `TTS price changed to ${price} tokens`, time }
+  }
+  if (e.event === 'sfx:price') {
+    const price = typeof d === 'number' ? d : d.price || d.cost || JSON.stringify(d)
+    return { badge: 'SFX', badgeClass: 'bg-indigo-500/10 text-indigo-400', message: `SFX price changed to ${price} tokens`, time }
+  }
+  // Fallback
+  return { badge: e.event.split(':')[0].toUpperCase(), badgeClass: 'bg-tank-highlight text-tank-muted', message: typeof d === 'string' ? d : JSON.stringify(d).substring(0, 100), time }
+}
+
 function getSinceISO(period) {
   if (!period) return null
   const now = new Date()
@@ -506,20 +545,22 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         <Section title="System Events" icon={Zap}>
           {systemEvents.length > 0 ? (
             <div className="space-y-1 max-h-[200px] overflow-y-auto">
-              {systemEvents.map(e => (
-                <div key={e.dbId} className="flex items-center gap-2 text-xs p-1.5 bg-tank-bg rounded">
-                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-tank-highlight text-tank-muted shrink-0">
-                    {e.event}
-                  </span>
-                  <span className="text-tank-text truncate flex-1">
-                    {typeof e.data === 'string' ? e.data : JSON.stringify(e.data).substring(0, 100)}
-                  </span>
-                </div>
-              ))}
+              {systemEvents.map(e => {
+                const fmt = formatSystemEvent(e)
+                return (
+                  <div key={e.dbId} className="flex items-center gap-2 text-xs p-1.5 bg-tank-bg rounded">
+                    <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded shrink-0 ${fmt.badgeClass}`}>
+                      {fmt.badge}
+                    </span>
+                    <span className="text-tank-text flex-1">{fmt.message}</span>
+                    {fmt.time && <span className="text-[10px] text-tank-muted font-mono shrink-0">{fmt.time}</span>}
+                  </div>
+                )
+              })}
             </div>
           ) : (
             <div className="text-xs text-tank-muted font-mono">No system events yet</div>
-          )}
+          )}}
         </Section>
       </div>
     </div>
