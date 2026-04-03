@@ -1,18 +1,6 @@
 import { useState } from 'react'
 import { Fish, ArrowRight, FileText, ChevronDown } from 'lucide-react'
-
-function formatTime(ts) {
-  if (!ts) return ''
-  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
-  if (isNaN(ms)) return ''
-  const d = new Date(ms)
-  const now = new Date()
-  // Compare dates in UTC to avoid timezone mismatch
-  const isToday = d.getUTCFullYear() === now.getUTCFullYear() &&
-    d.getUTCMonth() === now.getUTCMonth() && d.getUTCDate() === now.getUTCDate()
-  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  return isToday ? time : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' + time
-}
+import { formatTime } from '../utils/formatTime'
 
 export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTargetClick }) {
   if (!data || typeof data !== 'object') return null

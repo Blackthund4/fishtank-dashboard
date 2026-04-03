@@ -4,6 +4,7 @@ import { Fish, MessageSquare, Volume2, Clock } from 'lucide-react'
 export default function StatusBar({ isConnected, stats }) {
   const [health, setHealth] = useState(null)
   const [tankTime, setTankTime] = useState('')
+  const [localTime, setLocalTime] = useState('')
 
   useEffect(() => {
     const check = () => {
@@ -18,11 +19,19 @@ export default function StatusBar({ isConnected, stats }) {
   }, [])
 
   useEffect(() => {
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const localShort = new Date().toLocaleTimeString('en-US', {
+      timeZone: localTz, timeZoneName: 'short',
+    }).split(' ').pop()
     const tick = () => {
-      setTankTime(new Date().toLocaleTimeString('en-US', {
+      const now = new Date()
+      setTankTime(now.toLocaleTimeString('en-US', {
         timeZone: 'America/New_York',
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
       }))
+      setLocalTime(now.toLocaleTimeString('en-GB', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      }) + ' ' + localShort)
     }
     tick()
     const interval = setInterval(tick, 1000)
@@ -66,6 +75,7 @@ export default function StatusBar({ isConnected, stats }) {
           <Clock className="w-3.5 h-3.5 text-tank-warn" />
           <span className="text-xs font-mono text-tank-muted hidden sm:inline">Tank Time</span>
           <span className="text-xs font-mono text-tank-bright">{tankTime}</span>
+          <span className="text-xs font-mono text-tank-muted hidden md:inline">| {localTime}</span>
         </div>
         <div className="w-px h-5 bg-tank-border" />
         <StatChip icon={Fish} label="Fishtoys" value={stats.fishtoys} color="text-tank-accent" />

@@ -1,14 +1,6 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import { TrendingUp, Volume2, MessageSquare, Users, Bell, Vote, Zap, Fish } from 'lucide-react'
-
-function formatDateTime(ts) {
-  if (!ts) return ''
-  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
-  if (isNaN(ms)) return ''
-  const d = new Date(ms)
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' +
-    d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
+import { formatDateTime } from '../utils/formatTime'
 
 function formatSystemEvent(e) {
   const d = e.data || {}

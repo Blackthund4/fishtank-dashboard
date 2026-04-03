@@ -1,14 +1,6 @@
 import { useState, useEffect } from 'react'
 import { FileText, Search, X, ArrowRight } from 'lucide-react'
-
-function formatTime(ts) {
-  if (!ts) return ''
-  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
-  if (isNaN(ms)) return ''
-  const d = new Date(ms)
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' +
-    d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
+import { formatDateTime } from '../utils/formatTime'
 
 export default function HiddenContentTab({ itemCatalog }) {
   const [items, setItems] = useState([])
@@ -113,7 +105,7 @@ export default function HiddenContentTab({ itemCatalog }) {
                     </div>
                     <div className="flex items-center gap-2 text-[10px] font-mono text-tank-muted">
                       {d.cost > 0 && <span className="text-tank-warn">{d.cost}t</span>}
-                      <span>{formatTime(d.createdAt || d.updatedAt)}</span>
+                      <span>{formatDateTime(d.createdAt || d.updatedAt)}</span>
                     </div>
                   </div>
                   <div className="bg-tank-bg border border-tank-accent/20 rounded px-3 py-2">

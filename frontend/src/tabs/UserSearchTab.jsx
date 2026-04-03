@@ -1,14 +1,6 @@
 import { useState, useRef } from 'react'
 import { Search, MessageSquare, Volume2, Music, Fish, User } from 'lucide-react'
-
-function formatTime(ts) {
-  if (!ts) return ''
-  const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts)
-  if (isNaN(ms)) return ''
-  const d = new Date(ms)
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' +
-    d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
+import { formatDateTime } from '../utils/formatTime'
 
 export default function UserSearchTab({ itemCatalog, roomMap }) {
   const [query, setQuery] = useState('')
@@ -203,7 +195,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
       items.push({
         id: r.id,
         type: 'chat',
-        time: formatTime(r.timestamp),
+        time: formatDateTime(r.timestamp),
         sortKey: r.timestamp,
         content: r.data?.message || '',
         icon: MessageSquare,
@@ -226,7 +218,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
       items.push({
         id: r.id,
         type: 'tts',
-        time: formatTime(r.timestamp),
+        time: formatDateTime(r.timestamp),
         sortKey: r.timestamp,
         content: r.data?.message || r.data?.text || '',
         icon: Volume2,
@@ -249,7 +241,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
       items.push({
         id: r.id,
         type: 'sfx',
-        time: formatTime(r.timestamp),
+        time: formatDateTime(r.timestamp),
         sortKey: r.timestamp,
         content: r.data?.message || r.data?.text || r.data?.sfxName || 'SFX',
         icon: Music,
@@ -275,7 +267,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
       items.push({
         id: r.id,
         type: 'fishtoy',
-        time: formatTime(r.timestamp),
+        time: formatDateTime(r.timestamp),
         sortKey: r.timestamp,
         content: `${itemName} -> ${r.data?.target || '?'} (${r.data?.cost || 0} tokens)`,
         icon: Fish,
