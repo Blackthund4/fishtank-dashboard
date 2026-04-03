@@ -20,9 +20,9 @@ Browser (React)  <--WebSocket-->  Backend (FastAPI)  <--Socket.IO-->  fishtank.l
 
 On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/contestants`, filtered to current season), room name mappings (`/v1/live-streams`), and stock prices (`/v1/stocks`).
 
-**Frontend** is a React + Tailwind CSS dashboard with four tabs:
+**Frontend** is a mobile-responsive React + Tailwind CSS dashboard with four tabs. The StatusBar shows a live Tank Time clock (America/New_York) and the viewer's local time with timezone abbreviation.
 - **Dashboard**: Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room names, STO-X ticker, target filtering, metadata search, and session stats. Director message banner and live poll bar with animated vote percentages appear at the top when active. All event panels sorted chronologically.
-- **Analytics**: STO-X cards with sort options (highest value, movers up/down), contestant grid sortable by endorsements or STO-X price, peak activity hours (stacked bar chart by event type with busiest/quietest callouts), TTS/SFX analytics with toggle status badges and per-section time filters (All/7d/3d/24h), chat analytics with time filters, poll history, director message timeline, price change log, fishtoy availability with category-level enable/disable status, and system events. All data auto-refreshes every 30 seconds.
+- **Analytics**: STO-X cards with time filters (All/1hr/6hr/1day) and sort options (highest value, movers up/down), contestant grid sortable by endorsements or STO-X price, peak activity hours (stacked bar chart by event type with busiest/quietest callouts), TTS/SFX analytics with toggle status badges and per-section time filters (All/7d/3d/24h), chat analytics with time filters, poll history, director message timeline, price change log, fishtoy availability with category-level enable/disable status, and system events. All data auto-refreshes every 30 seconds.
 - **Hidden Content**: Searchable archive of fishtoy metadata (love letters, custom messages) with target filtering.
 - **User Search**: Search any username with autocomplete suggestions to see their unified activity timeline across chat, TTS, SFX, and fishtoys with type filters. Case-insensitive.
 
@@ -52,7 +52,8 @@ On startup, the backend loads item catalog (`/v1/items`), contestant data (`/v1/
 - **Backfill detection**: On startup, the fishtoy poller loads known event IDs from the database and compares them against the API response. Items that occurred during downtime are backfilled automatically instead of being silently skipped.
 - **Catalog refresh**: Contestants and item catalog are refreshed every 10 minutes to pick up new freeloaders and fishtoys added mid-season without requiring a server restart.
 - **Query separation**: Each event type category (chat, TTS/SFX, system events, fishtoys, polls) is fetched independently to prevent high-volume types from crowding low-volume types out of shared query limits.
-- **Security hardening**: CORS restricted to configured origins (GET/HEAD only), per-IP rate limiting (120 req/60s, returns 429), WebSocket connection cap (50 max), endpoint sanitization (no auth tokens or internal state in public responses), generic exception handler (no stack traces), and automatic SQLite backup every 6 hours using the online backup API.
+- **Thread safety**: All shared backend state (catalogs, rate limit counters, WebSocket clients, dedup window) is protected by dedicated `threading.Lock()` instances. API endpoints return shallow copies under lock. REST pollers use `try/finally` for HTTP session cleanup.
+- **Security hardening**: CORS restricted to configured origins (GET/HEAD only), per-IP rate limiting (120 req/60s, returns 429), WebSocket connection cap (50 max), endpoint sanitization (no auth tokens or internal state in public responses), generic exception handler (no stack traces), non-root Docker container with gosu privilege drop, and automatic SQLite backup every 6 hours using the online backup API.
 - **Peak hours**: Combined hourly activity across TTS, SFX, and fishtoys (excluding chat to maintain readable scale) with stacked bar chart and busiest/quietest hour callouts.
 
 ## Setup
@@ -159,7 +160,7 @@ docker compose up -d --build
 
 Open http://localhost:8000
 
-The database and token cache persist in a Docker volume (`fishtank-data`). Container is limited to 512MB RAM with a healthcheck that auto-restarts on failure. To stop: `docker compose down`. To rebuild after code changes: `docker compose up -d --build`.
+The database and token cache persist in a Docker volume (`fishtank-data`). Container runs as a non-root user (via `gosu`), is limited to 1GB RAM with no swap, and has a healthcheck that auto-restarts on failure. To stop: `docker compose down`. To rebuild after code changes: `docker compose up -d --build`.
 
 ## Testing
 
@@ -240,8 +241,10 @@ fishtank-dashboard/
         src/
             App.jsx           Main layout with tab navigation, polls, notifications
             useWebSocket.js   WebSocket hook with auto-reconnect
+            utils/
+                formatTime.js     Shared timestamp formatting (formatTime, formatDateTime)
             components/
-                StatusBar.jsx     Connection status + live stats
+                StatusBar.jsx     Connection status, Tank Time clock, live stats
                 Panel.jsx         Reusable scrollable panel
                 FishtoyCard.jsx   Collapsible fishtoy event cards
                 ChatMessage.jsx   Chat message display
@@ -267,6 +270,7 @@ fishtank-dashboard/
             test_initial_data.py      Initial-data event analysis
     .gitignore
     .dockerignore
+    entrypoint.sh             Docker entrypoint (chown + gosu privilege drop)
     Dockerfile                Multi-stage build (Node frontend + Python backend)
     docker-compose.yml        Single-command deployment with persistent volume
     TECHNICAL_WRITEUP.md      Reverse engineering process documentation
@@ -282,10 +286,11 @@ Currently hosted on a Vultr Cloud Compute VPS (Ubuntu 24.04 with Docker) for 24/
 
 - UFW firewall (ports 22 and 80, port 80 restricted to Cloudflare IPs only)
 - SSH key-based auth with password login disabled
-- CORS restricted to server origin
+- CORS restricted to `fish-dash.com` origins (GET/HEAD only)
 - Per-IP rate limiting (120 req/60s)
 - WebSocket connection cap (50)
-- Docker memory limit (512MB, no swap)
+- Non-root container user (gosu privilege drop)
+- Docker memory limit (1GB, no swap)
 - Docker healthcheck with auto-restart
 - Automatic SQLite backup every 6 hours (first after 5 min)
 - Docker log rotation (50MB max, 3 files)
@@ -297,4 +302,4 @@ To update after pushing code changes:
 cd /opt/fishtank-dashboard
 git pull
 docker compose up -d --build
-```
+```                  

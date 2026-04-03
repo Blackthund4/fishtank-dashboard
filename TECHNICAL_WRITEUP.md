@@ -111,12 +111,13 @@ The item catalog (`/v1/items`) provides human-readable names for item IDs, so th
 
 **Combined event logger:** Runs both the REST poller and Socket.IO connection in parallel threads. Thread-safe JSONL logging with `threading.Lock()`. Captures fishtoys, chat, TTS, SFX, polls, director messages, stock events, and system events in a single log. ~380 lines.
 
-**Real-time dashboard:** FastAPI backend + React/Tailwind frontend with three tabs:
-- **Dashboard tab:** Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room name resolution, stock market ticker, target filtering with drill-down (click target to see stats, items used, top senders), metadata search. Director message banner and live poll bar with animated vote percentages appear at the top when active.
-- **Analytics tab:** Stock market cards with IPO/avg/bid-ask data, contestant grid with photos and stock prices, TTS/SFX analytics (most active rooms, top spenders, hourly bar charts), chat analytics (top chatters, hourly volume), poll history with results, director message timeline, TTS/SFX price change log, fishtoy availability status board.
+**Real-time dashboard:** FastAPI backend + React/Tailwind frontend with four tabs:
+- **Dashboard tab:** Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room name resolution, STO-X ticker, target filtering with drill-down (click target to see stats, items used, top senders), metadata search. Director message banner and live poll bar with animated vote percentages appear at the top when active.
+- **Analytics tab:** STO-X cards with time filters (All/1hr/6hr/1day) and sort options, contestant grid with photos and stock prices, TTS/SFX analytics (most active rooms, top spenders, hourly bar charts), chat analytics (top chatters, hourly volume), poll history with results, director message timeline, TTS/SFX price change log, fishtoy availability status board.
 - **Hidden Content tab:** Dedicated searchable archive of fishtoy metadata (love letters, custom messages) with target filtering sidebar.
+- **User Search tab:** Cross-event-type username search with autocomplete, unified activity timeline, and type filters.
 
-SQLite persistence with JSON storage and `json_extract` queries. Stock price history polled every 60 seconds. Browser WebSocket bridge for live updates. Single-process deployment (backend serves built frontend as static files). 17 REST API endpoints. 18 captured socket event types.
+SQLite persistence with JSON storage and `json_extract` queries. Stock price history polled every 60 seconds. Browser WebSocket bridge for live updates. Single-process deployment (backend serves built frontend as static files). 22 REST API endpoints. 18 captured socket event types.
 
 **Research/diagnostic scripts:** API endpoint probers, raw WebSocket frame loggers, filtered catchall with auto-reconnect, cookie validation tool. These documented the investigation process and remain useful for discovering new events.
 
@@ -275,22 +276,40 @@ With the show on day 19 of 30, capturing events 24/7 became urgent. The dashboar
 3. Endpoint sanitization: `/api/health` and `/api/status` stripped of auth token expiry timestamps, login counts, event type breakdowns, and socket connection timestamps. Only operational status exposed publicly.
 4. WebSocket limit: max 50 concurrent browser connections, rejects with close code 1013 when exceeded.
 5. Database backup: periodic SQLite backup using the online backup API (`conn.backup()`) every 6 hours, with the first backup 5 minutes after startup. Initial implementation used `shutil.copy2` which risks corruption during active writes; switched to SQLite's built-in backup API for consistent copies.
-6. Docker limits: 512MB memory cap with no swap, healthcheck via `/api/health` every 60 seconds with auto-restart on failure.
+6. Docker limits: 1GB memory cap with no swap, healthcheck via `/api/health` every 60 seconds with auto-restart on failure.
 7. Generic exception handler: suppresses Python stack traces in production, returning "Internal server error" instead of exposing file paths and library versions.
 
 **Query limit crowding.** A recurring bug class surfaced across three features: polls, activity panel, and system events. When multiple event types share a single database query with a row limit, high-volume types consume the entire limit and push low-volume types out of results entirely. Chat messages (278k) crowded TTS/SFX (5.8k) out of the activity panel. Feature toggle events (108) crowded stock events (2) out of system events. Poll votes (4.7k) crowded poll start/stop (8 total) out of the poll query. The fix in every case was the same: fetch each event type category independently with its own limit, then merge on the frontend if needed. This is now a design rule for the project: never mix event types with different volumes in a single limited query.
 
 **Backfill detection.** The fishtoy poller previously skipped everything on its first poll to establish a baseline. This meant any fishtoys that happened during server downtime were silently lost. The fix loads known fishtoy event IDs from the database before the first poll and compares each API item against them. Items not in the database are stored and logged with a `[BACKFILL]` prefix.
 
-**VPS deployment.** Vultr Cloud Compute ($3.50/month, Ubuntu 24.04 with Docker marketplace app). Server hardening: SSH key-based auth with password login disabled, Docker log rotation (50MB max, 3 files), Ubuntu unattended security upgrades. Historical database (291k events) uploaded via SCP. UptimeRobot configured for external monitoring on `/api/health`.
+**VPS deployment.** Vultr Cloud Compute (Ubuntu 24.04 with Docker). Server hardening: SSH key-based auth with password login disabled, Docker log rotation (50MB max, 3 files), Ubuntu unattended security upgrades. Historical database (291k events) uploaded via SCP. UptimeRobot configured for external monitoring on `/api/health`.
 
-**Custom domain and Cloudflare.** Registered `fish-dash.com` through Cloudflare Registrar and configured it as a reverse proxy to the VPS. DNS A records for `@` and `www` point to the VPS IP with Cloudflare's proxy enabled (orange cloud), providing automatic SSL termination, DDoS protection, and CDN caching of static assets. SSL mode set to Flexible (Cloudflare terminates HTTPS, connects to VPS over HTTP on port 80).
+**Custom domain and Cloudflare.** Registered `fish-dash.com` through Cloudflare Registrar and configured it as a reverse proxy to the VPS. DNS A records point to the VPS IP with Cloudflare's proxy enabled, providing automatic SSL termination, DDoS protection, and CDN caching. SSL mode set to Flexible (Cloudflare terminates HTTPS, connects to VPS over HTTP on port 80). A cache bypass rule prevents Cloudflare from caching `/api/*` and `/ws` paths. Bot Fight Mode had to be disabled for UptimeRobot compatibility, and Email Address Obfuscation had to be disabled because it corrupts API JSON responses containing email-like strings.
 
-Cloudflare security settings: HSTS enabled with 6-month max-age, Always Use HTTPS enforced, minimum TLS 1.2, Browser Integrity Check on, Security Level medium, Bot Fight Mode off (required for UptimeRobot compatibility), Email Address Obfuscation off (can corrupt API JSON responses), Hotlink Protection on. A cache bypass rule prevents Cloudflare from caching `/api/*` and `/ws` paths. A redirect rule sends `www.fish-dash.com` to the apex domain with a 301.
-
-The UFW firewall was tightened to accept port 80 connections only from Cloudflare's published IP ranges, preventing anyone from bypassing Cloudflare by hitting the VPS IP directly. Port 8000 was closed entirely. The only public entry points are port 22 (SSH, key-only) and port 80 (Cloudflare-only).
+The UFW firewall accepts port 80 connections only from Cloudflare's published IP ranges, preventing anyone from bypassing Cloudflare by hitting the VPS IP directly. The only public entry points are port 22 (SSH, key-only) and port 80 (Cloudflare-only).
 
 An unexpected issue surfaced with UptimeRobot: it sends HEAD requests by default, but FastAPI's `@app.get()` decorator only handles GET. HEAD requests returned 405 Method Not Allowed. The fix required two changes: adding HEAD to the CORS allowed methods, and changing the health endpoint's decorator from `@app.get()` to `@app.api_route("/api/health", methods=["GET", "HEAD"])`. Cloudflare's Bot Fight Mode also blocked UptimeRobot's automated requests until it was disabled.
+
+### Phase 21: Hardening and Polish
+
+Several rounds of improvements to make the codebase more robust and the frontend usable across devices.
+
+**Thread safety.** The backend runs 5 daemon threads that read and write shared state (item catalog, contestant list, room map, stock data, feature toggles, rate limit counters, WebSocket client set, dedup window). Each shared resource got a dedicated `threading.Lock()`. API endpoints return shallow copies under lock to prevent mutation during iteration. All three REST pollers were wrapped in `try/finally` with `session.close()` to prevent leaked HTTP connections on exceptions.
+
+**Mobile responsive layout.** The dashboard was originally designed for desktop widths. A pass across all components converted fixed-width layouts to responsive patterns using Tailwind breakpoints: `flex-col md:flex-row` on the main layout, `w-full md:w-[420px] md:shrink-0` for side panels, `hidden sm:inline` on tab labels (icon-only on small screens), `flex-wrap` on the notification banner and poll bar, and responsive grids (`grid-cols-2 sm:grid-cols-3 lg:grid-cols-5`) on stock and contestant cards.
+
+**Tank Time clock and local timezone.** The StatusBar now shows a live clock in the show's timezone (America/New_York, 12-hour format) updated every second. A secondary display shows the viewer's local time with timezone abbreviation (e.g. "14:32:05 BST"), hidden below the `md` breakpoint to save space on smaller screens.
+
+**STO-X time filters.** The Analytics tab's STO-X section gained time filter buttons (All/1hr/6hr/1day). Selecting a period computes reference prices from the filtered stock history, so the change percentages and movers sort reflect the chosen window rather than all-time data.
+
+**Docker security.** The container previously ran as root. A non-root `dashboard` user was added via `groupadd`/`useradd`, with an `entrypoint.sh` script that uses `gosu` to chown the data volume as root, then drops to the unprivileged user before starting the server. Memory limit was raised from 512MB to 1GB based on observed usage, with swap disabled (`memswap_limit` equal to `mem_limit`).
+
+**Dependency pinning.** Backend `requirements.txt` added upper bound constraints (e.g. `fishclient>=0.1.4,<1.0.0`) to prevent breaking changes from major version bumps. Frontend `package.json` switched from caret ranges (`^18.3.1`) to tilde ranges (`~18.3.1`) to allow patches but not minor version changes.
+
+**CORS default.** The `ALLOWED_ORIGINS` environment variable now defaults to `https://fish-dash.com,https://www.fish-dash.com` instead of a wildcard, so a fresh deployment is locked down without manual configuration.
+
+**Shared utilities.** Timestamp formatting logic (`formatTime` and `formatDateTime`) was duplicated across six frontend components. Extracted to a shared `utils/formatTime.js` module. The functions handle Unix timestamps (seconds or milliseconds), ISO strings, and smart date display (time-only for today, date+time for older events).
 
 ### Key Takeaways
 
