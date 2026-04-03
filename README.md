@@ -96,8 +96,9 @@ FISHTANK_PASSWORD=your_password
 The dashboard logs in automatically on startup, caches tokens to disk, and re-authenticates if they expire. No manual cookie copying.
 
 **Option 2: Manual cookie (legacy)**
+Copy from the Network tab, not Application/Cookies tab.
 
-If you prefer not to store credentials, set the cookie manually:
+If you prefer not to store credentials, set the cookie manually :
 
 1. Log into fishtank.live in your browser
 2. Open DevTools (F12) > **Network** tab
@@ -110,8 +111,6 @@ Then set it as an environment variable:
 export FISHTANK_COOKIE='your_cookie_value'    # Linux/Mac
 $env:FISHTANK_COOKIE = 'your_cookie_value'    # PowerShell
 ```
-
-**Important**: Copy from the Network tab, not Application/Cookies tab.
 
 ## Running
 
