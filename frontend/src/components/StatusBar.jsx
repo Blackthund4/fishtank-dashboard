@@ -55,6 +55,7 @@ export default function StatusBar({ isConnected, stats }) {
         {stats.total_spend > 0 && (
           <div className="text-xs font-mono text-tank-warn">
             {stats.total_spend.toLocaleString()} tokens spent
+            <span className="text-green-400 ml-2">({(stats.total_spend * 0.10).toLocaleString('en-US', {style:'currency',currency:'USD'})})</span>
           </div>
         )}
       </div>
