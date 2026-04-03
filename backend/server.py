@@ -196,6 +196,8 @@ def _patched_handle_message(self, message):
                 pass
     elif isinstance(message, bytes):
         try:
+            if b'presence' in message:
+                print(f"[DEBUG] presence frame: {message[:200]}", flush=True)
             self.handle_packed(message)
         except Exception:
             pass
