@@ -12,7 +12,7 @@ function formatDateTime(ts) {
 
 function formatSystemEvent(e) {
   const d = e.data || {}
-  const time = formatDateTime(d.updatedAt || d.createdAt || d.timestamp)
+    const time = formatDateTime(e.timestamp || d.updatedAt || d.createdAt)
 
   if (e.event === 'feature-toggles:update') {
     const name = (d.feature || '').toUpperCase() || 'Unknown'

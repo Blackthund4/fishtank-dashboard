@@ -144,7 +144,7 @@ export default function App() {
       fetch('/api/events?type=feature-toggles:update&limit=50').then(r => r.json()).catch(() => []),
     ]).then(([prices, stocks, toggles]) => {
       const all = [...prices, ...stocks, ...toggles]
-        .map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))
+        .map(e => ({ event: e.event_type, data: e.data, dbId: e.id, timestamp: e.timestamp_local }))
         .sort((a, b) => (b.dbId || 0) - (a.dbId || 0))
       setSystemEvents(all)
     })
