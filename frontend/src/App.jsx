@@ -373,14 +373,14 @@ export default function App() {
             }`}
           >
             <tab.icon className="w-3.5 h-3.5" />
-            {tab.label}
+            <span className="hidden sm:inline">{tab.label}</span>
           </button>
         ))}
       </div>
 
       {/* Notification banner (director messages) */}
       {notifications.length > 0 && (
-        <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-3 py-1.5 flex items-center gap-2 shrink-0">
+        <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-3 py-1.5 flex flex-wrap items-center gap-2 shrink-0">
           <Bell className="w-4 h-4 text-yellow-400 shrink-0" />
           <span className="text-xs font-semibold text-yellow-400 uppercase shrink-0">Director</span>
           <span className="text-sm text-tank-bright flex-1">{notifications[0].message}</span>
@@ -404,7 +404,7 @@ export default function App() {
       {/* Live poll bar */}
       {activePoll && !activePoll.ended && (
         <div className="bg-purple-500/10 border-b border-purple-500/30 px-3 py-1.5 shrink-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
             <Vote className="w-4 h-4 text-purple-400 shrink-0" />
             <span className="text-xs font-semibold text-purple-400 uppercase shrink-0">Live Poll</span>
             <span className="text-sm text-tank-bright">{activePoll.question || 'Poll'}</span>
@@ -446,9 +446,9 @@ export default function App() {
       )}
 
       {activeTab === 'dashboard' && (
-      <main className="flex-1 flex gap-2 p-2 min-h-0">
+      <main className="flex-1 flex flex-col md:flex-row gap-2 p-2 min-h-0">
         {/* LEFT: Fishtoys panel */}
-        <div className="w-[420px] shrink-0 flex flex-col bg-tank-surface border border-tank-border rounded-lg overflow-hidden">
+        <div className="w-full md:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border rounded-lg overflow-hidden">
           {/* Filter bar */}
           <div className="border-b border-tank-border p-2 space-y-1.5 shrink-0">
             <div className="flex items-center justify-between">
@@ -538,7 +538,7 @@ export default function App() {
         <div className="flex-1 flex flex-col gap-2 min-w-0">
 
           {/* Top row: Targets + Stats side by side */}
-          <div className="flex gap-2 shrink-0">
+          <div className="flex flex-col md:flex-row gap-2 shrink-0">
             {/* Targets + Target detail */}
             <div className="flex-1 flex flex-col gap-2 min-w-0">
               {/* Target pills */}
@@ -582,7 +582,7 @@ export default function App() {
                       </button>
                       <span className="text-sm font-bold text-tank-accent">{filterTarget}</span>
                     </div>
-                    <div className="flex items-center gap-3 text-[10px] font-mono">
+                    <div className="flex flex-wrap items-center gap-1 sm:gap-3 text-[10px] font-mono">
                       <span className="text-tank-accent">{targetStats.total} fishtoys</span>
                       <span className="text-tank-warn">{targetStats.totalSpend.toLocaleString()} tokens ({tokensToUSD(targetStats.totalSpend)})</span>
                       {targetStats.withMeta > 0 && (
@@ -590,7 +590,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-4">
+                  <div className="flex flex-col md:flex-row gap-4">
                     {/* Items used */}
                     {targetStats.topItems.length > 0 && (
                       <div className="flex-1 min-w-0">
@@ -621,7 +621,7 @@ export default function App() {
                     )}
                     {/* Top senders to this target */}
                     {targetStats.topSenders.length > 0 && (
-                      <div className="w-[180px] shrink-0">
+                      <div className="w-full md:w-[180px] md:shrink-0">
                         <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1">Top senders</h4>
                         <div className="space-y-0.5">
                           {targetStats.topSenders.slice(0, 5).map((s, i) => (
@@ -642,7 +642,7 @@ export default function App() {
             </div>
 
             {/* Session stats (always visible, right side) */}
-            <div className="w-[200px] shrink-0 bg-tank-surface border border-tank-border rounded-lg p-2.5">
+            <div className="w-full md:w-[200px] md:shrink-0 bg-tank-surface border border-tank-border rounded-lg p-2.5">
               <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">
                 Last 24 Hours
               </h3>
@@ -712,7 +712,7 @@ export default function App() {
           )}
 
           {/* Bottom: Chat + Activity side by side */}
-          <div className="flex-1 flex gap-2 min-h-0">
+          <div className="flex-1 flex flex-col md:flex-row gap-2 min-h-0">
             <Panel title="Chat (Season Pass)" icon={MessageSquare} count={stats.chats} className="flex-1">
               {sortedChats.length === 0 ? (
                 <EmptyState text="Waiting for chat messages..." />
@@ -723,7 +723,7 @@ export default function App() {
               )}
             </Panel>
 
-            <Panel title="Activity" icon={Radio} count={stats.tts + stats.sfx} className="w-[340px] shrink-0">
+            <Panel title="Activity" icon={Radio} count={stats.tts + stats.sfx} className="w-full md:w-[340px] md:shrink-0">
               {sortedActivity.length === 0 ? (
                 <EmptyState text="Waiting for TTS / SFX / events..." />
               ) : (

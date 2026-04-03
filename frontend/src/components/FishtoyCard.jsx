@@ -37,7 +37,7 @@ export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTarge
       {/* Compact header - always visible, clickable */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between gap-2 p-2.5 text-left"
+        className="w-full flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-2 p-2.5 text-left"
       >
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 ${
@@ -46,7 +46,7 @@ export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTarge
             <Fish className={`w-3.5 h-3.5 ${isBigtoy ? 'text-purple-400' : 'text-tank-accent'}`} />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1">
               <span className="text-xs font-semibold text-tank-bright truncate">{data.displayName || '?'}</span>
               <ArrowRight className="w-3 h-3 text-tank-muted shrink-0" />
               <span
@@ -64,7 +64,7 @@ export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTarge
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {data.cost > 0 && (
             <span className="text-[10px] font-mono text-tank-warn">{data.cost}t</span>
           )}
@@ -80,7 +80,7 @@ export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTarge
       {/* Expanded detail */}
       {expanded && (
         <div className="px-2.5 pb-2.5 space-y-2 border-t border-tank-border/30 pt-2">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-2 sm:gap-x-4 gap-y-1 text-[11px]">
             <Detail label="Sender" value={data.displayName} />
             <Detail label="Target" value={data.target} />
             <Detail label="Item" value={itemName} />

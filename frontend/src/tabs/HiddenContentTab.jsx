@@ -46,7 +46,7 @@ export default function HiddenContentTab({ itemCatalog }) {
   const targetList = Object.entries(targets).sort((a, b) => b[1] - a[1])
 
   return (
-    <div className="flex-1 flex gap-3 p-3 min-h-0">
+    <div className="flex-1 flex flex-col md:flex-row gap-3 p-3 min-h-0">
       {/* Main content list */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center gap-3 mb-3 shrink-0">
@@ -129,7 +129,7 @@ export default function HiddenContentTab({ itemCatalog }) {
       </div>
 
       {/* Sidebar: targets with hidden content */}
-      <div className="w-[180px] shrink-0 flex flex-col gap-2">
+      <div className="w-full md:w-[180px] md:shrink-0 flex flex-col gap-2">
         <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
           <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">By Target</h3>
           <div className="space-y-1">

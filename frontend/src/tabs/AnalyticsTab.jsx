@@ -261,7 +261,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
           </div>
         </div>
       }>
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           {sortedStocks.map(s => {
             const change = s.currentPrice - s.ipoPrice
             const changePct = s.ipoPrice > 0 ? ((change / s.ipoPrice) * 100).toFixed(0) : 0
@@ -318,7 +318,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
           ))}
         </div>
       }>
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           {sortedContestants.map(c => {
             const stock = c.tickerSymbol ? stocks.find(s => s.tickerSymbol === c.tickerSymbol) : null
             return (
@@ -383,7 +383,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         </Section>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* TTS/SFX Analytics */}
         <Section title="TTS / SFX Analytics" icon={Volume2} extra={
           <div className="flex items-center gap-2">
@@ -490,7 +490,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
             Fishtoys are currently disabled. Items below may show as ON but cannot be used until Production re-enable the toys.
           </div>
         )}
-        <div className="grid grid-cols-6 gap-1.5">
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
           {[...fishtoyStatus].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(f => (
             <div key={f.id} className={`px-2 py-1.5 rounded border text-xs ${
               f.enabled
@@ -515,7 +515,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         </div>
       </Section>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* Director Messages */}
         <div ref={directorRef} className={directorHighlight ? 'animate-highlight-pulse rounded-lg' : ''}>
           <Section title="Director Messages" icon={Bell}>
@@ -582,7 +582,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         </Section>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* Price Changes */}
         <Section title="Price Changes" icon={Zap}>
           {priceChanges.length > 0 ? (

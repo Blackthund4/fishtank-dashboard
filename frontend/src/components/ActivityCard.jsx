@@ -41,7 +41,7 @@ export default function ActivityCard({ data, eventType, roomMap = {} }) {
         <Icon className={`w-3.5 h-3.5 ${config.color}`} />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-2">
           <span className={`text-[10px] font-mono px-1 rounded ${config.bg} ${config.color}`}>
             {config.label}
           </span>
@@ -56,7 +56,7 @@ export default function ActivityCard({ data, eventType, roomMap = {} }) {
         {message && (
           <p className="text-xs text-tank-text mt-0.5 break-words leading-relaxed">{message}</p>
         )}
-        <div className="flex items-center gap-2 mt-0.5">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-2 mt-0.5">
           {data.target && (
             <span className="text-[10px] text-tank-muted">
               Target: <span className="text-tank-warn">{data.target}</span>
