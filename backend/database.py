@@ -220,19 +220,23 @@ def store_stock_snapshot(stocks):
     conn.commit()
 
 
-def get_stock_history(ticker=None, limit=500):
-    """Get stock price history, optionally filtered by ticker."""
+def get_stock_history(ticker=None, limit=500, since=None):
+    """Get stock price history, optionally filtered by ticker and/or time."""
     conn = _get_conn()
+    conditions = []
+    params = []
     if ticker:
-        rows = conn.execute(
-            "SELECT * FROM stock_history WHERE ticker = ? ORDER BY id DESC LIMIT ?",
-            (ticker, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM stock_history ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        conditions.append("ticker = ?")
+        params.append(ticker)
+    if since:
+        conditions.append("timestamp >= ?")
+        params.append(since)
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+    rows = conn.execute(
+        f"SELECT * FROM stock_history{where} ORDER BY id DESC LIMIT ?",
+        params,
+    ).fetchall()
     return [dict(row) for row in rows]
 
 

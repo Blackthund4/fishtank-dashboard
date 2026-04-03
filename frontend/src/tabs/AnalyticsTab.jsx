@@ -55,9 +55,9 @@ function formatSystemEvent(e) {
 function getSinceISO(period) {
   if (!period) return null
   const now = new Date()
-  const hours = period === '24h' ? 24 : period === '3d' ? 72 : period === '7d' ? 168 : 0
-  if (!hours) return null
-  return new Date(now.getTime() - hours * 3600000).toISOString()
+  const minutes = period === '1m' ? 1 : period === '1h' ? 60 : period === '6h' ? 360 : period === '24h' ? 1440 : period === '1d' ? 1440 : period === '3d' ? 4320 : period === '7d' ? 10080 : 0
+  if (!minutes) return null
+  return new Date(now.getTime() - minutes * 60000).toISOString()
 }
 
 const TIME_OPTIONS = [
@@ -65,6 +65,13 @@ const TIME_OPTIONS = [
   { id: '7d', label: '7d' },
   { id: '3d', label: '3d' },
   { id: '24h', label: '24h' },
+]
+
+const STOCK_TIME_OPTIONS = [
+  { id: null, label: 'All' },
+  { id: '1h', label: '1hr' },
+  { id: '6h', label: '6hr' },
+  { id: '1d', label: '1day' },
 ]
 
 const STOCK_SORTS = [
@@ -107,6 +114,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
   // Per-section time filters
   const [ttsPeriod, setTtsPeriod] = useState(null)
   const [chatPeriod, setChatPeriod] = useState(null)
+  const [stockPeriod, setStockPeriod] = useState(null)
 
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
@@ -126,7 +134,6 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
     function fetchStatic() {
       if (document.hidden) return  // Skip if tab not visible
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
-      fetch('/api/stocks/history?limit=2000').then(r => r.json()).then(setStockHistory).catch(() => {})
       fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
       fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
@@ -137,6 +144,20 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
     const interval = setInterval(fetchStatic, 120000)
     return () => clearInterval(interval)
   }, [])
+
+  // Stock history with its own time filter
+  useEffect(() => {
+    function fetchStockHistory() {
+      if (document.hidden) return
+      const since = getSinceISO(stockPeriod)
+      const params = new URLSearchParams({ limit: '2000' })
+      if (since) params.set('since', since)
+      fetch(`/api/stocks/history?${params}`).then(r => r.json()).then(setStockHistory).catch(() => {})
+    }
+    fetchStockHistory()
+    const interval = setInterval(fetchStockHistory, 120000)
+    return () => clearInterval(interval)
+  }, [stockPeriod])
 
   // TTS/SFX analytics with its own time filter
   useEffect(() => {
@@ -164,9 +185,31 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
     return () => clearInterval(interval)
   }, [chatPeriod])
 
+  // Build per-ticker reference prices from filtered stock history
+  const stockRefPrices = (() => {
+    if (!stockPeriod || stockHistory.length === 0) return null
+    const ref = {}
+    // stockHistory is ordered DESC, so the last entry per ticker is the earliest in the window
+    for (const snap of stockHistory) {
+      ref[snap.ticker] = snap.price
+    }
+    return ref
+  })()
+
+  const getStockChange = (s) => {
+    if (stockRefPrices && stockRefPrices[s.tickerSymbol] != null) {
+      return s.currentPrice - stockRefPrices[s.tickerSymbol]
+    }
+    return s.currentPrice - s.today
+  }
+
+  const stockChangeLabel = stockPeriod
+    ? STOCK_TIME_OPTIONS.find(f => f.id === stockPeriod)?.label || stockPeriod
+    : 'today'
+
   const sortedStocks = [...stocks].sort((a, b) => {
-    if (stockSort === 'up') return (b.currentPrice - b.today) - (a.currentPrice - a.today)
-    if (stockSort === 'down') return (a.currentPrice - a.today) - (b.currentPrice - b.today)
+    if (stockSort === 'up') return getStockChange(b) - getStockChange(a)
+    if (stockSort === 'down') return getStockChange(a) - getStockChange(b)
     return b.currentPrice - a.currentPrice
   })
 
@@ -187,27 +230,44 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
       {/* STO-X */}
       <Section title="STO-X" icon={TrendingUp} extra={
-        <div className="flex gap-1">
-          {STOCK_SORTS.map(s => (
-            <button
-              key={s.id}
-              onClick={() => setStockSort(s.id)}
-              className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
-                stockSort === s.id ? 'bg-tank-accent/15 text-tank-accent' : 'text-tank-muted hover:text-tank-text'
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1">
+            {STOCK_TIME_OPTIONS.map(f => (
+              <button
+                key={f.id || 'all'}
+                onClick={() => setStockPeriod(f.id)}
+                className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                  stockPeriod === f.id
+                    ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                    : 'text-tank-muted hover:text-tank-text'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1">
+            {STOCK_SORTS.map(s => (
+              <button
+                key={s.id}
+                onClick={() => setStockSort(s.id)}
+                className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                  stockSort === s.id ? 'bg-tank-accent/15 text-tank-accent' : 'text-tank-muted hover:text-tank-text'
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
         </div>
       }>
         <div className="grid grid-cols-5 gap-2">
           {sortedStocks.map(s => {
             const change = s.currentPrice - s.ipoPrice
             const changePct = s.ipoPrice > 0 ? ((change / s.ipoPrice) * 100).toFixed(0) : 0
-            const dayChange = s.currentPrice - s.today
-            const isUp = dayChange > 0
-            const isDown = dayChange < 0
+            const periodChange = getStockChange(s)
+            const isUp = periodChange > 0
+            const isDown = periodChange < 0
             return (
               <div key={s.tickerSymbol} className="bg-tank-bg border border-tank-border rounded-lg p-3">
                 <div className="flex items-center justify-between mb-2">
@@ -215,7 +275,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                   <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                     isUp ? 'bg-green-500/10 text-green-400' : isDown ? 'bg-red-500/10 text-red-400' : 'bg-tank-highlight text-tank-muted'
                   }`}>
-                    {isUp ? '+' : ''}{dayChange} today
+                    {isUp ? '+' : ''}{periodChange} {stockChangeLabel}
                   </span>
                 </div>
                 <div className="text-2xl font-mono font-bold text-tank-bright mb-1">{s.currentPrice}</div>
@@ -637,7 +697,6 @@ function StackedHourlyBar({ data }) {
             >
               <div className="w-full flex flex-col-reverse" style={{ height: '64px' }}>
                 <div className="w-full bg-purple-400/70 rounded-t-sm" style={{ height: `${ttsPct}%` }} />
-                <div className="w-full bg-purple-400/70" style={{ height: `${ttsPct}%` }} />
                 <div className="w-full bg-indigo-400/70" style={{ height: `${sfxPct}%` }} />
                 <div className="w-full bg-emerald-400/70" style={{ height: `${fishPct}%` }} />
               </div>

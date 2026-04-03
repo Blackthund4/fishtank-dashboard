@@ -935,9 +935,10 @@ def api_feature_toggles():
 def api_stock_history(
     ticker: str = Query(None, description="Filter by ticker symbol"),
     limit: int = Query(500, le=5000),
+    since: str = Query(None, description="ISO timestamp to filter history from"),
 ):
     """Return stock price history."""
-    return database.get_stock_history(ticker=ticker, limit=limit)
+    return database.get_stock_history(ticker=ticker, limit=limit, since=since)
 
 
 @app.get("/api/analytics/tts-sfx")
