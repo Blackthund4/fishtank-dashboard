@@ -29,3 +29,6 @@ Thumbs.db
 
 # MD
 CLAUDE.md
+
+#ClaudeCLI
+.claude/
