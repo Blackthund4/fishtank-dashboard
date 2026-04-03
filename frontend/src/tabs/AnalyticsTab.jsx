@@ -130,8 +130,8 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
   const sortedContestants = [...contestants].sort((a, b) => {
     if (contestantSort === 'stox') {
-      const aStock = stocks.find(s => s.tickerSymbol === a.name?.toUpperCase() || s.tickerSymbol === a.name?.substring(0, 4).toUpperCase())
-      const bStock = stocks.find(s => s.tickerSymbol === b.name?.toUpperCase() || s.tickerSymbol === b.name?.substring(0, 4).toUpperCase())
+      const aStock = a.tickerSymbol ? stocks.find(s => s.tickerSymbol === a.tickerSymbol) : null
+      const bStock = b.tickerSymbol ? stocks.find(s => s.tickerSymbol === b.tickerSymbol) : null
       return (bStock?.currentPrice || 0) - (aStock?.currentPrice || 0)
     }
     return (b.endorsements || 0) - (a.endorsements || 0)
@@ -218,8 +218,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       }>
         <div className="grid grid-cols-5 gap-2">
           {sortedContestants.map(c => {
-            const stock = stocks.find(s => s.tickerSymbol === c.name?.toUpperCase() ||
-              s.tickerSymbol === c.name?.substring(0, 4).toUpperCase())
+            const stock = c.tickerSymbol ? stocks.find(s => s.tickerSymbol === c.tickerSymbol) : null
             return (
               <div key={c.id} className={`bg-tank-bg border rounded-lg p-2.5 ${
                 c.eliminatedAt ? 'border-red-500/30 opacity-60' : 'border-tank-border'
@@ -235,6 +234,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                     {c.job && <div className="text-[9px] text-tank-muted">{c.job}</div>}
                     <div className="text-[9px] text-tank-muted">Joined {formatDateTime(c.createdAt)}</div>
                 </div>
+              </div>
                 {stock && (
                   <div className="text-[10px] font-mono text-tank-muted">
                     Stock: <span className="text-tank-bright">{stock.currentPrice}</span>
@@ -247,7 +247,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                   <div className="text-[10px] text-tank-muted">{c.endorsements} endorsements</div>
                 )}
               </div>
-            )
+              )
           })}
         </div>
       </Section>
