@@ -321,8 +321,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                         <span className="text-tank-bright">{s.name}</span>
                         <div className="flex gap-2">
                           <span className="font-mono text-tank-muted">{s.count}x</span>
-                          <span className="font-mono text-tank-warn">{s.spend.toLocaleString()}t</span>
-                        </div>
+<span className="font-mono text-tank-warn">{s.spend.toLocaleString()}t <span className="text-green-400">({(s.spend * 0.10).toLocaleString('en-US', {style:'currency',currency:'USD'})})</span></span>                        </div>
                       </div>
                     ))}
                   </div>

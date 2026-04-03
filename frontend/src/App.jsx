@@ -55,12 +55,21 @@ function normalizeStats(raw) {
   }
 }
 
+// $10 = 100 tokens -> 1 token = $0.10
+function tokensToUSD(tokens) {
+  return (tokens * 0.10).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+}
+
 export default function App() {
   const { isConnected, addListener } = useWebSocket()
   const [fishtoys, setFishtoys] = useState([])
   const [chats, setChats] = useState([])
   const [activity, setActivity] = useState([])
   const [stats, setStats] = useState({
+    fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0,
+    top_targets: [], top_senders: [], total_events: 0,
+  })
+  const [sessionStats, setSessionStats] = useState({
     fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0,
     top_targets: [], top_senders: [], total_events: 0,
   })
@@ -92,6 +101,8 @@ export default function App() {
     fetch('/api/rooms').then(r => r.json()).then(setRoomMap).catch(() => {})
     fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
     fetch('/api/stats').then(r => r.json()).then(raw => setStats(normalizeStats(raw))).catch(() => {})
+    const since24h = new Date(Date.now() - 24 * 3600000).toISOString()
+    fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(r => r.json()).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
     fetch('/api/feature-toggles').then(r => r.json()).then(setFeatureToggles).catch(() => {})
     fetch('/api/notifications').then(r => r.json()).then(data => {
       setNotifications(data.map(n => ({
@@ -223,6 +234,8 @@ export default function App() {
   useEffect(() => {
     const interval = setInterval(() => {
       fetch('/api/stats').then(r => r.json()).then(raw => setStats(normalizeStats(raw))).catch(() => {})
+      const since24h = new Date(Date.now() - 24 * 3600000).toISOString()
+      fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(r => r.json()).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/feature-toggles').then(r => r.json()).then(setFeatureToggles).catch(() => {})
     }, 30000)
@@ -548,7 +561,7 @@ export default function App() {
                               : 'border-tank-border hover:border-tank-muted text-tank-text'
                           }`}
                           style={contestant?.color && !isActive ? { borderColor: contestant.color + '40' } : undefined}
-                          title={`${count} fishtoys, ${spend.toLocaleString()} tokens`}
+                          title={`${count} fishtoys, ${spend.toLocaleString()} tokens (${tokensToUSD(spend)})`}
                         >
                           {target}
                           <span className="text-[9px] text-tank-muted ml-1">{count}</span>
@@ -571,7 +584,7 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-3 text-[10px] font-mono">
                       <span className="text-tank-accent">{targetStats.total} fishtoys</span>
-                      <span className="text-tank-warn">{targetStats.totalSpend.toLocaleString()} tokens</span>
+                      <span className="text-tank-warn">{targetStats.totalSpend.toLocaleString()} tokens ({tokensToUSD(targetStats.totalSpend)})</span>
                       {targetStats.withMeta > 0 && (
                         <span className="text-tank-accent">{targetStats.withMeta} with content</span>
                       )}
@@ -598,7 +611,7 @@ export default function App() {
                                 <span className="truncate">{item.name}</span>
                                 <div className="flex items-center gap-2 shrink-0 ml-2">
                                   <span className="font-mono text-tank-muted">{item.count}</span>
-                                  <span className="font-mono text-tank-warn text-[10px]">{item.spend.toLocaleString()}t</span>
+                                  <span className="font-mono text-tank-warn text-[10px]">{item.spend.toLocaleString()}t ({tokensToUSD(item.spend)})</span>
                                 </div>
                               </button>
                             )
@@ -631,22 +644,23 @@ export default function App() {
             {/* Session stats (always visible, right side) */}
             <div className="w-[200px] shrink-0 bg-tank-surface border border-tank-border rounded-lg p-2.5">
               <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">
-                Session Stats
+                Last 24 Hours
               </h3>
               <div className="space-y-1.5">
-                <StatRow label="Fishtoys" value={stats.fishtoys} color="text-tank-accent" />
-                <StatRow label="Chat" value={stats.chats} color="text-blue-400" />
-                <StatRow label="TTS" value={stats.tts} color="text-purple-400" />
-                <StatRow label="SFX" value={stats.sfx} color="text-indigo-400" />
+                <StatRow label="Fishtoys" value={sessionStats.fishtoys} color="text-tank-accent" />
+                <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
+                <StatRow label="TTS" value={sessionStats.tts} color="text-purple-400" />
+                <StatRow label="SFX" value={sessionStats.sfx} color="text-indigo-400" />
                 <div className="w-full h-px bg-tank-border my-0.5" />
-                <StatRow label="Tokens" value={stats.total_spend.toLocaleString()} color="text-tank-warn" />
+                <StatRow label="Tokens" value={sessionStats.total_spend.toLocaleString()} color="text-tank-warn" />
+                <StatRow label="Est. Revenue" value={tokensToUSD(sessionStats.total_spend)} color="text-green-400" />
               </div>
               {/* Top senders (global, only when no target selected) */}
-              {!filterTarget && stats.top_senders && stats.top_senders.length > 0 && (
+              {!filterTarget && sessionStats.top_senders && sessionStats.top_senders.length > 0 && (
                 <div className="border-t border-tank-border/50 pt-2 mt-2">
                   <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Senders</h4>
                   <div className="space-y-1">
-                    {stats.top_senders.slice(0, 5).map((s, i) => (
+                    {sessionStats.top_senders.slice(0, 5).map((s, i) => (
                       <div key={s.name} className="flex items-center justify-between text-[11px]">
                         <div className="flex items-center gap-1">
                           <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
@@ -699,7 +713,7 @@ export default function App() {
 
           {/* Bottom: Chat + Activity side by side */}
           <div className="flex-1 flex gap-2 min-h-0">
-            <Panel title="Chat" icon={MessageSquare} count={stats.chats} className="flex-1">
+            <Panel title="Chat (Season Pass)" icon={MessageSquare} count={stats.chats} className="flex-1">
               {sortedChats.length === 0 ? (
                 <EmptyState text="Waiting for chat messages..." />
               ) : (
