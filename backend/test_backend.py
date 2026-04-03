@@ -451,3 +451,353 @@ def test_rate_limit_prune_keeps_active():
     _check_rate_limit("10.0.0.5")
     _prune_rate_limits()
     assert "10.0.0.5" in _rate_limits
+
+
+# ============================================================
+# DATABASE: store_stock_snapshot / get_stock_history / count
+# ============================================================
+
+
+def _make_stock(ticker, price, today=100, last_hour=100, last_week=100, avg=100):
+    return {"tickerSymbol": ticker, "currentPrice": price, "today": today,
+            "lastHour": last_hour, "lastWeek": last_week, "averagePrice": avg}
+
+
+def test_store_stock_snapshot():
+    database.store_stock_snapshot([_make_stock("AAA", 200), _make_stock("BBB", 300)])
+    history = database.get_stock_history()
+    assert len(history) == 2
+    tickers = {h["ticker"] for h in history}
+    assert tickers == {"AAA", "BBB"}
+
+
+def test_store_stock_snapshot_empty():
+    database.store_stock_snapshot([])
+    assert database.get_stock_snapshot_count() == 0
+
+
+def test_get_stock_history_no_filter():
+    database.store_stock_snapshot([_make_stock("AAA", 100)])
+    database.store_stock_snapshot([_make_stock("AAA", 110)])
+    history = database.get_stock_history()
+    assert len(history) == 2
+
+
+def test_get_stock_history_filter_by_ticker():
+    database.store_stock_snapshot([_make_stock("AAA", 100), _make_stock("BBB", 200)])
+    history = database.get_stock_history(ticker="AAA")
+    assert len(history) == 1
+    assert history[0]["ticker"] == "AAA"
+
+
+def test_get_stock_history_filter_by_since():
+    database.store_stock_snapshot([_make_stock("AAA", 100)])
+    # Future timestamp should exclude everything
+    history = database.get_stock_history(since="2099-01-01T00:00:00Z")
+    assert len(history) == 0
+    # Past timestamp should include everything
+    history = database.get_stock_history(since="2000-01-01T00:00:00Z")
+    assert len(history) == 1
+
+
+def test_get_stock_history_combined_filters():
+    database.store_stock_snapshot([_make_stock("AAA", 100), _make_stock("BBB", 200)])
+    history = database.get_stock_history(ticker="AAA", since="2000-01-01T00:00:00Z")
+    assert len(history) == 1
+    assert history[0]["ticker"] == "AAA"
+
+
+def test_get_stock_history_limit():
+    for _ in range(5):
+        database.store_stock_snapshot([_make_stock("AAA", 100)])
+    history = database.get_stock_history(limit=3)
+    assert len(history) == 3
+
+
+def test_get_stock_history_ordered_desc():
+    database.store_stock_snapshot([_make_stock("AAA", 100)])
+    database.store_stock_snapshot([_make_stock("AAA", 200)])
+    history = database.get_stock_history()
+    # Most recent first
+    assert history[0]["price"] == 200
+    assert history[1]["price"] == 100
+
+
+def test_get_stock_snapshot_count():
+    assert database.get_stock_snapshot_count() == 0
+    database.store_stock_snapshot([_make_stock("AAA", 100), _make_stock("BBB", 200)])
+    assert database.get_stock_snapshot_count() == 2
+
+
+# ============================================================
+# DATABASE: get_tts_sfx_analytics
+# ============================================================
+
+
+def test_tts_sfx_analytics_empty():
+    result = database.get_tts_sfx_analytics()
+    assert result["top_rooms"] == []
+    assert result["top_tts_senders"] == []
+    assert result["top_sfx_senders"] == []
+
+
+def test_tts_sfx_analytics_counts():
+    database.store_event("tts:update", {"displayName": "User1", "room": "room-1", "cost": 248, "message": "hi"})
+    database.store_event("tts:update", {"displayName": "User1", "room": "room-1", "cost": 248, "message": "hi2"})
+    database.store_event("sfx:update", {"displayName": "User2", "room": "room-2", "cost": 100, "message": "sfx"})
+    result = database.get_tts_sfx_analytics()
+    assert len(result["top_tts_senders"]) >= 1
+    assert result["top_tts_senders"][0]["name"] == "User1"
+    assert result["top_tts_senders"][0]["count"] == 2
+    assert len(result["top_sfx_senders"]) >= 1
+    assert result["top_sfx_senders"][0]["name"] == "User2"
+
+
+def test_tts_sfx_analytics_rooms():
+    database.store_event("tts:update", {"displayName": "U", "room": "room-1", "message": "a"})
+    database.store_event("sfx:update", {"displayName": "U", "room": "room-1", "message": "b"})
+    database.store_event("tts:update", {"displayName": "U", "room": "room-2", "message": "c"})
+    result = database.get_tts_sfx_analytics()
+    assert len(result["top_rooms"]) == 2
+    # room-1 has 2 events, room-2 has 1
+    assert result["top_rooms"][0]["room"] == "room-1"
+    assert result["top_rooms"][0]["count"] == 2
+
+
+def test_tts_sfx_analytics_with_since():
+    database.store_event("tts:update", {"displayName": "U", "room": "r", "cost": 100, "message": "hi"})
+    result = database.get_tts_sfx_analytics(since="2099-01-01T00:00:00Z")
+    assert result["top_tts_senders"] == []
+
+
+# ============================================================
+# DATABASE: get_chat_analytics
+# ============================================================
+
+
+def test_chat_analytics_empty():
+    result = database.get_chat_analytics()
+    assert result["total"] == 0
+    assert result["top_chatters"] == []
+
+
+def test_chat_analytics_counts():
+    database.store_event("chat:message", {"user": {"displayName": "Alice"}, "message": "hi"})
+    database.store_event("chat:message", {"user": {"displayName": "Alice"}, "message": "hello"})
+    database.store_event("chat:message", {"user": {"displayName": "Bob"}, "message": "hey"})
+    result = database.get_chat_analytics()
+    assert result["total"] == 3
+    assert result["top_chatters"][0]["name"] == "Alice"
+    assert result["top_chatters"][0]["count"] == 2
+
+
+def test_chat_analytics_with_since():
+    database.store_event("chat:message", {"user": {"displayName": "Alice"}, "message": "hi"})
+    result = database.get_chat_analytics(since="2099-01-01T00:00:00Z")
+    assert result["total"] == 0
+
+
+# ============================================================
+# DATABASE: get_peak_hours
+# ============================================================
+
+
+def test_peak_hours_empty():
+    result = database.get_peak_hours()
+    assert result["hourly"] == []
+    assert result["peak"] == []
+    assert result["quietest"] == []
+
+
+def test_peak_hours_counts():
+    # Insert events that will group by hour
+    database.store_event("tts:update", {"displayName": "U", "message": "a"})
+    database.store_event("sfx:update", {"displayName": "U", "message": "b"})
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "cost": 100})
+    result = database.get_peak_hours()
+    assert len(result["hourly"]) >= 1
+    # All in same hour
+    hour = result["hourly"][0]
+    assert hour["tts"] >= 1
+    assert hour["sfx"] >= 1
+    assert hour["fishtoys"] >= 1
+    assert hour["total"] == hour["tts"] + hour["sfx"] + hour["fishtoys"]
+
+
+def test_peak_hours_excludes_chat():
+    database.store_event("chat:message", {"user": {"displayName": "U"}, "message": "hi"})
+    result = database.get_peak_hours()
+    # Chat should not appear in peak hours
+    assert result["hourly"] == []
+
+
+# ============================================================
+# DATABASE: get_hidden_content
+# ============================================================
+
+
+def test_hidden_content_empty():
+    result = database.get_hidden_content()
+    assert result == []
+
+
+def test_hidden_content_returns_metadata():
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "metadata": "love letter text"})
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T"})  # no metadata
+    result = database.get_hidden_content()
+    assert len(result) == 1
+    assert result[0]["data"]["metadata"] == "love letter text"
+
+
+def test_hidden_content_filter_by_target():
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "Alice", "metadata": "msg1"})
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "Bob", "metadata": "msg2"})
+    result = database.get_hidden_content(target="Alice")
+    assert len(result) == 1
+    assert result[0]["data"]["target"] == "Alice"
+
+
+def test_hidden_content_search():
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "metadata": "I love pizza"})
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "metadata": "hello world"})
+    result = database.get_hidden_content(search="pizza")
+    assert len(result) == 1
+
+
+def test_hidden_content_excludes_null_metadata():
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "metadata": "null"})
+    result = database.get_hidden_content()
+    assert len(result) == 0
+
+
+# ============================================================
+# DATABASE: get_fishtoys
+# ============================================================
+
+
+def test_get_fishtoys_basic():
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "cost": 100, "itemId": 1})
+    result = database.get_fishtoys()
+    assert len(result) == 1
+
+
+def test_get_fishtoys_filter_by_target():
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "Alice", "cost": 100})
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "Bob", "cost": 200})
+    result = database.get_fishtoys(target="Alice")
+    assert len(result) == 1
+    assert result[0]["data"]["target"] == "Alice"
+
+
+def test_get_fishtoys_filter_by_item_id():
+    # itemId stored as string in real fishtank data after JSON serialization
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "itemId": "42"})
+    database.store_event("fishtoy:used", {"displayName": "U", "target": "T", "itemId": "99"})
+    result = database.get_fishtoys(item_id="42")
+    assert len(result) == 1
+
+
+def test_get_fishtoys_search():
+    database.store_event("fishtoy:used", {"displayName": "Sender1", "target": "T", "metadata": "secret message"})
+    database.store_event("fishtoy:used", {"displayName": "Sender2", "target": "T"})
+    result = database.get_fishtoys(search="secret")
+    assert len(result) == 1
+
+
+def test_get_fishtoys_pagination():
+    for i in range(5):
+        database.store_event("fishtoy:used", {"displayName": f"U{i}", "target": "T", "cost": 100})
+    result = database.get_fishtoys(limit=2, offset=0)
+    assert len(result) == 2
+    result2 = database.get_fishtoys(limit=2, offset=2)
+    assert len(result2) == 2
+    # Different events
+    assert result[0]["id"] != result2[0]["id"]
+
+
+# ============================================================
+# DATABASE: get_latest_feature_toggles
+# ============================================================
+
+
+def test_feature_toggles_empty():
+    result = database.get_latest_feature_toggles()
+    assert result == {}
+
+
+def test_feature_toggles_returns_latest():
+    database.store_event("feature-toggles:update", {"feature": "tts", "enabled": True, "metadata": "248"})
+    database.store_event("feature-toggles:update", {"feature": "tts", "enabled": False, "metadata": "0"})
+    result = database.get_latest_feature_toggles()
+    assert "tts" in result
+    # Should be the latest state (disabled)
+    assert result["tts"]["enabled"] is False
+
+
+def test_feature_toggles_multiple_features():
+    database.store_event("feature-toggles:update", {"feature": "tts", "enabled": True})
+    database.store_event("feature-toggles:update", {"feature": "sfx", "enabled": False})
+    result = database.get_latest_feature_toggles()
+    assert len(result) == 2
+    assert result["tts"]["enabled"] is True
+    assert result["sfx"]["enabled"] is False
+
+
+# ============================================================
+# DATABASE: get_known_fishtoy_ids
+# ============================================================
+
+
+def test_known_fishtoy_ids_empty():
+    result = database.get_known_fishtoy_ids()
+    assert result == set()
+
+
+def test_known_fishtoy_ids_returns_set():
+    database.store_event("fishtoy:used", {"id": "abc123", "displayName": "U", "target": "T"})
+    database.store_event("fishtoy:used", {"id": "def456", "displayName": "U", "target": "T"})
+    result = database.get_known_fishtoy_ids()
+    assert isinstance(result, set)
+    assert "abc123" in result
+    assert "def456" in result
+
+
+def test_known_fishtoy_ids_excludes_non_fishtoy():
+    database.store_event("fishtoy:used", {"id": "fish1", "displayName": "U", "target": "T"})
+    database.store_event("chat:message", {"id": "chat1", "user": {"displayName": "U"}, "message": "hi"})
+    result = database.get_known_fishtoy_ids()
+    assert "fish1" in result
+    assert "chat1" not in result
+
+
+# ============================================================
+# DATABASE: get_notifications / get_price_changes
+# ============================================================
+
+
+def test_get_notifications():
+    database.store_event("notification:global", {"message": "Director says hello"})
+    database.store_event("announcement", {"message": "System announcement"})
+    result = database.get_notifications()
+    assert len(result) == 2
+
+
+def test_get_notifications_limit():
+    for i in range(5):
+        database.store_event("notification:global", {"message": f"msg {i}"})
+    result = database.get_notifications(limit=3)
+    assert len(result) == 3
+
+
+def test_get_price_changes():
+    database.store_event("tts:price", {"price": 248})
+    database.store_event("sfx:price", {"price": 100})
+    result = database.get_price_changes()
+    assert len(result) == 2
+
+
+def test_get_price_changes_limit():
+    for i in range(5):
+        database.store_event("tts:price", {"price": i * 100})
+    result = database.get_price_changes(limit=2)
+    assert len(result) == 2
