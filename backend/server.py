@@ -25,7 +25,7 @@ import types
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 
 import requests as http_requests
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Request
@@ -76,6 +76,7 @@ EVENTS = [
 FISHTOY_POLL_INTERVAL = 2  # seconds
 
 # ---- Cached catalog data (loaded on startup) ----
+_catalog_lock = Lock()
 _item_catalog = {}  # itemId -> {name, description, icon, type, ...}
 _contestants = []   # [{id, name, color, photo, ...}]
 _room_map = {}      # room code -> room name (e.g. "hwdn-5" -> "Hallway")
@@ -116,6 +117,7 @@ def _cached_query(key, func, *args):
 MAX_WS_CLIENTS = 50  # Max concurrent WebSocket connections
 
 # Per-IP rate limiting: requests per window
+_rate_limit_lock = Lock()
 _rate_limits: dict = defaultdict(list)  # ip -> [timestamps]
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 120    # max requests per window per IP
@@ -124,23 +126,24 @@ RATE_LIMIT_MAX = 120    # max requests per window per IP
 def _check_rate_limit(ip: str) -> bool:
     """Return True if the request should be rejected."""
     now = _time.time()
-    timestamps = _rate_limits[ip]
-    # Prune old entries
-    cutoff = now - RATE_LIMIT_WINDOW
-    _rate_limits[ip] = [t for t in timestamps if t > cutoff]
-    if len(_rate_limits[ip]) >= RATE_LIMIT_MAX:
-        return True
-    _rate_limits[ip].append(now)
-    return False
+    with _rate_limit_lock:
+        timestamps = _rate_limits[ip]
+        cutoff = now - RATE_LIMIT_WINDOW
+        _rate_limits[ip] = [t for t in timestamps if t > cutoff]
+        if len(_rate_limits[ip]) >= RATE_LIMIT_MAX:
+            return True
+        _rate_limits[ip].append(now)
+        return False
 
 
 def _prune_rate_limits():
     """Periodic cleanup of stale rate limit entries."""
     now = _time.time()
     cutoff = now - RATE_LIMIT_WINDOW
-    stale_ips = [ip for ip, ts in _rate_limits.items() if not ts or ts[-1] < cutoff]
-    for ip in stale_ips:
-        del _rate_limits[ip]
+    with _rate_limit_lock:
+        stale_ips = [ip for ip, ts in _rate_limits.items() if not ts or ts[-1] < cutoff]
+        for ip in stale_ips:
+            del _rate_limits[ip]
 
 
 # ============================================================
@@ -281,6 +284,7 @@ def reconnect_loop():
 # BROWSER WEBSOCKET CLIENTS
 # ============================================================
 
+_clients_lock = Lock()
 browser_clients: set[WebSocket] = set()
 
 
@@ -291,13 +295,17 @@ async def broadcast_to_browsers(event_type: str, data, db_id: int):
         ensure_ascii=False,
         default=str,
     )
+    with _clients_lock:
+        clients_snapshot = set(browser_clients)
     disconnected = set()
-    for ws in browser_clients:
+    for ws in clients_snapshot:
         try:
             await ws.send_text(message)
         except Exception:
             disconnected.add(ws)
-    browser_clients.difference_update(disconnected)
+    if disconnected:
+        with _clients_lock:
+            browser_clients.difference_update(disconnected)
 
 
 # ============================================================
@@ -308,6 +316,7 @@ fish_client: FishClient = None
 _loop: asyncio.AbstractEventLoop = None
 
 # Dedup tracking for TTS/SFX (server fires "approved" then "played" for same ID)
+_dedup_lock = Lock()
 _seen_tts_sfx_ids: dict = {}  # event_id -> timestamp
 _DEDUP_WINDOW = 300  # 5 minutes (status transitions can be 30-60s apart)
 
@@ -326,16 +335,16 @@ def _is_duplicate(evt, data):
         return False
     event_id = str(event_id)
     now = datetime.now(timezone.utc).timestamp()
-    if event_id in _seen_tts_sfx_ids:
-        return True
-    _seen_tts_sfx_ids[event_id] = now
-    # Prune old entries
-    if len(_seen_tts_sfx_ids) > 500:
-        cutoff = now - _DEDUP_WINDOW
-        stale = [k for k, v in _seen_tts_sfx_ids.items() if v < cutoff]
-        for k in stale:
-            del _seen_tts_sfx_ids[k]
-    return False
+    with _dedup_lock:
+        if event_id in _seen_tts_sfx_ids:
+            return True
+        _seen_tts_sfx_ids[event_id] = now
+        if len(_seen_tts_sfx_ids) > 500:
+            cutoff = now - _DEDUP_WINDOW
+            stale = [k for k, v in _seen_tts_sfx_ids.items() if v < cutoff]
+            for k in stale:
+                del _seen_tts_sfx_ids[k]
+        return False
 
 
 def _should_filter_chat(data):
@@ -466,73 +475,79 @@ def load_catalog():
         return
 
     session = auth.get_session()
-
-    # Load item catalog
     try:
-        r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-        if r.status_code in (401, 403):
-            print("[!] Catalog load: auth expired. Attempting re-auth...")
-            if auth.handle_401():
-                session = auth.get_session()
-                r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-        if r.status_code == 200:
-            raw = r.json()
-            for key, val in raw.items():
-                if isinstance(val, dict) and "id" in val:
-                    _item_catalog[str(val["id"])] = val
-            print(f"[OK] Loaded {len(_item_catalog)} items ({sum(1 for v in _item_catalog.values() if v.get('type') in CAPTURE_TYPES)} fishtoys/bigtoys)")
-    except Exception as e:
-        print(f"[WARN] Could not load item catalog: {e}")
+        # Load item catalog
+        try:
+            r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+            if r.status_code in (401, 403):
+                print("[!] Catalog load: auth expired. Attempting re-auth...")
+                if auth.handle_401():
+                    session.close()
+                    session = auth.get_session()
+                    r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+            if r.status_code == 200:
+                raw = r.json()
+                with _catalog_lock:
+                    for key, val in raw.items():
+                        if isinstance(val, dict) and "id" in val:
+                            _item_catalog[str(val["id"])] = val
+                print(f"[OK] Loaded {len(_item_catalog)} items ({sum(1 for v in _item_catalog.values() if v.get('type') in CAPTURE_TYPES)} fishtoys/bigtoys)")
+        except Exception as e:
+            print(f"[WARN] Could not load item catalog: {e}")
 
-    # Load contestants
-    try:
-        r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            all_contestants = data.get("contestants", [])
-            # Filter to current season (5) only
-            season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
-            _contestants.clear()
-            _contestants.extend(season_5 if season_5 else all_contestants)
-            print(f"[OK] Loaded {len(_contestants)} contestants (season 5: {len(season_5)}, total: {len(all_contestants)})")
-    except Exception as e:
-        print(f"[WARN] Could not load contestants: {e}")
+        # Load contestants
+        try:
+            r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                all_contestants = data.get("contestants", [])
+                season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
+                with _catalog_lock:
+                    _contestants.clear()
+                    _contestants.extend(season_5 if season_5 else all_contestants)
+                print(f"[OK] Loaded {len(_contestants)} contestants (season 5: {len(season_5)}, total: {len(all_contestants)})")
+        except Exception as e:
+            print(f"[WARN] Could not load contestants: {e}")
 
-    # Load room mapping from live-streams
-    try:
-        r = session.get("https://api.fishtank.live/v1/live-streams", timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            streams = data.get("liveStreams", [])
-            _room_map.clear()
-            for stream in streams:
-                sid = stream.get("id", "")
-                name = stream.get("name", sid)
-                _room_map[sid] = name
-            print(f"[OK] Loaded {len(_room_map)} room mappings")
-    except Exception as e:
-        print(f"[WARN] Could not load room mappings: {e}")
+        # Load room mapping from live-streams
+        try:
+            r = session.get("https://api.fishtank.live/v1/live-streams", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                streams = data.get("liveStreams", [])
+                with _catalog_lock:
+                    _room_map.clear()
+                    for stream in streams:
+                        sid = stream.get("id", "")
+                        name = stream.get("name", sid)
+                        _room_map[sid] = name
+                print(f"[OK] Loaded {len(_room_map)} room mappings")
+        except Exception as e:
+            print(f"[WARN] Could not load room mappings: {e}")
 
-    # Load stocks
-    try:
-        r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            _stocks.clear()
-            _stocks.extend(data.get("stocks", []))
-            print(f"[OK] Loaded {len(_stocks)} stocks")
-    except Exception as e:
-        print(f"[WARN] Could not load stocks: {e}")
+        # Load stocks
+        try:
+            r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                with _catalog_lock:
+                    _stocks.clear()
+                    _stocks.extend(data.get("stocks", []))
+                print(f"[OK] Loaded {len(_stocks)} stocks")
+        except Exception as e:
+            print(f"[WARN] Could not load stocks: {e}")
 
-    # Load feature toggle state from database
-    try:
-        toggles = database.get_latest_feature_toggles()
-        _feature_toggles.update(toggles)
-        if toggles:
-            status_parts = [f"{k}={'ON' if v['enabled'] else 'OFF'}" for k, v in toggles.items()]
-            print(f"[OK] Loaded {len(toggles)} feature toggle states: {', '.join(status_parts)}")
-    except Exception as e:
-        print(f"[WARN] Could not load feature toggles: {e}")
+        # Load feature toggle state from database
+        try:
+            toggles = database.get_latest_feature_toggles()
+            _feature_toggles.update(toggles)
+            if toggles:
+                status_parts = [f"{k}={'ON' if v['enabled'] else 'OFF'}" for k, v in toggles.items()]
+                print(f"[OK] Loaded {len(toggles)} feature toggle states: {', '.join(status_parts)}")
+        except Exception as e:
+            print(f"[WARN] Could not load feature toggles: {e}")
+    finally:
+        session.close()
 
 
 def fishtoy_poller():
@@ -549,85 +564,88 @@ def fishtoy_poller():
     # Load known fishtoy IDs from database for backfill detection
     known_ids = database.get_known_fishtoy_ids()
 
-    while not _poller_stop.is_set():
-        try:
-            r = session.get("https://api.fishtank.live/v1/items/recent", timeout=10)
-            if r.status_code in (401, 403):
-                print(f"[!] Fishtoy poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
-                if auth.handle_401():
-                    # Rebuild session with new cookie
-                    session = auth.get_session()
-                    print("[OK] Fishtoy poller: re-auth successful, resuming.")
-                else:
-                    print("[!] Fishtoy poller: re-auth failed. Will retry in 30s.")
-                    _poller_stop.wait(30)
-                continue
-            if r.status_code != 200:
-                _poller_stop.wait(FISHTOY_POLL_INTERVAL)
-                continue
-
-            items = r.json().get("items", [])
-            _last_fishtoy_poll = datetime.now(timezone.utc)
-            this_poll_ids = set()
-            backfilled = 0
-
-            for item in items:
-                item_id = item.get("id")
-                this_poll_ids.add(item_id)
-
-                if item_id in seen_ids:
+    try:
+        while not _poller_stop.is_set():
+            try:
+                r = session.get("https://api.fishtank.live/v1/items/recent", timeout=10)
+                if r.status_code in (401, 403):
+                    print(f"[!] Fishtoy poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
+                    if auth.handle_401():
+                        session.close()
+                        session = auth.get_session()
+                        print("[OK] Fishtoy poller: re-auth successful, resuming.")
+                    else:
+                        print("[!] Fishtoy poller: re-auth failed. Will retry in 30s.")
+                        _poller_stop.wait(30)
+                    continue
+                if r.status_code != 200:
+                    _poller_stop.wait(FISHTOY_POLL_INTERVAL)
                     continue
 
-                # On first poll, check DB for backfill instead of skipping
-                if first_poll:
-                    if str(item_id) in known_ids:
+                items = r.json().get("items", [])
+                _last_fishtoy_poll = datetime.now(timezone.utc)
+                this_poll_ids = set()
+                backfilled = 0
+
+                for item in items:
+                    item_id = item.get("id")
+                    this_poll_ids.add(item_id)
+
+                    if item_id in seen_ids:
                         continue
-                    # This item happened while we were down - backfill it
-                    backfilled += 1
 
-                # Filter: only capture FISHTOY and BIGTOY
-                iid = str(item.get("itemId", ""))
-                cat_entry = _item_catalog.get(iid, {})
-                item_type = cat_entry.get("type")
-                if cat_entry and item_type not in CAPTURE_TYPES:
-                    continue
+                    # On first poll, check DB for backfill instead of skipping
+                    if first_poll:
+                        if str(item_id) in known_ids:
+                            continue
+                        # This item happened while we were down - backfill it
+                        backfilled += 1
 
-                # Store in database
-                db_id = database.store_event("fishtoy:used", item)
+                    # Filter: only capture FISHTOY and BIGTOY
+                    iid = str(item.get("itemId", ""))
+                    cat_entry = _item_catalog.get(iid, {})
+                    item_type = cat_entry.get("type")
+                    if cat_entry and item_type not in CAPTURE_TYPES:
+                        continue
 
-                # Log to console
-                t = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                name = item.get("displayName", "?")
-                target = item.get("target", "?")
-                item_name = cat_entry.get("name", f"#{iid}")
-                meta = item.get("metadata", "")
-                meta_str = str(meta) if meta else ""
-                prefix = "[BACKFILL] " if first_poll else ""
-                print(f"[{t}] {prefix}{item_type or '?'}: {name} -> {target} ({item_name}){f' [{meta_str[:50]}]' if meta_str else ''}")
+                    # Store in database
+                    db_id = database.store_event("fishtoy:used", item)
 
-                # Broadcast to browsers
-                if _loop and _loop.is_running():
-                    asyncio.run_coroutine_threadsafe(
-                        broadcast_to_browsers("fishtoy:used", item, db_id), _loop
-                    )
+                    # Log to console
+                    t = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                    name = item.get("displayName", "?")
+                    target = item.get("target", "?")
+                    item_name = cat_entry.get("name", f"#{iid}")
+                    meta = item.get("metadata", "")
+                    meta_str = str(meta) if meta else ""
+                    prefix = "[BACKFILL] " if first_poll else ""
+                    print(f"[{t}] {prefix}{item_type or '?'}: {name} -> {target} ({item_name}){f' [{meta_str[:50]}]' if meta_str else ''}")
 
-            # Prune seen_ids to last 3 polls
-            prev_poll_ids.append(this_poll_ids)
-            if len(prev_poll_ids) > 3:
-                prev_poll_ids.pop(0)
-            seen_ids = set().union(*prev_poll_ids)
+                    # Broadcast to browsers
+                    if _loop and _loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            broadcast_to_browsers("fishtoy:used", item, db_id), _loop
+                        )
 
-            if first_poll:
-                first_poll = False
-                if backfilled:
-                    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: backfilled {backfilled} missed events from {len(items)} items")
-                else:
-                    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: {len(items)} items in snapshot, no gaps detected. Watching...")
+                # Prune seen_ids to last 3 polls
+                prev_poll_ids.append(this_poll_ids)
+                if len(prev_poll_ids) > 3:
+                    prev_poll_ids.pop(0)
+                seen_ids = set().union(*prev_poll_ids)
 
-        except http_requests.RequestException as e:
-            print(f"[!] Fishtoy poll error: {e}")
+                if first_poll:
+                    first_poll = False
+                    if backfilled:
+                        print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: backfilled {backfilled} missed events from {len(items)} items")
+                    else:
+                        print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: {len(items)} items in snapshot, no gaps detected. Watching...")
 
-        _poller_stop.wait(FISHTOY_POLL_INTERVAL)
+            except http_requests.RequestException as e:
+                print(f"[!] Fishtoy poll error: {e}")
+
+            _poller_stop.wait(FISHTOY_POLL_INTERVAL)
+    finally:
+        session.close()
 
 
 def stock_poller():
@@ -638,26 +656,31 @@ def stock_poller():
 
     session = auth.get_session()
 
-    while not _poller_stop.is_set():
-        try:
-            r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
-            if r.status_code in (401, 403):
-                print(f"[!] Stock poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
-                if auth.handle_401():
-                    session = auth.get_session()
-                    print("[OK] Stock poller: re-auth successful.")
-            elif r.status_code == 200:
-                data = r.json()
-                stocks = data.get("stocks", [])
-                if stocks:
-                    _stocks.clear()
-                    _stocks.extend(stocks)
-                    database.store_stock_snapshot(stocks)
-                    _last_stock_poll = datetime.now(timezone.utc)
-        except http_requests.RequestException:
-            pass
+    try:
+        while not _poller_stop.is_set():
+            try:
+                r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
+                if r.status_code in (401, 403):
+                    print(f"[!] Stock poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
+                    if auth.handle_401():
+                        session.close()
+                        session = auth.get_session()
+                        print("[OK] Stock poller: re-auth successful.")
+                elif r.status_code == 200:
+                    data = r.json()
+                    stocks = data.get("stocks", [])
+                    if stocks:
+                        with _catalog_lock:
+                            _stocks.clear()
+                            _stocks.extend(stocks)
+                        database.store_stock_snapshot(stocks)
+                        _last_stock_poll = datetime.now(timezone.utc)
+            except http_requests.RequestException:
+                pass
 
-        _poller_stop.wait(60)
+            _poller_stop.wait(60)
+    finally:
+        session.close()
 
 
 def catalog_refresh_poller():
@@ -670,43 +693,48 @@ def catalog_refresh_poller():
 
     while not _poller_stop.is_set():
         session = auth.get_session()
-
-        # Refresh item catalog
         try:
-            r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-            if r.status_code in (401, 403):
-                if auth.handle_401():
-                    session = auth.get_session()
-                    r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-            if r.status_code == 200:
-                raw = r.json()
-                new_count = 0
-                for key, val in raw.items():
-                    if isinstance(val, dict) and "id" in val:
-                        sid = str(val["id"])
-                        if sid not in _item_catalog:
-                            new_count += 1
-                        _item_catalog[sid] = val
-                if new_count:
-                    print(f"[OK] Catalog refresh: {new_count} new items added ({len(_item_catalog)} total)")
-        except Exception as e:
-            print(f"[WARN] Catalog refresh failed (items): {e}")
+            # Refresh item catalog
+            try:
+                r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+                if r.status_code in (401, 403):
+                    if auth.handle_401():
+                        session.close()
+                        session = auth.get_session()
+                        r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+                if r.status_code == 200:
+                    raw = r.json()
+                    new_count = 0
+                    with _catalog_lock:
+                        for key, val in raw.items():
+                            if isinstance(val, dict) and "id" in val:
+                                sid = str(val["id"])
+                                if sid not in _item_catalog:
+                                    new_count += 1
+                                _item_catalog[sid] = val
+                    if new_count:
+                        print(f"[OK] Catalog refresh: {new_count} new items added ({len(_item_catalog)} total)")
+            except Exception as e:
+                print(f"[WARN] Catalog refresh failed (items): {e}")
 
-        # Refresh contestants
-        try:
-            r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                all_contestants = data.get("contestants", [])
-                season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
-                new_list = season_5 if season_5 else all_contestants
-                old_count = len(_contestants)
-                _contestants.clear()
-                _contestants.extend(new_list)
-                if len(_contestants) != old_count:
-                    print(f"[OK] Catalog refresh: contestants updated ({old_count} -> {len(_contestants)})")
-        except Exception as e:
-            print(f"[WARN] Catalog refresh failed (contestants): {e}")
+            # Refresh contestants
+            try:
+                r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    all_contestants = data.get("contestants", [])
+                    season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
+                    new_list = season_5 if season_5 else all_contestants
+                    with _catalog_lock:
+                        old_count = len(_contestants)
+                        _contestants.clear()
+                        _contestants.extend(new_list)
+                    if len(_contestants) != old_count:
+                        print(f"[OK] Catalog refresh: contestants updated ({old_count} -> {len(_contestants)})")
+            except Exception as e:
+                print(f"[WARN] Catalog refresh failed (contestants): {e}")
+        finally:
+            session.close()
 
         _poller_stop.wait(600)  # 10 minutes
 
@@ -794,18 +822,20 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    if len(browser_clients) >= MAX_WS_CLIENTS:
-        await ws.close(code=1013, reason="Too many connections")
-        return
-    await ws.accept()
-    browser_clients.add(ws)
+    with _clients_lock:
+        if len(browser_clients) >= MAX_WS_CLIENTS:
+            await ws.close(code=1013, reason="Too many connections")
+            return
+        await ws.accept()
+        browser_clients.add(ws)
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        browser_clients.discard(ws)
+        with _clients_lock:
+            browser_clients.discard(ws)
 
 
 # --- REST endpoints ---
@@ -904,25 +934,29 @@ def api_health():
 @app.get("/api/items")
 def api_items():
     """Return the item catalog (itemId -> name/description/icon)."""
-    return _item_catalog
+    with _catalog_lock:
+        return dict(_item_catalog)
 
 
 @app.get("/api/contestants")
 def api_contestants():
     """Return the contestant list."""
-    return _contestants
+    with _catalog_lock:
+        return list(_contestants)
 
 
 @app.get("/api/rooms")
 def api_rooms():
     """Return room code -> name mapping."""
-    return _room_map
+    with _catalog_lock:
+        return dict(_room_map)
 
 
 @app.get("/api/stocks")
 def api_stocks():
     """Return current stock data (updated by stock_poller every 60s)."""
-    return _stocks
+    with _catalog_lock:
+        return list(_stocks)
 
 
 @app.get("/api/feature-toggles")

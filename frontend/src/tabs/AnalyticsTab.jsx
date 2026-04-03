@@ -120,12 +120,18 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
   const [contestantSort, setContestantSort] = useState('endorsements')
   const directorRef = useRef(null)
   const [directorHighlight, setDirectorHighlight] = useState(false)
+  const highlightTimer = useRef(null)
+
+  useEffect(() => {
+    return () => { if (highlightTimer.current) clearTimeout(highlightTimer.current) }
+  }, [])
 
   useImperativeHandle(ref, () => ({
     scrollToDirector: () => {
       directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       setDirectorHighlight(true)
-      setTimeout(() => setDirectorHighlight(false), 2000)
+      if (highlightTimer.current) clearTimeout(highlightTimer.current)
+      highlightTimer.current = setTimeout(() => setDirectorHighlight(false), 2000)
     }
   }))
 

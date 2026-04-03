@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 
 export function useWebSocket(url) {
   const [isConnected, setIsConnected] = useState(false)
-  const [lastEvent, setLastEvent] = useState(null)
   const wsRef = useRef(null)
   const reconnectTimer = useRef(null)
   const listeners = useRef(new Set())
@@ -34,7 +33,6 @@ export function useWebSocket(url) {
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data)
-          setLastEvent(msg)
           listeners.current.forEach((fn) => fn(msg))
         } catch (err) {
           // ignore malformed messages
@@ -63,5 +61,5 @@ export function useWebSocket(url) {
     }
   }, [url])
 
-  return { isConnected, lastEvent, addListener }
+  return { isConnected, addListener }
 }
