@@ -298,7 +298,3 @@ cd /opt/fishtank-dashboard
 git pull
 docker compose up -d --build
 ```
-
-## License
-
-MIT
