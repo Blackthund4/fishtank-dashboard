@@ -230,9 +230,10 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
                   )}
                   <div>
                     <div className="text-xs font-semibold" style={{ color: c.color || '#c8cdd4' }}>{c.name}</div>
-                    {c.freeloader && <span className="text-[9px] text-tank-muted">Freeloader</span>}
-                    {c.eliminatedAt && <span className="text-[9px] text-red-400">Eliminated</span>}
-                  </div>
+                    {c.freeloader && <span className="text-[9px] bg-yellow-500/10 text-yellow-400 px-1 rounded">Freeloader</span>}
+                    {c.eliminatedAt && <span className="text-[9px] text-red-400">Eliminated {formatDateTime(c.eliminatedAt)}</span>}
+                    {c.job && <div className="text-[9px] text-tank-muted">{c.job}</div>}
+                    <div className="text-[9px] text-tank-muted">Joined {formatDateTime(c.createdAt)}</div>
                 </div>
                 {stock && (
                   <div className="text-[10px] font-mono text-tank-muted">
