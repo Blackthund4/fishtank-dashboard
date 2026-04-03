@@ -189,6 +189,8 @@ def db_backup_poller():
 
 def _patched_handle_message(self, message):
     if isinstance(message, str):
+        if 'presence' in message:
+            print(f"[DEBUG] presence text frame: {message[:200]}", flush=True)
         if message.startswith("2"):
             try:
                 self.websocket.send("3")
