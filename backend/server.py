@@ -69,6 +69,8 @@ EVENTS = [
     # System
     "happening",
     "feature-toggles:update",
+    # Presence
+    "chat:presence",
 ]
 
 FISHTOY_POLL_INTERVAL = 2  # seconds
@@ -311,7 +313,7 @@ _DEDUP_WINDOW = 300  # 5 minutes (status transitions can be 30-60s apart)
 
 # Feature toggle state (fishtoys, tts, sfx, etc.)
 _feature_toggles: dict = {}  # feature_name -> {enabled, metadata, updated_at}
-
+_fishtank_online = 0  # Live viewer count from chat:presence
 
 def _is_duplicate(evt, data):
     """Check if this TTS/SFX event ID has already been seen."""
@@ -367,6 +369,13 @@ def _track_feature_toggle(data):
 def make_event_handler(evt):
     """Create an event handler for a specific socket event type."""
     def handler(data):
+        # Track live viewer count (don't store to DB)
+        if evt == "chat:presence":
+            global _fishtank_online
+            if isinstance(data, (int, float)):
+                _fishtank_online = int(data)
+            return
+        
         # Filter TTS/SFX/emote system echo from chat
         if evt == "chat:message" and _should_filter_chat(data):
             return
@@ -822,6 +831,7 @@ def api_status():
     return {
         "connected": fc is not None and fc.is_connected,
         "browser_clients": len(browser_clients),
+        "fishtank_online": _fishtank_online,
         "auth_mode": auth.mode,
         "auth_configured": auth.is_configured,
     }

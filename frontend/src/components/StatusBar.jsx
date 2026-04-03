@@ -43,7 +43,7 @@ export default function StatusBar({ isConnected, stats }) {
           <>
             <div className="w-px h-5 bg-tank-border mx-1" />
             <span className="text-xs text-tank-muted font-mono">
-              {health.browser_clients} viewer{health.browser_clients !== 1 ? 's' : ''}
+              {health.fishtank_online > 0 && <><span className="text-tank-bright">{health.fishtank_online.toLocaleString()}</span> watching | </>}{health.browser_clients} fish-dasher{health.browser_clients !== 1 ? 's' : ''}
             </span>
           </>
         )}
