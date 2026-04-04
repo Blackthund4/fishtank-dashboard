@@ -57,6 +57,7 @@ const TIME_OPTIONS = [
   { id: '7d', label: '7d' },
   { id: '3d', label: '3d' },
   { id: '24h', label: '24h' },
+  { id: '1h', label: '1hr' },
 ]
 
 const STOCK_TIME_OPTIONS = [
@@ -73,11 +74,11 @@ const STOCK_SORTS = [
 ]
 
 function getMoodLabel(score) {
-  if (score >= 0.5) return { label: 'Excited', color: 'bg-green-400/70', textColor: 'text-green-400' }
-  if (score >= 0.15) return { label: 'Happy', color: 'bg-lime-400/70', textColor: 'text-lime-400' }
-  if (score >= -0.15) return { label: 'Neutral', color: 'bg-tank-muted/70', textColor: 'text-tank-muted' }
-  if (score >= -0.5) return { label: 'Grumpy', color: 'bg-orange-400/70', textColor: 'text-orange-400' }
-  return { label: 'Hostile', color: 'bg-red-500/70', textColor: 'text-red-400' }
+  if (score >= 0.5)  return { label: 'Excited', bgColor: 'bg-green-500',    textColor: 'text-white' }
+  if (score >= 0.15) return { label: 'Happy',   bgColor: 'bg-lime-400',     textColor: 'text-gray-900' }
+  if (score >= -0.15)return { label: 'Neutral', bgColor: 'bg-gray-500/60',  textColor: 'text-gray-100' }
+  if (score >= -0.5) return { label: 'Grumpy',  bgColor: 'bg-orange-500',   textColor: 'text-white' }
+  return               { label: 'Hostile', bgColor: 'bg-red-600',      textColor: 'text-white' }
 }
 
 function TimeFilter({ value, onChange }) {
@@ -366,14 +367,14 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
       {/* Peak Hours */}
       {peakHours && peakHours.hourly.length > 0 && (
-        <Section title="Peak Activity Hours (UTC)" icon={Zap}>
+        <Section title="Peak Activity Hours" icon={Zap}>
           <div className="flex gap-4 mb-3">
             <div>
               <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Busiest</h4>
               <div className="flex gap-2">
                 {peakHours.peak.map(h => (
                   <span key={h.hour} className="text-xs font-mono px-2 py-1 rounded bg-green-500/10 text-green-400 border border-green-500/20">
-                    {h.hour}:00 ({h.total.toLocaleString()})
+                    {h.ts ? new Date(h.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : h.hour + ':00'} ({h.total.toLocaleString()})
                   </span>
                 ))}
               </div>
@@ -383,7 +384,7 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
               <div className="flex gap-2">
                 {peakHours.quietest.map(h => (
                   <span key={h.hour} className="text-xs font-mono px-2 py-1 rounded bg-tank-highlight text-tank-muted border border-tank-border">
-                    {h.hour}:00 ({h.total.toLocaleString()})
+                    {h.ts ? new Date(h.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : h.hour + ':00'} ({h.total.toLocaleString()})
                   </span>
                 ))}
               </div>
@@ -395,17 +396,13 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* TTS/SFX Analytics */}
-        <Section title="TTS / SFX Analytics" icon={Volume2} extra={
+        <Section title="TTS / SFX Analytics" icon={Volume2}
+          badge={ttsSentiment && (() => {
+            const { label, bgColor, textColor } = getMoodLabel(ttsSentiment.overall.avg)
+            return <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded ${bgColor} ${textColor}`}>{label}</span>
+          })()}
+          extra={
           <div className="flex items-center gap-2">
-            {ttsSentiment && (() => {
-              const { label, color } = getMoodLabel(ttsSentiment.overall.avg)
-              return (
-                <div className="flex items-center gap-1">
-                  <span className={`w-1.5 h-1.5 rounded-full ${color}`} />
-                  <span className="text-[9px] font-mono text-tank-bright">{label}</span>
-                </div>
-              )
-            })()}
             {ttsToggle !== undefined && (
               <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ttsToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
                 TTS: {ttsToggle?.enabled ? 'ON' : 'OFF'}{ttsToggle?.metadata ? ` (${ttsToggle.metadata}t)` : ''}
@@ -451,13 +448,13 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
               )}
               {ttsAnalytics.hourly.length > 0 && (
                 <div>
-                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Activity (UTC)</h4>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Activity</h4>
                   <HourlyBar data={ttsAnalytics.hourly} color="bg-purple-400" />
                 </div>
               )}
               {ttsSentiment && ttsSentiment.hourly.length > 0 && (
                 <div>
-                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Sentiment (UTC)</h4>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Sentiment</h4>
                   <SentimentHourlyBar data={ttsSentiment.hourly} />
                 </div>
               )}
@@ -486,17 +483,13 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         </Section>
 
         {/* Chat Analytics */}
-        <Section title="Chat Analytics" icon={MessageSquare} extra={
+        <Section title="Chat Analytics" icon={MessageSquare}
+          badge={chatSentiment && (() => {
+            const { label, bgColor, textColor } = getMoodLabel(chatSentiment.overall.avg)
+            return <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded ${bgColor} ${textColor}`}>{label}</span>
+          })()}
+          extra={
           <div className="flex items-center gap-2">
-            {chatSentiment && (() => {
-              const { label, color } = getMoodLabel(chatSentiment.overall.avg)
-              return (
-                <div className="flex items-center gap-1">
-                  <span className={`w-1.5 h-1.5 rounded-full ${color}`} />
-                  <span className="text-[9px] font-mono text-tank-bright">{label}</span>
-                </div>
-              )
-            })()}
             <TimeFilter value={chatPeriod} onChange={setChatPeriod} />
           </div>
         }>
@@ -520,13 +513,13 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
               )}
               {chatAnalytics.hourly.length > 0 && (
                 <div>
-                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Volume (UTC)</h4>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Volume</h4>
                   <HourlyBar data={chatAnalytics.hourly} color="bg-blue-400" />
                 </div>
               )}
               {chatSentiment && chatSentiment.hourly.length > 0 && (
                 <div>
-                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Sentiment (UTC)</h4>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Sentiment</h4>
                   <SentimentHourlyBar data={chatSentiment.hourly} />
                 </div>
               )}
@@ -692,13 +685,14 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
 export default AnalyticsTab
 
-function Section({ title, icon: Icon, extra, children }) {
+function Section({ title, icon: Icon, badge, extra, children }) {
   return (
     <div className="bg-tank-surface border border-tank-border rounded-lg p-3">
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="w-4 h-4 text-tank-muted" />}
           <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">{title}</h3>
+          {badge}
         </div>
         {extra}
       </div>
@@ -708,22 +702,24 @@ function Section({ title, icon: Icon, extra, children }) {
 }
 
 function SentimentHourlyBar({ data }) {
-  const maxAbs = Math.max(...data.map(d => Math.abs(d.avg_sentiment)), 0.01)
+  const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
+  const maxAbs = Math.max(...sorted.map(d => Math.abs(d.avg_sentiment)), 0.01)
   const halfHeight = 20
   return (
     <div className="flex gap-px" style={{ height: `${halfHeight * 2}px` }}>
-      {Array.from({ length: 24 }, (_, i) => {
-        const hour = String(i).padStart(2, '0')
-        const entry = data.find(d => d.hour === hour)
-        const score = entry?.avg_sentiment || 0
-        const count = entry?.message_count || 0
+      {sorted.map(d => {
+        const label = d.ts
+          ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : d.hour + ':00'
+        const score = d.avg_sentiment || 0
+        const count = d.message_count || 0
         const barH = (Math.abs(score) / maxAbs) * halfHeight
         const isPositive = score >= 0
         return (
           <div
-            key={hour}
+            key={d.ts || d.hour}
             className="flex-1 flex flex-col relative"
-            title={`${hour}:00 UTC\nSentiment: ${score.toFixed(3)}\nMessages: ${count}`}
+            title={`${label}\nSentiment: ${score.toFixed(3)}\nMessages: ${count}`}
           >
             {isPositive ? (
               <div className="absolute w-full bg-green-400/70 rounded-t-sm" style={{ bottom: `${halfHeight}px`, height: `${Math.max(barH, 1)}px` }} />
@@ -738,19 +734,20 @@ function SentimentHourlyBar({ data }) {
 }
 
 function HourlyBar({ data, color }) {
-  const max = Math.max(...data.map(d => d.count), 1)
+  const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
+  const max = Math.max(...sorted.map(d => d.count), 1)
   return (
     <div className="flex items-end gap-px h-12">
-      {Array.from({ length: 24 }, (_, i) => {
-        const hour = String(i).padStart(2, '0')
-        const entry = data.find(d => d.hour === hour)
-        const count = entry?.count || 0
-        const pct = (count / max) * 100
+      {sorted.map((d, i) => {
+        const label = d.ts
+          ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : d.hour + ':00'
+        const pct = (d.count / max) * 100
         return (
           <div
-            key={hour}
+            key={d.ts || d.hour}
             className="flex-1 flex flex-col items-center"
-            title={`${hour}:00 UTC - ${count} events`}
+            title={`${label} — ${d.count} events`}
           >
             <div className="w-full relative" style={{ height: '40px' }}>
               <div
@@ -758,8 +755,8 @@ function HourlyBar({ data, color }) {
                 style={{ height: `${Math.max(pct, 2)}%` }}
               />
             </div>
-            {i % 6 === 0 && (
-              <span className="text-[8px] text-tank-muted mt-0.5">{hour}</span>
+            {(i === 0 || i === sorted.length - 1 || i % 6 === 0) && (
+              <span className="text-[8px] text-tank-muted mt-0.5">{label}</span>
             )}
           </div>
         )
@@ -769,29 +766,31 @@ function HourlyBar({ data, color }) {
 }
 
 function StackedHourlyBar({ data }) {
-  const max = Math.max(...data.map(d => d.total), 1)
+  const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
+  const max = Math.max(...sorted.map(d => d.total), 1)
   return (
     <div>
       <div className="flex items-end gap-px h-20">
-        {Array.from({ length: 24 }, (_, i) => {
-          const hour = String(i).padStart(2, '0')
-          const entry = data.find(d => d.hour === hour) || { tts: 0, sfx: 0, fishtoys: 0, total: 0 }
-          const ttsPct = (entry.tts / max) * 100
-          const sfxPct = (entry.sfx / max) * 100
-          const fishPct = (entry.fishtoys / max) * 100
+        {sorted.map((d, i) => {
+          const label = d.ts
+            ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : d.hour + ':00'
+          const ttsPct = (d.tts / max) * 100
+          const sfxPct = (d.sfx / max) * 100
+          const fishPct = (d.fishtoys / max) * 100
           return (
             <div
-              key={hour}
+              key={d.ts || d.hour}
               className="flex-1 flex flex-col items-center"
-              title={`${hour}:00 UTC\nTTS: ${entry.tts}\nSFX: ${entry.sfx}\nFishtoys: ${entry.fishtoys}\nTotal: ${entry.total}`}
+              title={`${label}\nTTS: ${d.tts}\nSFX: ${d.sfx}\nFishtoys: ${d.fishtoys}\nTotal: ${d.total}`}
             >
               <div className="w-full flex flex-col-reverse" style={{ height: '64px' }}>
                 <div className="w-full bg-purple-400/70 rounded-t-sm" style={{ height: `${ttsPct}%` }} />
                 <div className="w-full bg-indigo-400/70" style={{ height: `${sfxPct}%` }} />
                 <div className="w-full bg-emerald-400/70" style={{ height: `${fishPct}%` }} />
               </div>
-              {i % 3 === 0 && (
-                <span className="text-[8px] text-tank-muted mt-0.5">{hour}</span>
+              {(i === 0 || i === sorted.length - 1 || i % 4 === 0) && (
+                <span className="text-[8px] text-tank-muted mt-0.5">{label}</span>
               )}
             </div>
           )

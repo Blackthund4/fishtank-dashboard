@@ -276,15 +276,19 @@ def get_tts_sfx_analytics(since=None):
     """ + since_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", since_params).fetchall()
 
     hourly = conn.execute("""
-        SELECT strftime('%H', timestamp_local) as hour, COUNT(*) as count
+        SELECT strftime('%H', timestamp_local) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
+            COUNT(*) as count
         FROM events WHERE event_type IN ('tts:update', 'sfx:update')
-    """ + since_clause + " GROUP BY hour ORDER BY hour", since_params).fetchall()
+            AND timestamp_local >= datetime('now', '-24 hours')
+        GROUP BY hour ORDER BY hour
+    """).fetchall()
 
     return {
         "top_rooms": [{"room": r["room"], "count": r["count"]} for r in top_rooms],
         "top_tts_senders": [{"name": r["sender"], "count": r["count"], "spend": r["spend"]} for r in top_tts_senders],
         "top_sfx_senders": [{"name": r["sender"], "count": r["count"], "spend": r["spend"]} for r in top_sfx_senders],
-        "hourly": [{"hour": r["hour"], "count": r["count"]} for r in hourly],
+        "hourly": [{"hour": r["hour"], "ts": r["ts"], "count": r["count"]} for r in hourly],
     }
 
 
@@ -312,14 +316,18 @@ def get_chat_analytics(since=None):
     """ + since_clause + " GROUP BY name ORDER BY count DESC LIMIT 15", since_params).fetchall()
 
     hourly = conn.execute("""
-        SELECT strftime('%H', timestamp_local) as hour, COUNT(*) as count
+        SELECT strftime('%H', timestamp_local) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
+            COUNT(*) as count
         FROM events WHERE event_type = 'chat:message'
-    """ + since_clause + " GROUP BY hour ORDER BY hour", since_params).fetchall()
+            AND timestamp_local >= datetime('now', '-24 hours')
+        GROUP BY hour ORDER BY hour
+    """).fetchall()
 
     return {
         "total": total,
         "top_chatters": [{"name": r["name"], "count": r["count"]} for r in top_chatters],
-        "hourly": [{"hour": r["hour"], "count": r["count"]} for r in hourly],
+        "hourly": [{"hour": r["hour"], "ts": r["ts"], "count": r["count"]} for r in hourly],
     }
 
 
@@ -744,17 +752,19 @@ def get_peak_hours():
 
     hourly = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
             SUM(CASE WHEN event_type = 'tts:update' THEN 1 ELSE 0 END) as tts,
             SUM(CASE WHEN event_type = 'sfx:update' THEN 1 ELSE 0 END) as sfx,
             SUM(CASE WHEN event_type LIKE 'fishtoy%%' THEN 1 ELSE 0 END) as fishtoys,
             COUNT(*) as total
         FROM events
-        WHERE event_type IN ('tts:update', 'sfx:update')
-            OR event_type LIKE 'fishtoy%%'
+        WHERE (event_type IN ('tts:update', 'sfx:update')
+            OR event_type LIKE 'fishtoy%%')
+            AND timestamp_local >= datetime('now', '-24 hours')
         GROUP BY hour ORDER BY hour
     """).fetchall()
 
-    hours = [{"hour": r["hour"], "tts": r["tts"],
+    hours = [{"hour": r["hour"], "ts": r["ts"], "tts": r["tts"],
               "sfx": r["sfx"], "fishtoys": r["fishtoys"], "total": r["total"]}
              for r in hourly]
 
@@ -768,8 +778,8 @@ def get_peak_hours():
 
     return {
         "hourly": hours,
-        "peak": [{"hour": h["hour"], "total": h["total"]} for h in peak],
-        "quietest": [{"hour": h["hour"], "total": h["total"]} for h in quietest],
+        "peak": [{"hour": h["hour"], "ts": h["ts"], "total": h["total"]} for h in peak],
+        "quietest": [{"hour": h["hour"], "ts": h["ts"], "total": h["total"]} for h in quietest],
     }
 
 
@@ -794,12 +804,14 @@ def _sentiment_base(conn, type_clause, since=None):
 
     hourly = conn.execute(f"""
         SELECT strftime('%H', timestamp_local) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
             AVG(CAST(json_extract(data, '$.sentiment') AS REAL)) as avg_sentiment,
             COUNT(*) as message_count
         FROM events
-        WHERE {base_where}{since_clause}
+        WHERE {base_where}
+            AND timestamp_local >= datetime('now', '-24 hours')
         GROUP BY hour ORDER BY hour
-    """, params).fetchall()
+    """).fetchall()
 
     overall_row = conn.execute(f"""
         SELECT
@@ -822,7 +834,7 @@ def _sentiment_base(conn, type_clause, since=None):
     }
 
     return {
-        "hourly": [{"hour": r["hour"], "avg_sentiment": round(r["avg_sentiment"], 4), "message_count": r["message_count"]} for r in hourly],
+        "hourly": [{"hour": r["hour"], "ts": r["ts"], "avg_sentiment": round(r["avg_sentiment"], 4), "message_count": r["message_count"]} for r in hourly],
         "overall": overall,
         "label": _mood_label(avg),
     }
