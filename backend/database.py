@@ -85,6 +85,10 @@ def init_db():
         "cost INTEGER",
         "display_name TEXT",
         "target TEXT",
+        "room TEXT",
+        "metadata TEXT",
+        "item_id TEXT",
+        "feature TEXT",
     ]:
         try:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col}")
@@ -103,6 +107,14 @@ def init_db():
             WHERE target IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_events_ext_sender_ts ON events(event_type, timestamp_local, display_name)
             WHERE display_name IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_ext_room ON events(event_type, room)
+            WHERE room IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_ext_metadata ON events(event_type, metadata)
+            WHERE metadata IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_ext_item_id ON events(event_type, item_id)
+            WHERE item_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_ext_feature ON events(event_type, feature)
+            WHERE feature IS NOT NULL;
     """)
     conn.commit()
 
@@ -114,10 +126,11 @@ def backfill_extracted_columns(batch_size=1000):
     parsing all JSON blobs in C (which OOM-killed the 1GB container at 5k batch size).
     """
     conn = _get_conn()
-    # Check if backfill is needed: look for a TTS event with NULL cost column
+    # Check if backfill is needed: look for events with NULL extracted columns
     sample = conn.execute("""
         SELECT id FROM events
-        WHERE event_type = 'tts:update' AND cost IS NULL
+        WHERE (event_type = 'tts:update' AND cost IS NULL)
+           OR (event_type = 'feature-toggles:update' AND feature IS NULL)
         LIMIT 1
     """).fetchone()
     if not sample:
@@ -140,11 +153,12 @@ def backfill_extracted_columns(batch_size=1000):
                 data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
             except (json.JSONDecodeError, TypeError):
                 data = {}
-            sentiment, cost, display_name, target = _extract_columns(row["event_type"], data)
+            sentiment, cost, display_name, target, room, metadata_val, item_id_val, feature = _extract_columns(row["event_type"], data)
             conn.execute("""
-                UPDATE events SET sentiment = ?, cost = ?, display_name = ?, target = ?
+                UPDATE events SET sentiment = ?, cost = ?, display_name = ?, target = ?,
+                    room = ?, metadata = ?, item_id = ?, feature = ?
                 WHERE id = ?
-            """, (sentiment, cost, display_name, target, row["id"]))
+            """, (sentiment, cost, display_name, target, room, metadata_val, item_id_val, feature, row["id"]))
 
         conn.commit()
         total += len(rows)
@@ -157,7 +171,7 @@ def backfill_extracted_columns(batch_size=1000):
 def _extract_columns(event_type, data):
     """Extract denormalized columns from event data dict."""
     if not isinstance(data, dict):
-        return None, None, None, None
+        return None, None, None, None, None, None, None, None
     sentiment = data.get("sentiment")
     cost_raw = data.get("cost")
     cost = int(cost_raw) if cost_raw is not None else None
@@ -165,7 +179,17 @@ def _extract_columns(event_type, data):
     if not display_name and isinstance(data.get("user"), dict):
         display_name = data["user"].get("displayName")
     target = data.get("target")
-    return sentiment, cost, display_name, target
+    room = data.get("room")
+    metadata_val = data.get("metadata")
+    if metadata_val in (None, "null", ""):
+        metadata_val = None
+    elif not isinstance(metadata_val, str):
+        metadata_val = json.dumps(metadata_val)
+    item_id_val = data.get("itemId")
+    if item_id_val is not None:
+        item_id_val = str(item_id_val)
+    feature = data.get("feature")
+    return sentiment, cost, display_name, target, room, metadata_val, item_id_val, feature
 
 
 def store_event(event_type: str, data):
@@ -179,11 +203,11 @@ def store_event(event_type: str, data):
 
     now = datetime.now(timezone.utc).isoformat()
     data_json = json.dumps(data, ensure_ascii=False, default=str)
-    sentiment, cost, display_name, target = _extract_columns(event_type, data)
+    sentiment, cost, display_name, target, room, metadata_val, item_id_val, feature = _extract_columns(event_type, data)
 
     cursor = conn.execute(
-        "INSERT INTO events (event_type, event_id, timestamp_server, timestamp_local, data, sentiment, cost, display_name, target) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (event_type, str(event_id) if event_id else None, timestamp_server, now, data_json, sentiment, cost, display_name, target),
+        "INSERT INTO events (event_type, event_id, timestamp_server, timestamp_local, data, sentiment, cost, display_name, target, room, metadata, item_id, feature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (event_type, str(event_id) if event_id else None, timestamp_server, now, data_json, sentiment, cost, display_name, target, room, metadata_val, item_id_val, feature),
     )
     conn.commit()
     return cursor.lastrowid
@@ -412,11 +436,11 @@ def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0):
         params.append(target)
 
     if item_id:
-        conditions.append("json_extract(data, '$.itemId') = ?")
+        conditions.append("item_id = ?")
         params.append(str(item_id))
 
     if search:
-        conditions.append("(json_extract(data, '$.metadata') LIKE ? OR display_name LIKE ?)")
+        conditions.append("(metadata LIKE ? OR display_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
 
     query += " WHERE " + " AND ".join(conditions)
@@ -554,10 +578,10 @@ def get_tts_sfx_analytics(since=None):
         since_params = [since]
 
     top_rooms = conn.execute("""
-        SELECT json_extract(data, '$.room') as room, COUNT(*) as count
+        SELECT room, COUNT(*) as count
         FROM events WHERE event_type IN ('tts:update', 'sfx:update')
-            AND json_extract(data, '$.room') IS NOT NULL
-    """ + since_clause + " GROUP BY json_extract(data, '$.room') ORDER BY count DESC LIMIT 10", since_params).fetchall()
+            AND room IS NOT NULL
+    """ + since_clause + " GROUP BY room ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
     top_tts_senders = conn.execute("""
         SELECT display_name as sender, COUNT(*) as count,
@@ -637,9 +661,7 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
     conn = _get_conn()
     conditions = [
         "event_type LIKE 'fishtoy%'",
-        "json_extract(data, '$.metadata') IS NOT NULL",
-        "json_extract(data, '$.metadata') != 'null'",
-        "json_extract(data, '$.metadata') != ''",
+        "metadata IS NOT NULL",
     ]
     params = []
 
@@ -648,7 +670,7 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
         params.append(target)
 
     if search:
-        conditions.append("json_extract(data, '$.metadata') LIKE ?")
+        conditions.append("metadata LIKE ?")
         params.append(f"%{search}%")
 
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
@@ -859,9 +881,7 @@ def search_user(username, limit=500):
 def suggest_users(prefix, limit=10):
     """Return distinct displayNames matching a prefix (case-insensitive).
 
-    Uses COLLATE NOCASE on the json_extract expression directly so SQLite can use
-    the covering indexes for prefix LIKE lookups, and avoids the broken LOWER(alias)
-    pattern which referenced a SELECT alias in WHERE (undefined behaviour in SQLite).
+    Uses COLLATE NOCASE on the display_name extracted column for prefix LIKE lookups.
     """
     conn = _get_conn()
     prefix_pattern = prefix + "%"
@@ -958,8 +978,9 @@ def get_latest_feature_toggles():
     rows = conn.execute("""
         SELECT e.data FROM events e
         INNER JOIN (
-            SELECT json_extract(data, '$.feature') as feature, MAX(id) as max_id
+            SELECT feature, MAX(id) as max_id
             FROM events WHERE event_type = 'feature-toggles:update'
+                AND feature IS NOT NULL
             GROUP BY feature
         ) latest ON e.id = latest.max_id
     """).fetchall()
@@ -1011,7 +1032,7 @@ def purge_system_chat():
     conn = _get_conn()
     result = conn.execute("""
         DELETE FROM events WHERE event_type = 'chat:message'
-        AND LOWER(json_extract(data, '$.user.displayName')) IN ('tts', 'sfx', 'emote')
+        AND LOWER(display_name) IN ('tts', 'sfx', 'emote')
     """)
     deleted = result.rowcount
     conn.commit()
