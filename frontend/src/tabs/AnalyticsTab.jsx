@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { TrendingUp, Volume2, MessageSquare, Users, Zap, Fish } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
 
@@ -124,7 +124,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
   }, [stockPeriod, ttsPeriod, chatPeriod])
 
   // Build per-ticker reference prices from filtered stock history
-  const stockRefPrices = (() => {
+  const stockRefPrices = useMemo(() => {
     if (!stockPeriod || stockHistory.length === 0) return null
     const ref = {}
     // stockHistory is ordered DESC, so the last entry per ticker is the earliest in the window
@@ -132,7 +132,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       ref[snap.ticker] = snap.price
     }
     return ref
-  })()
+  }, [stockPeriod, stockHistory])
 
   const getStockChange = (s) => {
     if (stockRefPrices && stockRefPrices[s.tickerSymbol] != null) {
@@ -145,20 +145,22 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
     ? STOCK_TIME_OPTIONS.find(f => f.id === stockPeriod)?.label || stockPeriod
     : 'today'
 
-  const sortedStocks = [...stocks].sort((a, b) => {
+  const stockMap = useMemo(() => new Map(stocks.map(s => [s.tickerSymbol, s])), [stocks])
+
+  const sortedStocks = useMemo(() => [...stocks].sort((a, b) => {
     if (stockSort === 'up') return getStockChange(b) - getStockChange(a)
     if (stockSort === 'down') return getStockChange(a) - getStockChange(b)
     return b.currentPrice - a.currentPrice
-  })
+  }), [stocks, stockSort, stockRefPrices])
 
-  const sortedContestants = [...contestants].sort((a, b) => {
+  const sortedContestants = useMemo(() => [...contestants].sort((a, b) => {
     if (contestantSort === 'stox') {
-      const aStock = a.tickerSymbol ? stocks.find(s => s.tickerSymbol === a.tickerSymbol) : null
-      const bStock = b.tickerSymbol ? stocks.find(s => s.tickerSymbol === b.tickerSymbol) : null
+      const aStock = a.tickerSymbol ? stockMap.get(a.tickerSymbol) : null
+      const bStock = b.tickerSymbol ? stockMap.get(b.tickerSymbol) : null
       return (bStock?.currentPrice || 0) - (aStock?.currentPrice || 0)
     }
     return (b.endorsements || 0) - (a.endorsements || 0)
-  })
+  }), [contestants, contestantSort, stockMap])
 
   const fishtoyToggle = featureToggles.fishtoys
   const ttsToggle = featureToggles.tts

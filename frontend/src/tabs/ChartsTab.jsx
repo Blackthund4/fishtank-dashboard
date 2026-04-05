@@ -176,7 +176,8 @@ export default function ChartsTab({ stocks }) {
     const incoming = Object.keys(stockData)
     if (incoming.length === 0) return
     setAllSeenTickers(prev => {
-      const newOnes = incoming.filter(t => !prev.includes(t))
+      const prevSet = new Set(prev)
+      const newOnes = incoming.filter(t => !prevSet.has(t))
       return newOnes.length > 0 ? [...prev, ...newOnes].sort() : prev
     })
     setStockToggles(prev => {

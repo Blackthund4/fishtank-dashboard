@@ -318,8 +318,16 @@ def reconnect_loop():
         backoff = min(backoff * 2, 60)  # Exponential backoff up to 60s
 
 
+_profile_cache = {}  # user_id -> (timestamp, result)
+_PROFILE_CACHE_TTL = 3600  # 1 hour
+
 def _fetch_user_profile(user_id):
-    """Fetch displayName and color for a user from fishtank API."""
+    """Fetch displayName and color for a user from fishtank API (cached 1h)."""
+    import time
+    now = time.time()
+    cached = _profile_cache.get(user_id)
+    if cached and now - cached[0] < _PROFILE_CACHE_TTL:
+        return cached[1]
     session = auth.get_session()
     try:
         resp = session.get(f"https://www.fishtank.live/api/v1/profile/{user_id}", timeout=5)
@@ -331,6 +339,7 @@ def _fetch_user_profile(user_id):
                 result["displayName"] = profile["displayName"]
             if profile.get("color"):
                 result["color"] = profile["color"]
+            _profile_cache[user_id] = (now, result)
             return result
     except Exception as e:
         print(f"[!] Failed to fetch profile for {user_id}: {e}")
