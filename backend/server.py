@@ -318,6 +318,24 @@ def reconnect_loop():
         backoff = min(backoff * 2, 60)  # Exponential backoff up to 60s
 
 
+def _fetch_user_profile(user_id):
+    """Fetch displayName and color for a user from fishtank API."""
+    try:
+        resp = auth.session.get(f"https://www.fishtank.live/api/v1/profile/{user_id}", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            profile = data.get("profile", data)
+            result = {}
+            if profile.get("displayName"):
+                result["displayName"] = profile["displayName"]
+            if profile.get("color"):
+                result["color"] = profile["color"]
+            return result
+    except Exception as e:
+        print(f"[!] Failed to fetch profile for {user_id}: {e}")
+    return {}
+
+
 # ============================================================
 # BROWSER WEBSOCKET CLIENTS
 # ============================================================
@@ -465,6 +483,14 @@ def make_event_handler(evt):
         if evt == "feature-toggles:update":
             _track_feature_toggle(data)
 
+        # Enrich superchat with displayName if missing
+        if evt == "super-chat:new" and isinstance(data, dict) and not data.get("displayName"):
+            user_id = data.get("userId")
+            if user_id:
+                profile = _fetch_user_profile(user_id)
+                if profile:
+                    data.update(profile)
+
         # Score sentiment for chat and TTS messages
         if isinstance(data, dict):
             if evt in ("chat:message", "tts:update"):
@@ -492,6 +518,13 @@ def make_event_handler(evt):
             summary = " | ".join(parts)
         elif "stock:" in evt and isinstance(data, dict):
             summary = f"{data.get('tickerSymbol', '?')} {str(data)[:80]}"
+        elif evt == "super-chat:new" and isinstance(data, dict):
+            name = data.get("displayName", data.get("userId", "?"))
+            cost = data.get("cost", "?")
+            dur = data.get("duration", "?")
+            summary = f"{name} ({cost}t, {dur}min): {str(data.get('message', ''))[:60]}"
+        elif evt == "super-chat:delete" and isinstance(data, dict):
+            summary = f"Deleted SC {data.get('id', '?')}"
         elif ("tts:price" in evt or "sfx:price" in evt):
             summary = str(data)[:80]
         elif ("tts" in evt or "sfx" in evt) and isinstance(data, dict):
@@ -615,6 +648,41 @@ def load_catalog():
                 print(f"[OK] Loaded {len(toggles)} feature toggle states: {', '.join(status_parts)}")
         except Exception as e:
             print(f"[WARN] Could not load feature toggles: {e}")
+    finally:
+        session.close()
+
+
+def seed_superchats_from_rest():
+    """Fetch active superchats from REST API and store any we haven't seen via Socket.IO."""
+    if not auth.is_configured:
+        return
+    session = auth.get_session()
+    try:
+        r = session.get("https://api.fishtank.live/v1/super-chat", timeout=10)
+        if r.status_code != 200:
+            print(f"[WARN] Superchat seed: HTTP {r.status_code}")
+            return
+        data = r.json()
+        chats = data if isinstance(data, list) else data.get("superChats", [])
+        if not chats:
+            return
+        known_ids = database.get_known_superchat_ids()
+        new_count = 0
+        for sc in chats:
+            sc_id = str(sc.get("id", ""))
+            if not sc_id or sc_id in known_ids:
+                continue
+            # Enrich displayName if missing
+            if not sc.get("displayName") and sc.get("userId"):
+                profile = _fetch_user_profile(sc["userId"])
+                if profile:
+                    sc.update(profile)
+            database.store_event("super-chat:new", sc)
+            new_count += 1
+        if new_count:
+            print(f"[OK] Seeded {new_count} superchats from REST API")
+    except Exception as e:
+        print(f"[WARN] Superchat seed failed: {e}")
     finally:
         session.close()
 
@@ -822,6 +890,9 @@ async def lifespan(app: FastAPI):
 
     # Load item catalog and contestants from fishtank API
     load_catalog()
+
+    # Seed any active superchats from REST (may be missed if server restarted)
+    seed_superchats_from_rest()
 
     # Start fishclient reconnect loop (Socket.IO for chat/TTS/SFX/polls/notifications)
     Thread(target=reconnect_loop, daemon=True).start()
@@ -1117,6 +1188,15 @@ def api_fishtoy_availability():
         for v in _item_catalog.values()
         if v.get("type") in CAPTURE_TYPES
     ]
+
+
+@app.get("/api/superchats")
+def api_superchats(
+    limit: int = Query(50, le=500),
+    since: str = Query(None, description="ISO timestamp to filter from"),
+):
+    """Get superchat events with deletion status."""
+    return database.get_superchats(limit=limit, since=since)
 
 
 @app.get("/api/targets")

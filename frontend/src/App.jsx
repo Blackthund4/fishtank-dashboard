@@ -20,6 +20,7 @@ const ACTIVITY_TYPES = new Set([
   'happening', 'item:new', 'item:update',
   'item-details:new', 'item-details:update',
 ])
+// super-chat:new handled by dedicated handler before ACTIVITY_TYPES check
 const NOTIFICATION_TYPES = new Set(['notification:global', 'announcement'])
 const SYSTEM_TYPES = new Set([
   'tts:price', 'sfx:price', 'stock:update', 'stock:new',
@@ -142,6 +143,8 @@ export default function App() {
   const [fishtoyStatus, setFishtoyStatus] = useState([])
   const [fishtoyFilter, setFishtoyFilter] = useState('enabled')
   const [allTargets, setAllTargets] = useState([])
+  const [activeSuperchats, setActiveSuperchats] = useState([])
+  const [activityFilter, setActivityFilter] = useState('all')
   const directorRef = useRef(null)
   // Load catalog + historical data on mount
   useEffect(() => {
@@ -181,8 +184,14 @@ export default function App() {
       })
       .catch(() => {})
 
-    // Fetch activity (TTS/SFX/happening) separately so chat doesn't crowd them out
-    fetch('/api/events?type=tts:update,sfx:update,happening&limit=500')
+    // Fetch active superchats for pinned banners
+    fetch('/api/superchats?limit=50')
+      .then(r => r.json())
+      .then(data => setActiveSuperchats(data.filter(sc => !sc.deleted)))
+      .catch(() => {})
+
+    // Fetch activity (TTS/SFX/happening/superchat) separately so chat doesn't crowd them out
+    fetch('/api/events?type=tts:update,sfx:update,happening,super-chat:new&limit=500')
       .then(r => r.json())
       .then(events => {
         setActivity(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
@@ -264,6 +273,17 @@ export default function App() {
         const cost = msg.data?.cost || 0
         setSessionStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
         setStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
+        // Add to activity feed
+        setActivity(prev => [item, ...prev].slice(0, MAX_EVENTS))
+        // Add to pinned superchats (dedup by id)
+        const scId = String(msg.data?.id || msg.db_id)
+        setActiveSuperchats(prev => {
+          if (prev.some(sc => String(sc.data?.id || sc.id) === scId)) return prev
+          return [{ id: msg.db_id, data: msg.data, deleted: false }, ...prev]
+        })
+      } else if (msg.event_type === 'super-chat:delete') {
+        const deleteId = String(msg.data?.id || '')
+        setActiveSuperchats(prev => prev.filter(sc => String(sc.data?.id || sc.id) !== deleteId))
       } else if (msg.event_type === 'poll:start') {
         const pollData = msg.data?.poll || msg.data
         setActivePoll({
@@ -345,7 +365,13 @@ export default function App() {
 
   // Sorted chat and activity arrays
   const sortedChats = useMemo(() => sortByTimestamp(chats), [chats])
-  const sortedActivity = useMemo(() => sortByTimestamp(activity), [activity])
+  const sortedActivity = useMemo(() => {
+    let filtered = activity
+    if (activityFilter === 'tts') filtered = activity.filter(a => a.event === 'tts:update')
+    else if (activityFilter === 'sfx') filtered = activity.filter(a => a.event === 'sfx:update')
+    else if (activityFilter === 'sc') filtered = activity.filter(a => a.event === 'super-chat:new')
+    return sortByTimestamp(filtered)
+  }, [activity, activityFilter])
 
   // Unique item types seen in fishtoys for filter dropdown
   const seenItemTypes = useMemo(() => {
@@ -914,7 +940,42 @@ export default function App() {
 
           {/* Bottom: Chat + Activity side by side */}
           <div className="flex-1 flex flex-col md:flex-row gap-2 min-h-0">
-            <Panel title="Chat (Season Pass)" icon={MessageSquare} count={stats.chats} className="flex-1">
+            <Panel
+              title="Chat (Season Pass)"
+              icon={MessageSquare}
+              count={stats.chats}
+              className="flex-1"
+              extra={activeSuperchats.length > 0 ? (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
+                  {activeSuperchats.length} pinned
+                </span>
+              ) : null}
+            >
+              {/* Pinned superchat banners */}
+              {activeSuperchats.length > 0 && (
+                <div className="space-y-1 mb-2">
+                  {activeSuperchats.map(sc => {
+                    const d = sc.data || {}
+                    return (
+                      <div key={sc.id || d.id} className="p-2 rounded border border-amber-500/30 bg-amber-500/5">
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-500/10 text-amber-400">SC</span>
+                          <span className="text-xs font-medium text-amber-300">{d.displayName || d.userId || '?'}</span>
+                          {d.cost > 0 && (
+                            <span className="text-[10px] font-mono text-tank-warn">{d.cost}t</span>
+                          )}
+                          {d.duration && (
+                            <span className="text-[9px] font-mono text-tank-muted ml-auto">{d.duration}min</span>
+                          )}
+                        </div>
+                        {d.message && (
+                          <p className="text-xs text-tank-bright break-words">{d.message}</p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
               {sortedChats.length === 0 ? (
                 <EmptyState text="Waiting for chat messages..." />
               ) : (
@@ -924,9 +985,38 @@ export default function App() {
               )}
             </Panel>
 
-            <Panel title="Activity" icon={Radio} count={stats.tts + stats.sfx} className="w-full md:w-[340px] md:shrink-0">
+            <Panel
+              title="Activity"
+              icon={Radio}
+              count={stats.tts + stats.sfx}
+              className="w-full md:w-[340px] md:shrink-0"
+              extra={
+                <div className="flex gap-1">
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'tts', label: 'TTS' },
+                    { id: 'sfx', label: 'SFX' },
+                    { id: 'sc', label: 'SC' },
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => setActivityFilter(f.id)}
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                        activityFilter === f.id
+                          ? f.id === 'sc'
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                            : 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                          : 'text-tank-muted hover:text-tank-text'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              }
+            >
               {sortedActivity.length === 0 ? (
-                <EmptyState text="Waiting for TTS / SFX / events..." />
+                <EmptyState text={activityFilter !== 'all' ? `No ${activityFilter.toUpperCase()} events yet` : "Waiting for TTS / SFX / events..."} />
               ) : (
                 sortedActivity.map((item) => (
                   <ActivityCard key={item.dbId || item.data?.id} data={item.data} eventType={item.event} roomMap={roomMap} />

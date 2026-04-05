@@ -1,4 +1,4 @@
-import { Volume2, Music, Zap, Info } from 'lucide-react'
+import { Volume2, Music, Zap, Info, Star } from 'lucide-react'
 import { formatTime } from '../utils/formatTime'
 
 const EVENT_CONFIG = {
@@ -7,6 +7,7 @@ const EVENT_CONFIG = {
   'happening': { icon: Zap, color: 'text-tank-warn', bg: 'bg-orange-500/10', label: 'Happening' },
   'item:new': { icon: Info, color: 'text-cyan-400', bg: 'bg-cyan-500/10', label: 'New Item' },
   'item:update': { icon: Info, color: 'text-cyan-400', bg: 'bg-cyan-500/10', label: 'Item Update' },
+  'super-chat:new': { icon: Star, color: 'text-amber-400', bg: 'bg-amber-500/10', label: 'SC' },
 }
 
 export default function ActivityCard({ data, eventType, roomMap = {} }) {
@@ -48,6 +49,11 @@ export default function ActivityCard({ data, eventType, roomMap = {} }) {
           {data.target && (
             <span className="text-[10px] text-tank-muted">
               Target: <span className="text-tank-warn">{data.target}</span>
+            </span>
+          )}
+          {data.duration && (
+            <span className="text-[10px] text-tank-muted">
+              Duration: <span className="text-amber-400">{data.duration}min</span>
             </span>
           )}
           {data.room && (

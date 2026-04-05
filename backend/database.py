@@ -591,6 +591,49 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
 
 
 # ============================================================
+# SUPERCHATS
+# ============================================================
+
+
+def get_superchats(limit=50, since=None):
+    """Get super-chat:new events with deletion status resolved at query time."""
+    conn = _get_conn()
+    since_clause = ""
+    since_params = []
+    if since:
+        since_clause = " AND sc.timestamp_local >= ?"
+        since_params = [since]
+
+    rows = conn.execute("""
+        SELECT sc.id, sc.event_id, sc.timestamp_local, sc.data,
+            CASE WHEN del.id IS NOT NULL THEN 1 ELSE 0 END as deleted
+        FROM events sc
+        LEFT JOIN events del ON del.event_type = 'super-chat:delete'
+            AND del.event_id = sc.event_id
+        WHERE sc.event_type = 'super-chat:new'
+    """ + since_clause + " ORDER BY sc.id DESC LIMIT ?", since_params + [limit]).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "event_id": row["event_id"],
+            "timestamp_local": row["timestamp_local"],
+            "data": json.loads(row["data"]),
+            "deleted": bool(row["deleted"]),
+        }
+        for row in rows
+    ]
+
+
+def get_known_superchat_ids():
+    """Return set of event_ids for all stored super-chat:new events."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT event_id FROM events WHERE event_type = 'super-chat:new' AND event_id IS NOT NULL"
+    ).fetchall()
+    return {r["event_id"] for r in rows}
+
+
+# ============================================================
 # POLLS
 # ============================================================
 
