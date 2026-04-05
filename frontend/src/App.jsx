@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react'
 import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star, TrendingUp } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
 import { useWebSocket } from './useWebSocket'
@@ -371,7 +371,7 @@ export default function App() {
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/feature-toggles').then(r => r.json()).then(setFeatureToggles).catch(() => {})
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
-    }, 30000)
+    }, 60000)
     return () => clearInterval(interval)
   }, [])
 
@@ -1390,128 +1390,7 @@ export default function App() {
         </div>
 
         {/* RIGHT: 24h sidebar */}
-        <div className="w-full md:w-[280px] md:shrink-0 overflow-y-auto bg-tank-surface border border-tank-border rounded-lg p-2.5">
-          <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">
-            Last 24 Hours
-          </h3>
-          <div className="space-y-1.5">
-            <StatRow label="Fishtoys" value={sessionStats.fishtoys} color="text-tank-accent" />
-            <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
-            <StatRow label="TTS" value={sessionStats.tts} color="text-purple-400" />
-            <StatRow label="SFX" value={sessionStats.sfx} color="text-indigo-400" />
-            {sessionStats.poll_tokens > 0 && (
-              <StatRow label="Poll Votes" value={sessionStats.poll_tokens.toLocaleString()} color="text-cyan-400" />
-            )}
-            {sessionStats.superchat_tokens > 0 && (
-              <StatRow label="Superchats" value={sessionStats.superchat_tokens.toLocaleString()} color="text-yellow-400" />
-            )}
-            <div className="w-full h-px bg-tank-border my-0.5" />
-            <StatRow label="Tokens" value={sessionStats.total_spend.toLocaleString()} color="text-tank-warn" />
-            <StatRow label="Est. Revenue" value={tokensToUSD(sessionStats.total_spend)} color="text-green-400" />
-          </div>
-
-          {/* Top Spenders (TTS, SFX & Fishtoys) */}
-          {sessionStats.top_senders && sessionStats.top_senders.length > 0 && (
-            <div className="border-t border-tank-border/50 pt-2 mt-2">
-              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Spenders (TTS, SFX & Fishtoys)</h4>
-              <div className="space-y-1">
-                {sessionStats.top_senders.slice(0, 5).map((s, i) => (
-                  <div key={s.name} className="flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
-                      <span className="text-tank-bright truncate">{s.name}</span>
-                    </div>
-                    <div className="flex flex-col items-end shrink-0">
-                      <span className="font-mono text-tank-warn text-[10px]">{s.spend.toLocaleString()}t</span>
-                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Top TTS */}
-          {sessionStats.top_tts_senders && sessionStats.top_tts_senders.length > 0 && (
-            <div className="border-t border-tank-border/50 pt-2 mt-2">
-              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top TTS</h4>
-              <div className="space-y-1">
-                {sessionStats.top_tts_senders.slice(0, 5).map((s, i) => (
-                  <div key={s.name} className="flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
-                      <span className="text-tank-bright truncate">{s.name}</span>
-                    </div>
-                    <div className="flex flex-col items-end shrink-0">
-                      <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spend.toLocaleString()}t</span>
-                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Top SFX */}
-          {sessionStats.top_sfx_senders && sessionStats.top_sfx_senders.length > 0 && (
-            <div className="border-t border-tank-border/50 pt-2 mt-2">
-              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top SFX</h4>
-              <div className="space-y-1">
-                {sessionStats.top_sfx_senders.slice(0, 5).map((s, i) => (
-                  <div key={s.name} className="flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
-                      <span className="text-tank-bright truncate">{s.name}</span>
-                    </div>
-                    <div className="flex flex-col items-end shrink-0">
-                      <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spend.toLocaleString()}t</span>
-                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Top Chat */}
-          {sessionStats.top_chat_senders && sessionStats.top_chat_senders.length > 0 && (
-            <div className="border-t border-tank-border/50 pt-2 mt-2">
-              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Chat</h4>
-              <div className="space-y-1">
-                {sessionStats.top_chat_senders.slice(0, 5).map((s, i) => (
-                  <div key={s.name} className="flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
-                      <span className="text-tank-bright truncate">{s.name}</span>
-                    </div>
-                    <span className="font-mono text-blue-400 shrink-0 text-[10px]">{s.count} msg</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Top Fishtoy */}
-          {sessionStats.top_fishtoy_senders && sessionStats.top_fishtoy_senders.length > 0 && (
-            <div className="border-t border-tank-border/50 pt-2 mt-2">
-              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Fishtoy</h4>
-              <div className="space-y-1">
-                {sessionStats.top_fishtoy_senders.slice(0, 5).map((s, i) => (
-                  <div key={s.name} className="flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
-                      <span className="text-tank-bright truncate">{s.name}</span>
-                    </div>
-                    <div className="flex flex-col items-end shrink-0">
-                      <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spend.toLocaleString()}t</span>
-                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+        <Last24hSidebar sessionStats={sessionStats} />
       </main>
       )}
 
@@ -1539,19 +1418,149 @@ export default function App() {
   )
 }
 
-function StatRow({ label, value, color = 'text-tank-bright' }) {
+function LeaderboardSection({ title, items, renderItem }) {
+  if (!items || items.length === 0) return null
+  return (
+    <div className="border-t border-tank-border/50 pt-2 mt-2">
+      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">{title}</h4>
+      <div className="space-y-1">
+        {items.map((s, i) => renderItem(s, i))}
+      </div>
+    </div>
+  )
+}
+
+const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
+  const formattedSpend = useMemo(() => ({
+    pollTokens: sessionStats.poll_tokens.toLocaleString(),
+    superchatTokens: sessionStats.superchat_tokens.toLocaleString(),
+    totalSpend: sessionStats.total_spend.toLocaleString(),
+    estRevenue: tokensToUSD(sessionStats.total_spend),
+  }), [sessionStats.poll_tokens, sessionStats.superchat_tokens, sessionStats.total_spend])
+
+  const topSenders = useMemo(() =>
+    (sessionStats.top_senders || []).slice(0, 5).map(s => ({
+      ...s, spendFmt: s.spend.toLocaleString(), usdFmt: tokensToUSD(s.spend)
+    })), [sessionStats.top_senders])
+
+  const topTTS = useMemo(() =>
+    (sessionStats.top_tts_senders || []).slice(0, 5).map(s => ({
+      ...s, spendFmt: s.spend.toLocaleString(), usdFmt: tokensToUSD(s.spend)
+    })), [sessionStats.top_tts_senders])
+
+  const topSFX = useMemo(() =>
+    (sessionStats.top_sfx_senders || []).slice(0, 5).map(s => ({
+      ...s, spendFmt: s.spend.toLocaleString(), usdFmt: tokensToUSD(s.spend)
+    })), [sessionStats.top_sfx_senders])
+
+  const topChat = useMemo(() =>
+    (sessionStats.top_chat_senders || []).slice(0, 5),
+    [sessionStats.top_chat_senders])
+
+  const topFishtoy = useMemo(() =>
+    (sessionStats.top_fishtoy_senders || []).slice(0, 5).map(s => ({
+      ...s, spendFmt: s.spend.toLocaleString(), usdFmt: tokensToUSD(s.spend)
+    })), [sessionStats.top_fishtoy_senders])
+
+  return (
+    <div className="w-full md:w-[280px] md:shrink-0 overflow-y-auto bg-tank-surface border border-tank-border rounded-lg p-2.5">
+      <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">
+        Last 24 Hours
+      </h3>
+      <div className="space-y-1.5">
+        <StatRow label="Fishtoys" value={sessionStats.fishtoys} color="text-tank-accent" />
+        <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
+        <StatRow label="TTS" value={sessionStats.tts} color="text-purple-400" />
+        <StatRow label="SFX" value={sessionStats.sfx} color="text-indigo-400" />
+        {sessionStats.poll_tokens > 0 && (
+          <StatRow label="Poll Votes" value={formattedSpend.pollTokens} color="text-cyan-400" />
+        )}
+        {sessionStats.superchat_tokens > 0 && (
+          <StatRow label="Superchats" value={formattedSpend.superchatTokens} color="text-yellow-400" />
+        )}
+        <div className="w-full h-px bg-tank-border my-0.5" />
+        <StatRow label="Tokens" value={formattedSpend.totalSpend} color="text-tank-warn" />
+        <StatRow label="Est. Revenue" value={formattedSpend.estRevenue} color="text-green-400" />
+      </div>
+
+      <LeaderboardSection title="Top Spenders (TTS, SFX & Fishtoys)" items={topSenders} renderItem={(s, i) => (
+        <div key={s.name} className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+            <span className="text-tank-bright truncate">{s.name}</span>
+          </div>
+          <div className="flex flex-col items-end shrink-0">
+            <span className="font-mono text-tank-warn text-[10px]">{s.spendFmt}t</span>
+            <span className="font-mono text-green-400 text-[9px]">{s.usdFmt}</span>
+          </div>
+        </div>
+      )} />
+
+      <LeaderboardSection title="Top TTS" items={topTTS} renderItem={(s, i) => (
+        <div key={s.name} className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+            <span className="text-tank-bright truncate">{s.name}</span>
+          </div>
+          <div className="flex flex-col items-end shrink-0">
+            <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spendFmt}t</span>
+            <span className="font-mono text-green-400 text-[9px]">{s.usdFmt}</span>
+          </div>
+        </div>
+      )} />
+
+      <LeaderboardSection title="Top SFX" items={topSFX} renderItem={(s, i) => (
+        <div key={s.name} className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+            <span className="text-tank-bright truncate">{s.name}</span>
+          </div>
+          <div className="flex flex-col items-end shrink-0">
+            <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spendFmt}t</span>
+            <span className="font-mono text-green-400 text-[9px]">{s.usdFmt}</span>
+          </div>
+        </div>
+      )} />
+
+      <LeaderboardSection title="Top Chat" items={topChat} renderItem={(s, i) => (
+        <div key={s.name} className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+            <span className="text-tank-bright truncate">{s.name}</span>
+          </div>
+          <span className="font-mono text-blue-400 shrink-0 text-[10px]">{s.count} msg</span>
+        </div>
+      )} />
+
+      <LeaderboardSection title="Top Fishtoy" items={topFishtoy} renderItem={(s, i) => (
+        <div key={s.name} className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+            <span className="text-tank-bright truncate">{s.name}</span>
+          </div>
+          <div className="flex flex-col items-end shrink-0">
+            <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spendFmt}t</span>
+            <span className="font-mono text-green-400 text-[9px]">{s.usdFmt}</span>
+          </div>
+        </div>
+      )} />
+    </div>
+  )
+})
+
+const StatRow = memo(function StatRow({ label, value, color = 'text-tank-bright' }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-xs text-tank-muted">{label}</span>
       <span className={`text-sm font-mono font-semibold ${color}`}>{value}</span>
     </div>
   )
-}
+})
 
-function EmptyState({ text }) {
+const EmptyState = memo(function EmptyState({ text }) {
   return (
     <div className="flex items-center justify-center h-full">
       <span className="text-xs text-tank-muted font-mono">{text}</span>
     </div>
   )
-}
+})
