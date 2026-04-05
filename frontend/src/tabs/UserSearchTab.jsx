@@ -1,4 +1,5 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useCallback } from 'react'
+import { Virtuoso } from 'react-virtuoso'
 import { Search, MessageSquare, Volume2, Music, Fish, User } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
 
@@ -139,43 +140,48 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
           </div>
 
           {/* Results */}
-          <div className="flex-1 overflow-y-auto space-y-1">
+          <div className="flex-1 min-h-0">
             {timeline.length === 0 ? (
               <div className="text-sm text-tank-muted font-mono py-8 text-center">
                 No {activeFilter === 'all' ? 'activity' : activeFilter} found for "{results.username}"
               </div>
             ) : (
-              timeline.map(item => (
-                <div key={`${item.type}-${item.id}`} className="flex items-start gap-2 p-2 bg-tank-surface border border-tank-border rounded hover:border-tank-accent/20 transition-colors">
-                  <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 mt-0.5 ${item.iconBg}`}>
-                    <item.icon className={`w-3.5 h-3.5 ${item.iconColor}`} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${item.badgeBg} ${item.badgeColor}`}>
-                        {item.badge}
-                      </span>
-                      <span className="text-[10px] font-mono text-tank-muted">{item.time}</span>
-                      {item.cost > 0 && (
-                        <span className="text-[10px] font-mono text-tank-warn">{item.cost}t</span>
-                      )}
-                      {item.room && (
-                        <span className="text-[10px] text-cyan-400">{item.room}</span>
-                      )}
-                      {item.target && (
-                        <span className="text-[10px] text-tank-warn">{item.target}</span>
+              <Virtuoso
+                style={{ height: '100%' }}
+                data={timeline}
+                overscan={100}
+                itemContent={(index, item) => (
+                  <div className="flex items-start gap-2 p-2 mb-1 bg-tank-surface border border-tank-border rounded hover:border-tank-accent/20 transition-colors">
+                    <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 mt-0.5 ${item.iconBg}`}>
+                      <item.icon className={`w-3.5 h-3.5 ${item.iconColor}`} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${item.badgeBg} ${item.badgeColor}`}>
+                          {item.badge}
+                        </span>
+                        <span className="text-[10px] font-mono text-tank-muted">{item.time}</span>
+                        {item.cost > 0 && (
+                          <span className="text-[10px] font-mono text-tank-warn">{item.cost}t</span>
+                        )}
+                        {item.room && (
+                          <span className="text-[10px] text-cyan-400">{item.room}</span>
+                        )}
+                        {item.target && (
+                          <span className="text-[10px] text-tank-warn">{item.target}</span>
+                        )}
+                      </div>
+                      <p className="text-sm text-tank-text break-words whitespace-pre-wrap">{item.content}</p>
+                      {item.metadata && (
+                        <div className="mt-1 bg-tank-bg border border-tank-accent/20 rounded px-2 py-1.5">
+                          <span className="text-[9px] font-mono text-tank-accent uppercase">Hidden Content</span>
+                          <p className="text-sm text-tank-bright break-words whitespace-pre-wrap">{item.metadata}</p>
+                        </div>
                       )}
                     </div>
-                    <p className="text-sm text-tank-text break-words whitespace-pre-wrap">{item.content}</p>
-                    {item.metadata && (
-                      <div className="mt-1 bg-tank-bg border border-tank-accent/20 rounded px-2 py-1.5">
-                        <span className="text-[9px] font-mono text-tank-accent uppercase">Hidden Content</span>
-                        <p className="text-sm text-tank-bright break-words whitespace-pre-wrap">{item.metadata}</p>
-                      </div>
-                    )}
                   </div>
-                </div>
-              ))
+                )}
+              />
             )}
           </div>
         </>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, memo, lazy, Suspense } from 'react'
 import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star, TrendingUp } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
 import { useWebSocket } from './useWebSocket'
@@ -8,10 +8,10 @@ import Panel from './components/Panel'
 import FishtoyCard from './components/FishtoyCard'
 import ChatMessage from './components/ChatMessage'
 import ActivityCard from './components/ActivityCard'
-import AnalyticsTab from './tabs/AnalyticsTab'
-import ChartsTab from './tabs/ChartsTab'
-import HiddenContentTab from './tabs/HiddenContentTab'
-import UserSearchTab from './tabs/UserSearchTab'
+const AnalyticsTab = lazy(() => import('./tabs/AnalyticsTab'))
+const ChartsTab = lazy(() => import('./tabs/ChartsTab'))
+const HiddenContentTab = lazy(() => import('./tabs/HiddenContentTab'))
+const UserSearchTab = lazy(() => import('./tabs/UserSearchTab'))
 
 const MAX_EVENTS = 500
 
@@ -1393,26 +1393,28 @@ export default function App() {
       </main>
       )}
 
-      {activeTab === 'analytics' && (
-        <AnalyticsTab
-          contestants={contestants}
-          roomMap={roomMap}
-          itemCatalog={itemCatalog}
-          featureToggles={featureToggles}
-        />
-      )}
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center text-sm text-tank-muted font-mono">Loading...</div>}>
+        {activeTab === 'analytics' && (
+          <AnalyticsTab
+            contestants={contestants}
+            roomMap={roomMap}
+            itemCatalog={itemCatalog}
+            featureToggles={featureToggles}
+          />
+        )}
 
-      {activeTab === 'charts' && (
-        <ChartsTab stocks={stocks} />
-      )}
+        {activeTab === 'charts' && (
+          <ChartsTab stocks={stocks} />
+        )}
 
-      {activeTab === 'hidden' && (
-        <HiddenContentTab itemCatalog={itemCatalog} />
-      )}
+        {activeTab === 'hidden' && (
+          <HiddenContentTab itemCatalog={itemCatalog} />
+        )}
 
-      {activeTab === 'users' && (
-        <UserSearchTab itemCatalog={itemCatalog} roomMap={roomMap} />
-      )}
+        {activeTab === 'users' && (
+          <UserSearchTab itemCatalog={itemCatalog} roomMap={roomMap} />
+        )}
+      </Suspense>
     </div>
   )
 }

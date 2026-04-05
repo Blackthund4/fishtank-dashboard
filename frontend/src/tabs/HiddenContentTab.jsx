@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { Virtuoso } from 'react-virtuoso'
 import { FileText, Search, X, ArrowRight } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
 
@@ -7,6 +8,7 @@ export default function HiddenContentTab({ itemCatalog }) {
   const [search, setSearch] = useState('')
   const [filterTarget, setFilterTarget] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [hasMore, setHasMore] = useState(true)
   const [targetData, setTargetData] = useState({ total: 0, targets: [] })
 
   // Fetch target counts from server (full DB)
@@ -17,25 +19,44 @@ export default function HiddenContentTab({ itemCatalog }) {
       .catch(() => {})
   }, [])
 
+  // Reset and fetch when filter/search changes
   useEffect(() => {
-    loadContent()
+    setItems([])
+    setHasMore(true)
+    loadPage(null)
   }, [filterTarget])
 
-  function loadContent() {
+  function loadPage(beforeId) {
     setLoading(true)
-    const params = new URLSearchParams({ limit: '1000' })
+    const params = new URLSearchParams({ limit: '200' })
     if (filterTarget) params.set('target', filterTarget)
     if (search.trim()) params.set('search', search.trim())
+    if (beforeId != null) params.set('offset', beforeId)
 
     fetch(`/api/hidden-content?${params}`)
       .then(r => r.json())
-      .then(data => { setItems(data); setLoading(false) })
+      .then(data => {
+        if (beforeId != null) {
+          setItems(prev => [...prev, ...data])
+        } else {
+          setItems(data)
+        }
+        setHasMore(data.length === 200)
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
   }
 
+  const loadMore = useCallback(() => {
+    if (loading || !hasMore || items.length === 0) return
+    loadPage(items.length)
+  }, [loading, hasMore, items.length, filterTarget, search])
+
   function handleSearch(e) {
     e.preventDefault()
-    loadContent()
+    setItems([])
+    setHasMore(true)
+    loadPage(null)
   }
 
   return (
@@ -74,49 +95,62 @@ export default function HiddenContentTab({ itemCatalog }) {
           </button>
         </form>
 
-        <div className="flex-1 overflow-y-auto space-y-2">
-          {loading ? (
+        <div className="flex-1 min-h-0">
+          {loading && items.length === 0 ? (
             <div className="text-xs text-tank-muted font-mono text-center py-8">Loading...</div>
           ) : items.length === 0 ? (
             <div className="text-xs text-tank-muted font-mono text-center py-8">No hidden content found</div>
           ) : (
-            items.map(e => {
-              const d = e.data || {}
-              const iid = String(d.itemId || '')
-              const cat = itemCatalog[iid]
-              const itemName = cat?.name || `Item #${iid}`
+            <Virtuoso
+              style={{ height: '100%' }}
+              data={items}
+              endReached={loadMore}
+              overscan={100}
+              itemContent={(index, e) => {
+                const d = e.data || {}
+                const iid = String(d.itemId || '')
+                const cat = itemCatalog[iid]
+                const itemName = cat?.name || `Item #${iid}`
 
-              return (
-                <div key={e.id} className="bg-tank-surface border border-tank-border rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-tank-bright">{d.displayName || '?'}</span>
-                      <span className="text-xs text-tank-muted">{itemName}</span>
-                      {d.target && (
-                        <>
-                          <ArrowRight className="w-3 h-3 text-tank-muted" />
-                          <button
-                            onClick={() => setFilterTarget(d.target)}
-                            className="text-xs text-tank-warn font-medium hover:underline"
-                          >
-                            {d.target}
-                          </button>
-                        </>
-                      )}
+                return (
+                  <div className="bg-tank-surface border border-tank-border rounded-lg p-3 mb-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-tank-bright">{d.displayName || '?'}</span>
+                        <span className="text-xs text-tank-muted">{itemName}</span>
+                        {d.target && (
+                          <>
+                            <ArrowRight className="w-3 h-3 text-tank-muted" />
+                            <button
+                              onClick={() => setFilterTarget(d.target)}
+                              className="text-xs text-tank-warn font-medium hover:underline"
+                            >
+                              {d.target}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] font-mono text-tank-muted">
+                        {d.cost > 0 && <span className="text-tank-warn">{d.cost}t</span>}
+                        <span>{formatDateTime(d.createdAt || d.updatedAt)}</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 text-[10px] font-mono text-tank-muted">
-                      {d.cost > 0 && <span className="text-tank-warn">{d.cost}t</span>}
-                      <span>{formatDateTime(d.createdAt || d.updatedAt)}</span>
+                    <div className="bg-tank-bg border border-tank-accent/20 rounded px-3 py-2">
+                      <p className="text-sm text-tank-bright leading-relaxed whitespace-pre-wrap break-words">
+                        {typeof d.metadata === 'object' ? JSON.stringify(d.metadata) : d.metadata}
+                      </p>
                     </div>
                   </div>
-                  <div className="bg-tank-bg border border-tank-accent/20 rounded px-3 py-2">
-                    <p className="text-sm text-tank-bright leading-relaxed whitespace-pre-wrap break-words">
-                      {typeof d.metadata === 'object' ? JSON.stringify(d.metadata) : d.metadata}
-                    </p>
-                  </div>
-                </div>
-              )
-            })
+                )
+              }}
+              components={{
+                Footer: () => loading ? (
+                  <div className="text-center text-[10px] text-tank-muted py-2">Loading more...</div>
+                ) : !hasMore && items.length > 0 ? (
+                  <div className="text-center text-[10px] text-tank-muted py-2">All content loaded</div>
+                ) : null,
+              }}
+            />
           )}
         </div>
       </div>
