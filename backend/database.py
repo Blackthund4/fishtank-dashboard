@@ -107,10 +107,14 @@ def init_db():
     conn.commit()
 
 
-def backfill_extracted_columns(batch_size=5000):
-    """Backfill extracted columns for existing rows. Processes in batches to limit memory."""
+def backfill_extracted_columns(batch_size=1000):
+    """Backfill extracted columns for existing rows. Processes in small batches to limit memory.
+
+    Uses Python-side extraction instead of json_extract in UPDATE to avoid SQLite
+    parsing all JSON blobs in C (which OOM-killed the 1GB container at 5k batch size).
+    """
     conn = _get_conn()
-    # Check if backfill is needed: look for a TTS event with cost in JSON but NULL in column
+    # Check if backfill is needed: look for a TTS event with NULL cost column
     sample = conn.execute("""
         SELECT id FROM events
         WHERE event_type = 'tts:update' AND cost IS NULL
@@ -126,20 +130,27 @@ def backfill_extracted_columns(batch_size=5000):
     total = 0
     for start in range(1, max_id + 1, batch_size):
         end = start + batch_size - 1
-        cursor = conn.execute("""
-            UPDATE events SET
-                sentiment = CAST(json_extract(data, '$.sentiment') AS REAL),
-                cost = CAST(json_extract(data, '$.cost') AS INTEGER),
-                display_name = COALESCE(
-                    json_extract(data, '$.displayName'),
-                    json_extract(data, '$.user.displayName')
-                ),
-                target = json_extract(data, '$.target')
+        rows = conn.execute("""
+            SELECT id, event_type, data FROM events
             WHERE id BETWEEN ? AND ?
-            AND cost IS NULL
-        """, (start, end))
-        total += cursor.rowcount
+        """, (start, end)).fetchall()
+
+        for row in rows:
+            try:
+                data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+            sentiment, cost, display_name, target = _extract_columns(row["event_type"], data)
+            conn.execute("""
+                UPDATE events SET sentiment = ?, cost = ?, display_name = ?, target = ?
+                WHERE id = ?
+            """, (sentiment, cost, display_name, target, row["id"]))
+
         conn.commit()
+        total += len(rows)
+        if total % 10000 == 0:
+            print(f"[...] Backfill progress: {total} events")
+
     return total
 
 

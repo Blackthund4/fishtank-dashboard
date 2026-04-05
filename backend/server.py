@@ -891,10 +891,12 @@ async def lifespan(app: FastAPI):
 
     database.init_db()
 
-    # Backfill extracted columns (one-time migration, batched to limit memory)
-    backfilled = database.backfill_extracted_columns()
-    if backfilled:
-        print(f"[OK] Backfilled extracted columns for {backfilled} events")
+    # Backfill extracted columns in background (one-time migration, batched)
+    def _run_backfill():
+        backfilled = database.backfill_extracted_columns()
+        if backfilled:
+            print(f"[OK] Backfilled extracted columns for {backfilled} events")
+    Thread(target=_run_backfill, daemon=True).start()
 
     # Load item catalog and contestants from fishtank API
     load_catalog()
