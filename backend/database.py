@@ -441,7 +441,7 @@ def get_stats(since=None):
     }
 
 
-def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0):
+def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0, before_id=None):
     """Get fishtoy events with optional filters."""
     conn = _get_conn()
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
@@ -460,9 +460,13 @@ def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0):
         conditions.append("(metadata LIKE ? OR display_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
 
+    if before_id is not None:
+        conditions.append("id < ?")
+        params.append(before_id)
+
     query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
 
     rows = conn.execute(query, params).fetchall()
     return [

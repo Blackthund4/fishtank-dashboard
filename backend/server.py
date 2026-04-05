@@ -1223,12 +1223,12 @@ def api_fishtoys(
     item_id: str = Query(None, description="Filter by item ID"),
     search: str = Query(None, description="Search metadata and sender name"),
     limit: int = Query(200, le=1000),
-    offset: int = Query(0, ge=0),
+    before_id: int = Query(None, description="Only return events with id < this (keyset pagination)"),
 ):
     """Get fishtoy events with optional filters."""
     return database.get_fishtoys(
         target=target, item_id=item_id, search=search,
-        limit=limit, offset=offset,
+        limit=limit, before_id=before_id,
     )
 
 

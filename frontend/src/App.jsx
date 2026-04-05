@@ -112,6 +112,8 @@ export default function App() {
   const [serverVersion, setServerVersion] = useState(null)
   const [knownVersion, setKnownVersion] = useState(null)
   const [fishtoys, setFishtoys] = useState([])
+  const [fishtoyHasMore, setFishtoyHasMore] = useState(true)
+  const [fishtoyLoading, setFishtoyLoading] = useState(false)
   const [chats, setChats] = useState([])
   const [activity, setActivity] = useState([])
   const [stats, setStats] = useState({
@@ -149,6 +151,7 @@ export default function App() {
   const [allTargets, setAllTargets] = useState([])
   const [activeSuperchats, setActiveSuperchats] = useState([])
   const [activityFilter, setActivityFilter] = useState('all')
+  const [systemFilter, setSystemFilter] = useState('all')
   const [activityTimeRange, setActivityTimeRange] = useState('all')
   const [activityHasMore, setActivityHasMore] = useState(true)
   const [activityLoading, setActivityLoading] = useState(false)
@@ -175,13 +178,7 @@ export default function App() {
       })))
     }).catch(() => {})
 
-    // Fetch fishtoys separately so they aren't crowded out by chat volume
-    fetch('/api/fishtoys?limit=500')
-      .then(r => r.json())
-      .then(events => {
-        setFishtoys(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
-      })
-      .catch(() => {})
+    // Fishtoys fetched by fishtoyApiParams effect (server-side filters + pagination)
 
     // Fetch chat messages
     fetch('/api/events?type=chat:message&limit=500')
@@ -255,7 +252,7 @@ export default function App() {
       const item = { event: msg.event_type, data: msg.data, dbId: msg.db_id }
 
       if (FISHTOY_TYPES.has(msg.event_type)) {
-        setFishtoys(prev => [item, ...prev].slice(0, MAX_EVENTS))
+        setFishtoys(prev => [item, ...prev])
         const cost = msg.data?.cost || 0
         setStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
         setSessionStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
@@ -368,20 +365,45 @@ export default function App() {
     return () => clearInterval(id)
   }, [activePoll?.startedAt, activePoll?.ended])
 
-  // Client-side filtered fishtoys (sorted by timestamp, newest first)
+  // Debounce search text for server fetches (300ms)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(searchText.trim()), 300)
+    return () => clearTimeout(id)
+  }, [searchText])
+
+  // Build fishtoy API URL from current server-side filters
+  const fishtoyApiParams = useMemo(() => {
+    const p = new URLSearchParams()
+    p.set('limit', '500')
+    if (filterTarget) p.set('target', filterTarget)
+    if (filterItemId) p.set('item_id', filterItemId)
+    if (debouncedSearch) p.set('search', debouncedSearch)
+    return p.toString()
+  }, [filterTarget, filterItemId, debouncedSearch])
+
+  // Re-fetch fishtoys when server-side filters change
+  useEffect(() => {
+    setFishtoyHasMore(true)
+    fetch(`/api/fishtoys?${fishtoyApiParams}`)
+      .then(r => r.json())
+      .then(events => {
+        setFishtoys(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
+        if (events.length < 500) setFishtoyHasMore(false)
+      })
+      .catch(() => {})
+  }, [fishtoyApiParams])
+
+  // Client-side filters: category (not a server param) + WS event guard for target/itemId/search
   const filteredFishtoys = useMemo(() => {
     let result = fishtoys
-    if (filterTarget) {
-      result = result.filter(f => f.data?.target === filterTarget)
-    }
+    if (filterTarget) result = result.filter(f => f.data?.target === filterTarget)
+    if (filterItemId) result = result.filter(f => String(f.data?.itemId) === String(filterItemId))
     if (filterCategory) {
       result = result.filter(f => {
         const cat = itemCatalog[String(f.data?.itemId || '')]
         return cat?.type === filterCategory
       })
-    }
-    if (filterItemId) {
-      result = result.filter(f => String(f.data?.itemId) === String(filterItemId))
     }
     if (searchText.trim()) {
       const q = searchText.toLowerCase()
@@ -394,6 +416,33 @@ export default function App() {
     }
     return sortByTimestamp(result)
   }, [fishtoys, filterTarget, filterCategory, filterItemId, searchText, itemCatalog])
+
+  const loadMoreFishtoys = useCallback(() => {
+    if (fishtoyLoading || !fishtoyHasMore) return
+    const minId = fishtoys.reduce((min, f) => {
+      const id = f.dbId
+      return id && (min === null || id < min) ? id : min
+    }, null)
+    if (minId === null) return
+    setFishtoyLoading(true)
+    fetch(`/api/fishtoys?${fishtoyApiParams}&before_id=${minId}`)
+      .then(r => r.json())
+      .then(events => {
+        if (events.length === 0) {
+          setFishtoyHasMore(false)
+        } else {
+          const newItems = events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))
+          setFishtoys(prev => {
+            const existingIds = new Set(prev.map(f => f.dbId).filter(Boolean))
+            const unique = newItems.filter(f => !existingIds.has(f.dbId))
+            return [...prev, ...unique]
+          })
+          if (events.length < 500) setFishtoyHasMore(false)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setFishtoyLoading(false))
+  }, [fishtoys, fishtoyLoading, fishtoyHasMore, fishtoyApiParams])
 
   // Sorted chat and activity arrays
   const sortedChats = useMemo(() => sortByTimestamp(chats), [chats])
@@ -687,19 +736,35 @@ export default function App() {
             )}
           </div>
           {/* Fishtoy list */}
-          <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+          <div className="flex-1 min-h-0">
             {filteredFishtoys.length === 0 ? (
-              <EmptyState text={hasActiveFilters ? "No fishtoys match filters" : "Waiting for fishtoy events..."} />
+              <div className="p-2">
+                <EmptyState text={hasActiveFilters ? "No fishtoys match filters" : "Waiting for fishtoy events..."} />
+              </div>
             ) : (
-              filteredFishtoys.map((item) => (
-                <FishtoyCard
-                  key={item.dbId || item.data?.id}
-                  data={item.data}
-                  eventType={item.event}
-                  itemCatalog={itemCatalog}
-                  onTargetClick={setFilterTarget}
-                />
-              ))
+              <Virtuoso
+                style={{ height: '100%' }}
+                data={filteredFishtoys}
+                endReached={loadMoreFishtoys}
+                overscan={200}
+                itemContent={(index, item) => (
+                  <div className="px-2 py-0.5">
+                    <FishtoyCard
+                      data={item.data}
+                      eventType={item.event}
+                      itemCatalog={itemCatalog}
+                      onTargetClick={setFilterTarget}
+                    />
+                  </div>
+                )}
+                components={{
+                  Footer: () => fishtoyLoading ? (
+                    <div className="text-center text-[10px] text-tank-muted py-2">Loading...</div>
+                  ) : !fishtoyHasMore ? (
+                    <div className="text-center text-[10px] text-tank-muted py-2">No more fishtoys</div>
+                  ) : null
+                }}
+              />
             )}
           </div>
         </div>
@@ -996,28 +1061,58 @@ export default function App() {
 
             {/* System Events */}
             <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Zap className="w-3.5 h-3.5 text-tank-muted" />
-                <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">System Events</h3>
-              </div>
-              {systemEvents.length > 0 ? (
-                <div className="space-y-0.5 max-h-[150px] overflow-y-auto">
-                  {systemEvents.map(e => {
-                    const fmt = formatSystemEvent(e)
-                    return (
-                      <div key={e.dbId} className="flex items-center gap-1.5 text-[10px] p-1 bg-tank-bg rounded">
-                        <span className={`font-mono text-[9px] px-1 py-0.5 rounded shrink-0 ${fmt.badgeClass}`}>
-                          {fmt.badge}
-                        </span>
-                        <span className="text-tank-text flex-1 truncate">{fmt.message}</span>
-                        {fmt.time && <span className="text-[9px] text-tank-muted font-mono shrink-0">{fmt.time}</span>}
-                      </div>
-                    )
-                  })}
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-3.5 h-3.5 text-tank-muted" />
+                  <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">System Events</h3>
                 </div>
-              ) : (
-                <div className="text-[10px] text-tank-muted font-mono">No system events yet</div>
-              )}
+                <div className="flex gap-0.5">
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'toggle', label: 'Toggle' },
+                    { id: 'stox', label: 'STO-X' },
+                    { id: 'price', label: 'Price' },
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => setSystemFilter(f.id)}
+                      className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                        systemFilter === f.id
+                          ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                          : 'text-tank-muted hover:text-tank-text'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {(() => {
+                const filtered = systemFilter === 'all' ? systemEvents
+                  : systemFilter === 'toggle' ? systemEvents.filter(e => e.event === 'feature-toggles:update')
+                  : systemFilter === 'stox' ? systemEvents.filter(e => e.event?.startsWith('stock:'))
+                  : systemEvents.filter(e => e.event === 'tts:price' || e.event === 'sfx:price')
+                return filtered.length > 0 ? (
+                  <div className="space-y-0.5 max-h-[150px] overflow-y-auto">
+                    {filtered.map(e => {
+                      const fmt = formatSystemEvent(e)
+                      return (
+                        <div key={e.dbId} className="flex items-center gap-1.5 text-[10px] p-1 bg-tank-bg rounded">
+                          <span className={`font-mono text-[9px] px-1 py-0.5 rounded shrink-0 ${fmt.badgeClass}`}>
+                            {fmt.badge}
+                          </span>
+                          <span className="text-tank-text flex-1 truncate">{fmt.message}</span>
+                          {fmt.time && <span className="text-[9px] text-tank-muted font-mono shrink-0">{fmt.time}</span>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-tank-muted font-mono">
+                    {systemFilter !== 'all' ? `No ${systemFilter} events` : 'No system events yet'}
+                  </div>
+                )
+              })()}
             </div>
           </div>
 
