@@ -138,11 +138,61 @@ def get_stats(since=None):
         FROM events WHERE event_type LIKE 'fishtoy%%'
     """ + since_clause, since_params).fetchone()
 
+    # Scoped to cost-bearing event types only — scanning all events with json_extract
+    # on a 600k+ row DB took ~10s per call. Do not revert to WHERE 1=1.
     all_spend = conn.execute("""
-        SELECT COALESCE(SUM(CASE WHEN json_extract(data, '$.cost') IS NOT NULL
-            THEN CAST(json_extract(data, '$.cost') AS INTEGER) ELSE 0 END), 0) as total
-        FROM events WHERE 1=1
+        SELECT COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total
+        FROM events WHERE (event_type IN ('tts:update', 'sfx:update', 'super-chat:new')
+            OR event_type LIKE 'fishtoy%')
     """ + since_clause, since_params).fetchone()
+
+    # Poll token spend: sum final vote scores for each completed poll
+    poll_tokens_rows = conn.execute("""
+        SELECT
+            (SELECT COALESCE(SUM(json_extract(v.value, '$.score')), 0)
+             FROM json_each(
+                 COALESCE(
+                     (SELECT data FROM events WHERE event_type = 'poll:vote' AND id < pe.id ORDER BY id DESC LIMIT 1),
+                     '[]'
+                 )
+             ) v
+            ) AS poll_total
+        FROM events pe WHERE event_type = 'poll:stop'
+    """ + since_clause, since_params).fetchall()
+    poll_tokens = sum(r["poll_total"] or 0 for r in poll_tokens_rows)
+
+    # Active poll contribution: delta between current votes and snapshot before the since window
+    active_start = conn.execute("""
+        SELECT id FROM events WHERE event_type = 'poll:start'
+        AND NOT EXISTS (
+            SELECT 1 FROM events e2 WHERE e2.event_type = 'poll:stop' AND e2.id > events.id
+        )
+        ORDER BY id DESC LIMIT 1
+    """).fetchone()
+    if active_start:
+        current_vote = conn.execute("""
+            SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ?
+            ORDER BY id DESC LIMIT 1
+        """, (active_start["id"],)).fetchone()
+        if current_vote:
+            current_total = sum(v.get("score", 0) for v in json.loads(current_vote["data"]))
+            baseline_total = 0
+            if since:
+                baseline_vote = conn.execute("""
+                    SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ?
+                    AND timestamp_local < ?
+                    ORDER BY id DESC LIMIT 1
+                """, (active_start["id"], since)).fetchone()
+                if baseline_vote:
+                    baseline_total = sum(v.get("score", 0) for v in json.loads(baseline_vote["data"]))
+            poll_tokens += current_total - baseline_total
+
+    # Superchat token spend
+    superchat_stats = conn.execute("""
+        SELECT COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total
+        FROM events WHERE event_type = 'super-chat:new'
+    """ + since_clause, since_params).fetchone()
+    superchat_tokens = superchat_stats["total"] if superchat_stats else 0
 
     top_targets = conn.execute("""
         SELECT json_extract(data, '$.target') as target, COUNT(*) as count
@@ -161,7 +211,9 @@ def get_stats(since=None):
             "total": fishtoy_stats["total"] if fishtoy_stats else 0,
             "total_cost": fishtoy_stats["total_cost"] if fishtoy_stats else 0,
         },
-        "total_spend": all_spend["total"] if all_spend else 0,
+        "total_spend": (all_spend["total"] if all_spend else 0) + poll_tokens,
+        "poll_tokens": poll_tokens,
+        "superchat_tokens": superchat_tokens,
         "top_targets": [{"name": r["target"], "count": r["count"]} for r in top_targets],
         "top_senders": [{"name": r["sender"], "count": r["count"]} for r in top_senders],
     }

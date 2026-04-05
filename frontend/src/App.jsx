@@ -49,6 +49,8 @@ function normalizeStats(raw) {
     tts: byType['tts:update'] || 0,
     sfx: byType['sfx:update'] || 0,
     total_spend: raw.total_spend || raw.fishtoys?.total_cost || 0,
+    poll_tokens: raw.poll_tokens || 0,
+    superchat_tokens: raw.superchat_tokens || 0,
     top_targets: (raw.top_targets || []).map(t => ({ target: t.name, count: t.count })),
     top_senders: (raw.top_senders || []).map(s => ({ name: s.name, count: s.count })),
     total_events: raw.total_events || 0,
@@ -66,11 +68,11 @@ export default function App() {
   const [chats, setChats] = useState([])
   const [activity, setActivity] = useState([])
   const [stats, setStats] = useState({
-    fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0,
+    fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
     top_targets: [], top_senders: [], total_events: 0,
   })
   const [sessionStats, setSessionStats] = useState({
-    fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0,
+    fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
     top_targets: [], top_senders: [], total_events: 0,
   })
 
@@ -176,22 +178,29 @@ export default function App() {
 
       if (FISHTOY_TYPES.has(msg.event_type)) {
         setFishtoys(prev => [item, ...prev].slice(0, MAX_EVENTS))
-        setStats(s => ({
-          ...s,
-          fishtoys: s.fishtoys + 1,
-          total_spend: s.total_spend + (msg.data?.cost || 0),
-        }))
+        const cost = msg.data?.cost || 0
+        setStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
+        setSessionStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
       } else if (CHAT_TYPES.has(msg.event_type)) {
         setChats(prev => [item, ...prev].slice(0, MAX_EVENTS))
         setStats(s => ({ ...s, chats: s.chats + 1 }))
+        setSessionStats(s => ({ ...s, chats: s.chats + 1 }))
       } else if (ACTIVITY_TYPES.has(msg.event_type)) {
         setActivity(prev => [item, ...prev].slice(0, MAX_EVENTS))
         if (msg.event_type.startsWith('tts')) {
-          setStats(s => ({ ...s, tts: s.tts + 1, total_spend: s.total_spend + (msg.data?.cost || 0) }))
+          const cost = msg.data?.cost || 0
+          setStats(s => ({ ...s, tts: s.tts + 1, total_spend: s.total_spend + cost }))
+          setSessionStats(s => ({ ...s, tts: s.tts + 1, total_spend: s.total_spend + cost }))
         }
         if (msg.event_type.startsWith('sfx')) {
-          setStats(s => ({ ...s, sfx: s.sfx + 1, total_spend: s.total_spend + (msg.data?.cost || 0) }))
+          const cost = msg.data?.cost || 0
+          setStats(s => ({ ...s, sfx: s.sfx + 1, total_spend: s.total_spend + cost }))
+          setSessionStats(s => ({ ...s, sfx: s.sfx + 1, total_spend: s.total_spend + cost }))
         }
+      } else if (msg.event_type === 'super-chat:new') {
+        const cost = msg.data?.cost || 0
+        setSessionStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
+        setStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
       } else if (msg.event_type === 'poll:start') {
         const pollData = msg.data?.poll || msg.data
         setActivePoll({
@@ -651,6 +660,12 @@ export default function App() {
                 <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
                 <StatRow label="TTS" value={sessionStats.tts} color="text-purple-400" />
                 <StatRow label="SFX" value={sessionStats.sfx} color="text-indigo-400" />
+                {sessionStats.poll_tokens > 0 && (
+                  <StatRow label="Poll Votes" value={sessionStats.poll_tokens.toLocaleString()} color="text-cyan-400" />
+                )}
+                {sessionStats.superchat_tokens > 0 && (
+                  <StatRow label="Superchats" value={sessionStats.superchat_tokens.toLocaleString()} color="text-yellow-400" />
+                )}
                 <div className="w-full h-px bg-tank-border my-0.5" />
                 <StatRow label="Tokens" value={sessionStats.total_spend.toLocaleString()} color="text-tank-warn" />
                 <StatRow label="Est. Revenue" value={tokensToUSD(sessionStats.total_spend)} color="text-green-400" />
