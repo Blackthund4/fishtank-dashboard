@@ -1191,6 +1191,12 @@ def api_hidden_content(
     return database.get_hidden_content(target=target, search=search, limit=limit, offset=offset)
 
 
+@app.get("/api/hidden-content/targets")
+def api_hidden_content_targets():
+    """Get target counts for hidden content from full DB history."""
+    return _cached_query("hidden-content-targets", database.get_hidden_content_targets)
+
+
 @app.get("/api/fishtoy-availability")
 def api_fishtoy_availability():
     """Return fishtoy/bigtoy items with their enabled/cooldown status."""

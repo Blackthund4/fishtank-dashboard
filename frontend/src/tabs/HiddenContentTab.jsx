@@ -7,6 +7,15 @@ export default function HiddenContentTab({ itemCatalog }) {
   const [search, setSearch] = useState('')
   const [filterTarget, setFilterTarget] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [targetData, setTargetData] = useState({ total: 0, targets: [] })
+
+  // Fetch target counts from server (full DB)
+  useEffect(() => {
+    fetch('/api/hidden-content/targets')
+      .then(r => r.json())
+      .then(setTargetData)
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     loadContent()
@@ -14,7 +23,7 @@ export default function HiddenContentTab({ itemCatalog }) {
 
   function loadContent() {
     setLoading(true)
-    const params = new URLSearchParams({ limit: '500' })
+    const params = new URLSearchParams({ limit: '1000' })
     if (filterTarget) params.set('target', filterTarget)
     if (search.trim()) params.set('search', search.trim())
 
@@ -29,14 +38,6 @@ export default function HiddenContentTab({ itemCatalog }) {
     loadContent()
   }
 
-  // Build target list from loaded items
-  const targets = {}
-  items.forEach(e => {
-    const t = e.data?.target
-    if (t) targets[t] = (targets[t] || 0) + 1
-  })
-  const targetList = Object.entries(targets).sort((a, b) => b[1] - a[1])
-
   return (
     <div className="flex-1 flex flex-col md:flex-row gap-3 p-3 min-h-0">
       {/* Main content list */}
@@ -46,7 +47,7 @@ export default function HiddenContentTab({ itemCatalog }) {
             <FileText className="w-5 h-5 text-tank-accent" />
             <h2 className="text-sm font-bold text-tank-bright uppercase tracking-wider">Hidden Content Archive</h2>
             <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
-              {items.length}
+              {filterTarget ? `${items.length} / ${targetData.total}` : targetData.total}
             </span>
           </div>
           {filterTarget && (
@@ -125,7 +126,7 @@ export default function HiddenContentTab({ itemCatalog }) {
         <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
           <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">By Target</h3>
           <div className="space-y-1">
-            {targetList.map(([target, count]) => (
+            {targetData.targets.map(({ target, count }) => (
               <button
                 key={target}
                 onClick={() => setFilterTarget(filterTarget === target ? null : target)}

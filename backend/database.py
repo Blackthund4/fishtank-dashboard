@@ -919,6 +919,22 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
     ]
 
 
+def get_hidden_content_targets():
+    """Get target counts for fishtoy events with metadata (hidden content) from full DB."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT target, COUNT(*) as count
+        FROM events
+        WHERE event_type LIKE 'fishtoy%' AND metadata IS NOT NULL AND target IS NOT NULL
+        GROUP BY target ORDER BY count DESC
+    """).fetchall()
+    total = conn.execute("""
+        SELECT COUNT(*) FROM events
+        WHERE event_type LIKE 'fishtoy%' AND metadata IS NOT NULL
+    """).fetchone()[0]
+    return {"total": total, "targets": [{"target": r["target"], "count": r["count"]} for r in rows]}
+
+
 # ============================================================
 # SUPERCHATS
 # ============================================================
