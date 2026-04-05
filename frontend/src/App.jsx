@@ -150,6 +150,7 @@ export default function App() {
   const [fishtoyFilter, setFishtoyFilter] = useState('enabled')
   const [allTargets, setAllTargets] = useState([])
   const [activeSuperchats, setActiveSuperchats] = useState([])
+  const [scCountdowns, setScCountdowns] = useState({})
   const [activityFilter, setActivityFilter] = useState('all')
   const [systemFilter, setSystemFilter] = useState('all')
   const [activityTimeRange, setActivityTimeRange] = useState('all')
@@ -364,6 +365,47 @@ export default function App() {
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
   }, [activePoll?.startedAt, activePoll?.ended])
+
+  // Superchat countdown + auto-expiry
+  useEffect(() => {
+    if (activeSuperchats.length === 0) {
+      setScCountdowns({})
+      return
+    }
+    const tick = () => {
+      const now = Date.now()
+      const counts = {}
+      const expired = []
+      for (const sc of activeSuperchats) {
+        const d = sc.data || {}
+        const dur = d.duration // minutes
+        if (!dur) continue
+        const created = d.createdAt || d.updatedAt || sc.timestamp_local
+        const startMs = typeof created === 'number'
+          ? (created > 1e12 ? created : created * 1000)
+          : Date.parse(created)
+        if (!startMs || isNaN(startMs)) continue
+        const expiresAt = startMs + dur * 60000
+        const remaining = Math.floor((expiresAt - now) / 1000)
+        const key = String(sc.id || d.id)
+        if (remaining <= 0) {
+          expired.push(key)
+        } else {
+          counts[key] = remaining
+        }
+      }
+      setScCountdowns(counts)
+      if (expired.length > 0) {
+        setActiveSuperchats(prev => prev.filter(sc => {
+          const key = String(sc.id || sc.data?.id)
+          return !expired.includes(key)
+        }))
+      }
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [activeSuperchats])
 
   // Debounce search text for server fetches (300ms)
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -1142,9 +1184,22 @@ export default function App() {
                           {d.cost > 0 && (
                             <span className="text-[10px] font-mono text-tank-warn">{d.cost}t</span>
                           )}
-                          {d.duration && (
-                            <span className="text-[9px] font-mono text-tank-muted ml-auto">{d.duration}min</span>
-                          )}
+                          {(() => {
+                            const key = String(sc.id || d.id)
+                            const secs = scCountdowns[key]
+                            if (secs != null) {
+                              const m = Math.floor(secs / 60)
+                              const s = String(secs % 60).padStart(2, '0')
+                              return (
+                                <span className={`text-[9px] font-mono ml-auto ${secs < 60 ? 'text-red-400' : 'text-amber-400/70'}`}>
+                                  {m}:{s}
+                                </span>
+                              )
+                            }
+                            return d.duration ? (
+                              <span className="text-[9px] font-mono text-tank-muted ml-auto">{d.duration}min</span>
+                            ) : null
+                          })()}
                         </div>
                         {d.message && (
                           <p className="text-xs text-tank-bright break-words">{d.message}</p>
