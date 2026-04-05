@@ -487,12 +487,18 @@ def make_event_handler(evt):
             _track_feature_toggle(data)
 
         # Enrich superchat with displayName if missing
-        if evt == "super-chat:new" and isinstance(data, dict) and not data.get("displayName"):
-            user_id = data.get("userId")
-            if user_id:
-                profile = _fetch_user_profile(user_id)
-                if profile:
-                    data.update(profile)
+        if evt == "super-chat:new" and isinstance(data, dict):
+            # Normalize nested user.displayName to top-level
+            if not data.get("displayName"):
+                user = data.get("user") or {}
+                data["displayName"] = user.get("displayName") or data.get("username") or ""
+            # Fetch from profile API as last resort
+            if not data.get("displayName"):
+                user_id = data.get("userId")
+                if user_id:
+                    profile = _fetch_user_profile(user_id)
+                    if profile:
+                        data.update(profile)
 
         # Score sentiment for chat and TTS messages
         if isinstance(data, dict):
@@ -675,7 +681,11 @@ def seed_superchats_from_rest():
             sc_id = str(sc.get("id", ""))
             if not sc_id or sc_id in known_ids:
                 continue
-            # Enrich displayName if missing
+            # Normalize nested user.displayName to top-level
+            if not sc.get("displayName"):
+                user = sc.get("user") or {}
+                sc["displayName"] = user.get("displayName") or sc.get("username") or ""
+            # Fetch from profile API as last resort
             if not sc.get("displayName") and sc.get("userId"):
                 profile = _fetch_user_profile(sc["userId"])
                 if profile:
