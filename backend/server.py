@@ -318,6 +318,25 @@ _clients_lock = Lock()
 browser_clients: set[WebSocket] = set()
 
 
+async def _ws_ping_loop():
+    """Send a no-op ping to all browser clients every 60s to prevent Cloudflare idle timeout (100s)."""
+    while True:
+        await asyncio.sleep(60)
+        with _clients_lock:
+            clients_snapshot = set(browser_clients)
+        if not clients_snapshot:
+            continue
+        disconnected = set()
+        for ws in clients_snapshot:
+            try:
+                await ws.send_json({"event_type": "ping"})
+            except Exception:
+                disconnected.add(ws)
+        if disconnected:
+            with _clients_lock:
+                browser_clients.difference_update(disconnected)
+
+
 async def broadcast_to_browsers(event_type: str, data, db_id: int):
     """Send event to all connected browser clients."""
     message = json.dumps(
@@ -811,10 +830,14 @@ async def lifespan(app: FastAPI):
     # Start database backup poller (every 6 hours)
     Thread(target=db_backup_poller, daemon=True).start()
 
+    # Keep browser WebSocket connections alive through Cloudflare's 100s idle timeout
+    ping_task = asyncio.create_task(_ws_ping_loop())
+
     yield
 
     _poller_stop.set()
     stop_fish_client()
+    ping_task.cancel()
 
 
 app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
@@ -1182,5 +1205,15 @@ if __name__ == "__main__":
         print("  See .env.example for details.")
         print("=" * 60)
 
-    print("Starting Fishtank Dashboard on http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
+    ssl_keyfile = os.environ.get("SSL_KEYFILE")
+    ssl_certfile = os.environ.get("SSL_CERTFILE")
+    scheme = "https" if ssl_certfile else "http"
+    print(f"Starting Fishtank Dashboard on {scheme}://localhost:8000")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="warning",
+        ssl_keyfile=ssl_keyfile or None,
+        ssl_certfile=ssl_certfile or None,
+    )
