@@ -320,8 +320,9 @@ def reconnect_loop():
 
 def _fetch_user_profile(user_id):
     """Fetch displayName and color for a user from fishtank API."""
+    session = auth.get_session()
     try:
-        resp = auth.session.get(f"https://www.fishtank.live/api/v1/profile/{user_id}", timeout=5)
+        resp = session.get(f"https://www.fishtank.live/api/v1/profile/{user_id}", timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             profile = data.get("profile", data)
@@ -333,6 +334,8 @@ def _fetch_user_profile(user_id):
             return result
     except Exception as e:
         print(f"[!] Failed to fetch profile for {user_id}: {e}")
+    finally:
+        session.close()
     return {}
 
 
