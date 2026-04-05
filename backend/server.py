@@ -75,6 +75,9 @@ EVENTS = [
     "feature-toggles:update",
     # Presence
     "chat:presence",
+    # Superchat (pinned messages)
+    "super-chat:new",
+    "super-chat:delete",
 ]
 
 FISHTOY_POLL_INTERVAL = 2  # seconds
