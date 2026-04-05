@@ -1,22 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, memo } from 'react'
 import { Fish, MessageSquare, Volume2, Clock } from 'lucide-react'
 
-export default function StatusBar({ isConnected, stats }) {
-  const [health, setHealth] = useState(null)
+// Isolated timer component — re-renders every second without affecting parent
+function TimeDisplay() {
   const [tankTime, setTankTime] = useState('')
   const [localTime, setLocalTime] = useState('')
-
-  useEffect(() => {
-    const check = () => {
-      fetch('/api/status')
-        .then((r) => r.json())
-        .then(setHealth)
-        .catch(() => setHealth(null))
-    }
-    check()
-    const interval = setInterval(check, 15000)
-    return () => clearInterval(interval)
-  }, [])
 
   useEffect(() => {
     const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -35,6 +23,31 @@ export default function StatusBar({ isConnected, stats }) {
     }
     tick()
     const interval = setInterval(tick, 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <Clock className="w-3.5 h-3.5 text-tank-warn" />
+      <span className="text-xs font-mono text-tank-muted hidden sm:inline">Tank Time</span>
+      <span className="text-xs font-mono text-tank-bright">{tankTime}</span>
+      <span className="text-xs font-mono text-tank-muted hidden md:inline">| {localTime}</span>
+    </div>
+  )
+}
+
+export default function StatusBar({ isConnected, stats }) {
+  const [health, setHealth] = useState(null)
+
+  useEffect(() => {
+    const check = () => {
+      fetch('/api/status')
+        .then((r) => r.json())
+        .then(setHealth)
+        .catch(() => setHealth(null))
+    }
+    check()
+    const interval = setInterval(check, 15000)
     return () => clearInterval(interval)
   }, [])
 
@@ -71,12 +84,7 @@ export default function StatusBar({ isConnected, stats }) {
         )}
       </div>
       <div className="flex items-center gap-1 sm:gap-4">
-        <div className="flex items-center gap-1.5">
-          <Clock className="w-3.5 h-3.5 text-tank-warn" />
-          <span className="text-xs font-mono text-tank-muted hidden sm:inline">Tank Time</span>
-          <span className="text-xs font-mono text-tank-bright">{tankTime}</span>
-          <span className="text-xs font-mono text-tank-muted hidden md:inline">| {localTime}</span>
-        </div>
+        <TimeDisplay />
         <div className="w-px h-5 bg-tank-border" />
         <StatChip icon={Fish} label="Fishtoys" value={stats.fishtoys} color="text-tank-accent" />
         <StatChip icon={MessageSquare} label="Chat" value={stats.chats} color="text-blue-400" />

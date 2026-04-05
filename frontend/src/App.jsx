@@ -472,8 +472,8 @@ export default function App() {
       .catch(() => {})
   }, [feedApiParams])
 
-  // Sorted chat and activity arrays
-  const sortedChats = useMemo(() => sortByTimestamp(chats), [chats])
+  // Chat array is already newest-first (server ORDER BY id DESC + WS prepend)
+  const sortedChats = chats
   const sortedActivity = useMemo(() => {
     const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 }[activityTimeRange]
     const cutoff = hours ? Date.now() - hours * 3600000 : 0
@@ -504,7 +504,7 @@ export default function App() {
       }
       return true
     })
-    return sortByTimestamp(filtered)
+    return filtered  // Already newest-first (server ORDER BY id DESC + WS prepend)
   }, [activity, activityFilter, activityTimeRange, filterCategory, filterTarget, filterItemId, searchText, itemCatalog])
 
   const loadMoreActivity = useCallback(() => {
@@ -1331,56 +1331,58 @@ export default function App() {
               icon={MessageSquare}
               count={stats.chats}
               className="flex-1 min-h-[300px] md:min-h-0"
+              virtualized
               extra={activeSuperchats.length > 0 ? (
                 <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
                   {activeSuperchats.length} pinned
                 </span>
               ) : null}
             >
-              {/* Pinned superchat banners */}
-              {activeSuperchats.length > 0 && (
-                <div className="space-y-1 mb-2">
-                  {activeSuperchats.map(sc => {
-                    const d = sc.data || {}
-                    return (
-                      <div key={sc.id || d.id} className="p-2 rounded border border-amber-500/30 bg-amber-500/5">
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                          <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-500/10 text-amber-400">SC</span>
-                          <span className="text-xs font-medium text-amber-300">{d.displayName || d.user?.displayName || d.username || d.userId || '?'}</span>
-                          {d.cost > 0 && (
-                            <span className="text-[10px] font-mono text-tank-warn">{d.cost}t</span>
-                          )}
-                          {(() => {
-                            const key = String(sc.id || d.id)
-                            const secs = scCountdowns[key]
-                            if (secs != null) {
-                              const m = Math.floor(secs / 60)
-                              const s = String(secs % 60).padStart(2, '0')
-                              return (
-                                <span className={`text-[9px] font-mono ml-auto ${secs < 60 ? 'text-red-400' : 'text-amber-400/70'}`}>
-                                  {m}:{s}
-                                </span>
-                              )
-                            }
-                            return d.duration ? (
-                              <span className="text-[9px] font-mono text-tank-muted ml-auto">{d.duration}min</span>
-                            ) : null
-                          })()}
-                        </div>
-                        {d.message && (
-                          <p className="text-xs text-tank-bright break-words">{d.message}</p>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
               {sortedChats.length === 0 ? (
-                <EmptyState text="Waiting for chat messages..." />
+                <div className="p-2">
+                  <EmptyState text="Waiting for chat messages..." />
+                </div>
               ) : (
-                sortedChats.map((item) => (
-                  <ChatMessage key={item.dbId || item.data?.id} data={item.data} />
-                ))
+                <Virtuoso
+                  style={{ height: '100%' }}
+                  data={sortedChats}
+                  overscan={100}
+                  components={{
+                    Header: activeSuperchats.length > 0 ? () => (
+                      <div className="space-y-1 mb-2 px-2 pt-2">
+                        {activeSuperchats.map(sc => {
+                          const d = sc.data || {}
+                          const key = String(sc.id || d.id)
+                          const secs = scCountdowns[key]
+                          return (
+                            <div key={key} className="p-2 rounded border border-amber-500/30 bg-amber-500/5">
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-500/10 text-amber-400">SC</span>
+                                <span className="text-xs font-medium text-amber-300">{d.displayName || d.user?.displayName || d.username || d.userId || '?'}</span>
+                                {d.cost > 0 && (
+                                  <span className="text-[10px] font-mono text-tank-warn">{d.cost}t</span>
+                                )}
+                                {secs != null ? (
+                                  <span className={`text-[9px] font-mono ml-auto ${secs < 60 ? 'text-red-400' : 'text-amber-400/70'}`}>
+                                    {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}
+                                  </span>
+                                ) : d.duration ? (
+                                  <span className="text-[9px] font-mono text-tank-muted ml-auto">{d.duration}min</span>
+                                ) : null}
+                              </div>
+                              {d.message && (
+                                <p className="text-xs text-tank-bright break-words">{d.message}</p>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : undefined,
+                  }}
+                  itemContent={(index, item) => (
+                    <ChatMessage data={item.data} />
+                  )}
+                />
               )}
             </Panel>
           </div>
