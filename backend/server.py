@@ -1227,6 +1227,12 @@ def api_targets():
     return _cached_query("targets", database.get_targets)
 
 
+@app.get("/api/target-stats")
+def api_target_stats(target: str = Query(..., description="Contestant target name")):
+    """Get detailed stats for a specific target from full DB history."""
+    return _cached_query(f"target-stats:{target}", database.get_target_stats, target)
+
+
 @app.get("/api/fishtoys")
 def api_fishtoys(
     target: str = Query(None, description="Filter by contestant target name"),

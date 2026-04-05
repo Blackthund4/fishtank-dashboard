@@ -497,6 +497,43 @@ def get_targets():
     return [{"target": r["target"], "count": r["count"], "spend": r["spend"]} for r in rows]
 
 
+def get_target_stats(target):
+    """Get detailed stats for a specific fishtoy target from full DB history."""
+    conn = _get_conn()
+
+    # Item breakdown
+    item_rows = conn.execute("""
+        SELECT item_id, COUNT(*) as count, COALESCE(SUM(cost), 0) as spend
+        FROM events
+        WHERE event_type LIKE 'fishtoy%' AND target = ?
+        GROUP BY item_id ORDER BY count DESC
+    """, (target,)).fetchall()
+
+    # Top senders
+    sender_rows = conn.execute("""
+        SELECT display_name as name, COUNT(*) as count
+        FROM events
+        WHERE event_type LIKE 'fishtoy%' AND target = ? AND display_name IS NOT NULL
+        GROUP BY display_name ORDER BY count DESC LIMIT 10
+    """, (target,)).fetchall()
+
+    # Total + metadata count
+    totals = conn.execute("""
+        SELECT COUNT(*) as total, COALESCE(SUM(cost), 0) as spend,
+            SUM(CASE WHEN metadata IS NOT NULL THEN 1 ELSE 0 END) as with_meta
+        FROM events
+        WHERE event_type LIKE 'fishtoy%' AND target = ?
+    """, (target,)).fetchone()
+
+    return {
+        "total": totals["total"],
+        "totalSpend": totals["spend"],
+        "withMeta": totals["with_meta"],
+        "topItems": [{"id": r["item_id"], "count": r["count"], "spend": r["spend"]} for r in item_rows],
+        "topSenders": [{"name": r["name"], "count": r["count"]} for r in sender_rows],
+    }
+
+
 # ============================================================
 # STOCK HISTORY
 # ============================================================

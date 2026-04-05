@@ -548,45 +548,24 @@ export default function App() {
   // Targets sourced from DB via /api/targets, incrementally updated from WS
   const seenTargets = allTargets
 
-  // Target-specific stats when a target is selected
-  const targetStats = useMemo(() => {
-    if (!filterTarget) return null
-
-    const targetEvents = fishtoys.filter(f => f.data?.target === filterTarget)
-    const totalSpend = targetEvents.reduce((sum, f) => sum + (f.data?.cost || 0), 0)
-
-    // Item types used on this target
-    const itemCounts = new Map()
-    targetEvents.forEach(f => {
-      const iid = String(f.data?.itemId || '')
-      const cat = itemCatalog[iid]
-      const name = cat?.name || `Item #${iid}`
-      const key = iid
-      if (!itemCounts.has(key)) {
-        itemCounts.set(key, { id: iid, name, count: 0, spend: 0 })
-      }
-      const entry = itemCounts.get(key)
-      entry.count++
-      entry.spend += f.data?.cost || 0
-    })
-    const topItems = Array.from(itemCounts.values()).sort((a, b) => b.count - a.count)
-
-    // Top senders to this target
-    const senderCounts = new Map()
-    targetEvents.forEach(f => {
-      const name = f.data?.displayName
-      if (name) senderCounts.set(name, (senderCounts.get(name) || 0) + 1)
-    })
-    const topSenders = Array.from(senderCounts.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10)
-
-    // Events with metadata
-    const withMeta = targetEvents.filter(f => f.data?.metadata && f.data.metadata !== 'null').length
-
-    return { total: targetEvents.length, totalSpend, topItems, topSenders, withMeta }
-  }, [filterTarget, fishtoys, itemCatalog])
+  // Target-specific stats fetched from server (full DB history)
+  const [targetStats, setTargetStats] = useState(null)
+  useEffect(() => {
+    if (!filterTarget) { setTargetStats(null); return }
+    fetch(`/api/target-stats?target=${encodeURIComponent(filterTarget)}`)
+      .then(r => r.json())
+      .then(data => {
+        // Enrich item names from catalog
+        if (data.topItems) {
+          data.topItems = data.topItems.map(item => ({
+            ...item,
+            name: itemCatalog[String(item.id)]?.name || `Item #${item.id}`,
+          }))
+        }
+        setTargetStats(data)
+      })
+      .catch(() => setTargetStats(null))
+  }, [filterTarget, itemCatalog])
 
   const hasActiveFilters = filterTarget || filterCategory || filterItemId || searchText.trim()
 
