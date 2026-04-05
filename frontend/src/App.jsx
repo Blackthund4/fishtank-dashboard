@@ -109,6 +109,8 @@ function tokensToUSD(tokens) {
 
 export default function App() {
   const { isConnected, addListener } = useWebSocket()
+  const [serverVersion, setServerVersion] = useState(null)
+  const [knownVersion, setKnownVersion] = useState(null)
   const [fishtoys, setFishtoys] = useState([])
   const [chats, setChats] = useState([])
   const [activity, setActivity] = useState([])
@@ -137,6 +139,7 @@ export default function App() {
   // Polls and notifications
   const [activePoll, setActivePoll] = useState(null)
   const [pollVotes, setPollVotes] = useState([])
+  const [pollElapsed, setPollElapsed] = useState(null)
   const [notifications, setNotifications] = useState([])
   const [systemEvents, setSystemEvents] = useState([])
   const [featureToggles, setFeatureToggles] = useState({})
@@ -146,6 +149,7 @@ export default function App() {
   const [allTargets, setAllTargets] = useState([])
   const [activeSuperchats, setActiveSuperchats] = useState([])
   const [activityFilter, setActivityFilter] = useState('all')
+  const [activityTimeRange, setActivityTimeRange] = useState('all')
   const [activityHasMore, setActivityHasMore] = useState(true)
   const [activityLoading, setActivityLoading] = useState(false)
   const directorRef = useRef(null)
@@ -224,6 +228,7 @@ export default function App() {
             pid: poll.pid,
             ended: !poll.active,
             winner: poll.winner || null,
+            startedAt: poll.started_at ? Date.parse(poll.started_at) : null,
           })
           if (poll.votes) {
             setPollVotes(poll.votes)
@@ -236,6 +241,17 @@ export default function App() {
   // Live events
   useEffect(() => {
     const remove = addListener((msg) => {
+      if (msg.event_type === 'server:hello') {
+        const v = msg.data?.version
+        if (v && v !== 'dev') {
+          setServerVersion(prev => {
+            if (!prev) { setKnownVersion(v); return v }
+            return v
+          })
+        }
+        return
+      }
+
       const item = { event: msg.event_type, data: msg.data, dbId: msg.db_id }
 
       if (FISHTOY_TYPES.has(msg.event_type)) {
@@ -293,6 +309,7 @@ export default function App() {
           question: pollData.question,
           answers: pollData.answers,
           pid: pollData.pid,
+          startedAt: Date.now(),
         })
         setPollVotes(msg.data?.scores || [])
       } else if (msg.event_type === 'poll:vote') {
@@ -339,6 +356,18 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
+  // Poll duration counter
+  useEffect(() => {
+    if (!activePoll || activePoll.ended || !activePoll.startedAt) {
+      setPollElapsed(null)
+      return
+    }
+    const tick = () => setPollElapsed(Math.floor((Date.now() - activePoll.startedAt) / 1000))
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [activePoll?.startedAt, activePoll?.ended])
+
   // Client-side filtered fishtoys (sorted by timestamp, newest first)
   const filteredFishtoys = useMemo(() => {
     let result = fishtoys
@@ -370,11 +399,18 @@ export default function App() {
   const sortedChats = useMemo(() => sortByTimestamp(chats), [chats])
   const sortedActivity = useMemo(() => {
     let filtered = activity
-    if (activityFilter === 'tts') filtered = activity.filter(a => a.event === 'tts:update')
-    else if (activityFilter === 'sfx') filtered = activity.filter(a => a.event === 'sfx:update')
-    else if (activityFilter === 'sc') filtered = activity.filter(a => a.event === 'super-chat:new')
+    if (activityFilter === 'tts') filtered = filtered.filter(a => a.event === 'tts:update')
+    else if (activityFilter === 'sfx') filtered = filtered.filter(a => a.event === 'sfx:update')
+    else if (activityFilter === 'sc') filtered = filtered.filter(a => a.event === 'super-chat:new')
+    if (activityTimeRange !== 'all') {
+      const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 }[activityTimeRange]
+      if (hours) {
+        const cutoff = Date.now() - hours * 3600000
+        filtered = filtered.filter(a => getEventTimestamp(a) >= cutoff)
+      }
+    }
     return sortByTimestamp(filtered)
-  }, [activity, activityFilter])
+  }, [activity, activityFilter, activityTimeRange])
 
   const loadMoreActivity = useCallback(() => {
     if (activityLoading || !activityHasMore) return
@@ -472,6 +508,18 @@ export default function App() {
     <div className="h-screen flex flex-col">
       <StatusBar isConnected={isConnected} stats={stats} />
 
+      {serverVersion && knownVersion && serverVersion !== knownVersion && (
+        <div className="bg-tank-accent/10 border-b border-tank-accent/30 px-3 py-1.5 flex items-center justify-center gap-2 shrink-0">
+          <span className="text-xs text-tank-accent">A new version is available.</span>
+          <button
+            onClick={() => window.location.reload()}
+            className="text-xs font-medium text-tank-accent underline hover:text-tank-bright"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+
       {/* Tab navigation */}
       <div className="bg-tank-surface border-b border-tank-border px-3 flex items-center gap-1 shrink-0">
         {[
@@ -524,6 +572,11 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <Vote className="w-4 h-4 text-purple-400 shrink-0" />
             <span className="text-xs font-semibold text-purple-400 uppercase shrink-0">Live Poll</span>
+            {pollElapsed !== null && (
+              <span className="text-[10px] font-mono text-purple-300/70 shrink-0">
+                {Math.floor(pollElapsed / 60)}:{String(pollElapsed % 60).padStart(2, '0')}
+              </span>
+            )}
             <span className="text-sm text-tank-bright">{activePoll.question || 'Poll'}</span>
           </div>
           {pollVotes.length > 0 && (
@@ -1022,27 +1075,51 @@ export default function App() {
               className="w-full md:w-[340px] md:shrink-0"
               virtualized
               extra={
-                <div className="flex gap-1">
-                  {[
-                    { id: 'all', label: 'All' },
-                    { id: 'tts', label: 'TTS' },
-                    { id: 'sfx', label: 'SFX' },
-                    { id: 'sc', label: 'SC' },
-                  ].map(f => (
-                    <button
-                      key={f.id}
-                      onClick={() => setActivityFilter(f.id)}
-                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-                        activityFilter === f.id
-                          ? f.id === 'sc'
-                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                            : 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
-                          : 'text-tank-muted hover:text-tank-text'
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-0.5">
+                    {[
+                      { id: 'all', label: 'All' },
+                      { id: 'tts', label: 'TTS' },
+                      { id: 'sfx', label: 'SFX' },
+                      { id: 'sc', label: 'SC' },
+                    ].map(f => (
+                      <button
+                        key={f.id}
+                        onClick={() => setActivityFilter(f.id)}
+                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                          activityFilter === f.id
+                            ? f.id === 'sc'
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                              : 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                            : 'text-tank-muted hover:text-tank-text'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="w-px h-3 bg-tank-border" />
+                  <div className="flex gap-0.5">
+                    {[
+                      { id: '1h', label: '1h' },
+                      { id: '6h', label: '6h' },
+                      { id: '24h', label: '24h' },
+                      { id: '7d', label: '7d' },
+                      { id: 'all', label: '\u221E' },
+                    ].map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setActivityTimeRange(t.id)}
+                        className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                          activityTimeRange === t.id
+                            ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
+                            : 'text-tank-muted hover:text-tank-text'
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               }
             >

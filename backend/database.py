@@ -758,22 +758,34 @@ def get_known_superchat_ids():
 
 
 def get_polls(limit=50):
-    """Get poll start and stop events (excludes vote tallies)."""
+    """Get poll events. Filters out poll:start that has a subsequent poll:stop."""
     conn = _get_conn()
     rows = conn.execute("""
         SELECT id, event_type, event_id, timestamp_server, timestamp_local, data
         FROM events WHERE event_type IN ('poll:start', 'poll:stop')
         ORDER BY id DESC LIMIT ?
     """, (limit,)).fetchall()
-    return [
-        {
+    # Collect poll:stop pids so we can filter out their matching poll:start
+    stop_pids = set()
+    results = []
+    for row in rows:
+        data = json.loads(row["data"])
+        pid = data.get("pid") or (data.get("poll") or {}).get("pid")
+        evt = {
             "id": row["id"],
             "event_type": row["event_type"],
             "timestamp_local": row["timestamp_local"],
-            "data": json.loads(row["data"]),
+            "data": data,
         }
-        for row in rows
-    ]
+        if row["event_type"] == "poll:stop":
+            if pid:
+                stop_pids.add(pid)
+            results.append(evt)
+        else:
+            # poll:start — only include if no matching poll:stop exists
+            if pid and pid not in stop_pids:
+                results.append(evt)
+    return results
 
 
 # ============================================================

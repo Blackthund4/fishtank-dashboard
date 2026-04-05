@@ -983,6 +983,7 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.accept()
         browser_clients.add(ws)
     try:
+        await ws.send_text(json.dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION}}))
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
