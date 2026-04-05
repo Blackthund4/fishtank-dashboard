@@ -127,6 +127,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tts_sentiment_target
             ON events(event_type, target, sentiment)
             WHERE event_type = 'tts:update' AND sentiment IS NOT NULL AND target IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_fishtoys_target_id
+            ON events(event_type, target, id)
+            WHERE event_type = 'fishtoy:used' AND target IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_fishtoys_item_id
+            ON events(event_type, item_id, id)
+            WHERE event_type = 'fishtoy:used' AND item_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_fishtoys_target_sender
+            ON events(event_type, target, display_name)
+            WHERE event_type = 'fishtoy:used' AND target IS NOT NULL AND display_name IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_fishtoys_target_item
+            ON events(event_type, target, item_id)
+            WHERE event_type = 'fishtoy:used' AND target IS NOT NULL;
     """)
     conn.commit()
 
@@ -314,11 +326,14 @@ def get_stats(since=None):
         FROM events WHERE event_type = ?
     """ + since_clause, [FISHTOY_TYPE] + since_params).fetchone()
 
-    # Scoped to cost-bearing event types only
-    all_spend = conn.execute("""
-        SELECT COALESCE(SUM(cost), 0) as total
-        FROM events WHERE event_type IN ('tts:update', 'sfx:update', 'super-chat:new', ?)
-    """ + since_clause, [FISHTOY_TYPE] + since_params).fetchone()
+    # Scoped to cost-bearing event types only — per-type for index usage
+    all_spend_total = 0
+    for _et in ('tts:update', 'sfx:update', 'super-chat:new', FISHTOY_TYPE):
+        row = conn.execute(
+            "SELECT COALESCE(SUM(cost), 0) as total FROM events WHERE event_type = ?" + since_clause,
+            [_et] + since_params
+        ).fetchone()
+        all_spend_total += row["total"]
 
     # Poll token spend: sum final vote scores for each completed poll
     poll_tokens_rows = conn.execute("""
@@ -453,7 +468,7 @@ def get_stats(since=None):
             "total": fishtoy_stats["total"] if fishtoy_stats else 0,
             "total_cost": fishtoy_stats["total_cost"] if fishtoy_stats else 0,
         },
-        "total_spend": (all_spend["total"] if all_spend else 0) + poll_tokens,
+        "total_spend": all_spend_total + poll_tokens,
         "poll_tokens": poll_tokens,
         "superchat_tokens": superchat_tokens,
         "top_targets": [{"name": r["target"], "count": r["count"]} for r in top_targets],
@@ -807,14 +822,29 @@ def get_spend_trends(range_str='24h'):
     params = [since] if since else []
     bucket = _time_bucket_expr(granularity)
 
+    # Per-type queries for proper index usage on idx_events_type_ts_local
     rows = conn.execute(f"""
         SELECT {bucket} AS ts, event_type,
             COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
-        FROM events
-        WHERE event_type IN ('tts:update', 'sfx:update', 'fishtoy:used', 'super-chat:new')
-        {since_clause}
-        GROUP BY ts, event_type ORDER BY ts ASC
-    """, params).fetchall()
+        FROM events WHERE event_type = 'tts:update' {since_clause}
+        GROUP BY ts
+        UNION ALL
+        SELECT {bucket} AS ts, event_type,
+            COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
+        FROM events WHERE event_type = 'sfx:update' {since_clause}
+        GROUP BY ts
+        UNION ALL
+        SELECT {bucket} AS ts, event_type,
+            COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
+        FROM events WHERE event_type = 'fishtoy:used' {since_clause}
+        GROUP BY ts
+        UNION ALL
+        SELECT {bucket} AS ts, event_type,
+            COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
+        FROM events WHERE event_type = 'super-chat:new' {since_clause}
+        GROUP BY ts
+        ORDER BY ts ASC
+    """, params * 4).fetchall()
 
     buckets = {}
     for row in rows:
@@ -933,10 +963,16 @@ def get_tts_sfx_analytics(since=None):
         since_params = [since]
 
     top_rooms = conn.execute("""
-        SELECT room, COUNT(*) as count
-        FROM events WHERE event_type IN ('tts:update', 'sfx:update')
-            AND room IS NOT NULL
-    """ + since_clause + " GROUP BY room ORDER BY count DESC LIMIT 10", since_params).fetchall()
+        SELECT room, SUM(count) as count FROM (
+            SELECT room, COUNT(*) as count
+            FROM events WHERE event_type = 'tts:update' AND room IS NOT NULL
+        """ + since_clause + """ GROUP BY room
+            UNION ALL
+            SELECT room, COUNT(*) as count
+            FROM events WHERE event_type = 'sfx:update' AND room IS NOT NULL
+        """ + since_clause + """  GROUP BY room
+        ) GROUP BY room ORDER BY count DESC LIMIT 10
+    """, since_params + since_params).fetchall()
 
     top_tts_senders = conn.execute("""
         SELECT display_name as sender, COUNT(*) as count,
@@ -952,18 +988,31 @@ def get_tts_sfx_analytics(since=None):
 
     hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
     hourly_params = since_params if since else []
-    hourly = conn.execute("""
+    hourly_raw = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
             COUNT(*) as count
-        FROM events WHERE event_type IN ('tts:update', 'sfx:update')
-    """ + hourly_clause + " GROUP BY hour ORDER BY hour", hourly_params).fetchall()
+        FROM events WHERE event_type = 'tts:update'
+    """ + hourly_clause + """ GROUP BY hour
+        UNION ALL
+        SELECT strftime('%H', timestamp_local) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
+            COUNT(*) as count
+        FROM events WHERE event_type = 'sfx:update'
+    """ + hourly_clause + " GROUP BY hour", hourly_params + hourly_params).fetchall()
+    hourly_map = {}
+    for r in hourly_raw:
+        h = r["hour"]
+        if h not in hourly_map:
+            hourly_map[h] = {"hour": h, "ts": r["ts"], "count": 0}
+        hourly_map[h]["count"] += r["count"]
+    hourly = sorted(hourly_map.values(), key=lambda x: x["hour"])
 
     return {
         "top_rooms": [{"room": r["room"], "count": r["count"]} for r in top_rooms],
         "top_tts_senders": [{"name": r["sender"], "count": r["count"], "spend": r["spend"]} for r in top_tts_senders],
         "top_sfx_senders": [{"name": r["sender"], "count": r["count"], "spend": r["spend"]} for r in top_sfx_senders],
-        "hourly": [{"hour": r["hour"], "ts": r["ts"], "count": r["count"]} for r in hourly],
+        "hourly": hourly,
     }
 
 
@@ -1490,18 +1539,40 @@ def get_peak_hours():
     """Return combined hourly activity across all event types."""
     conn = _get_conn()
 
-    hourly = conn.execute("""
+    # Per-type queries use idx_events_type_ts_local efficiently; merged in Python
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    hourly_raw = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
-            SUM(CASE WHEN event_type = 'tts:update' THEN 1 ELSE 0 END) as tts,
-            SUM(CASE WHEN event_type = 'sfx:update' THEN 1 ELSE 0 END) as sfx,
-            SUM(CASE WHEN event_type = 'fishtoy:used' THEN 1 ELSE 0 END) as fishtoys,
-            COUNT(*) as total
+            event_type, COUNT(*) as count
         FROM events
-        WHERE event_type IN ('tts:update', 'sfx:update', 'fishtoy:used')
-            AND timestamp_local >= datetime('now', '-24 hours')
-        GROUP BY hour ORDER BY hour
-    """).fetchall()
+        WHERE event_type = 'tts:update' AND timestamp_local >= ?
+        GROUP BY hour
+        UNION ALL
+        SELECT strftime('%H', timestamp_local) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
+            event_type, COUNT(*) as count
+        FROM events
+        WHERE event_type = 'sfx:update' AND timestamp_local >= ?
+        GROUP BY hour
+        UNION ALL
+        SELECT strftime('%H', timestamp_local) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
+            event_type, COUNT(*) as count
+        FROM events
+        WHERE event_type = 'fishtoy:used' AND timestamp_local >= ?
+        GROUP BY hour
+    """, (cutoff, cutoff, cutoff)).fetchall()
+    # Merge per-type counts into combined hourly buckets
+    hourly_map = {}
+    for r in hourly_raw:
+        h = r["hour"]
+        if h not in hourly_map:
+            hourly_map[h] = {"hour": h, "ts": r["ts"], "tts": 0, "sfx": 0, "fishtoys": 0, "total": 0}
+        key = "tts" if r["event_type"] == "tts:update" else "sfx" if r["event_type"] == "sfx:update" else "fishtoys"
+        hourly_map[h][key] = r["count"]
+        hourly_map[h]["total"] += r["count"]
+    hourly = sorted(hourly_map.values(), key=lambda x: x["hour"])
 
     hours = [{"hour": r["hour"], "ts": r["ts"], "tts": r["tts"],
               "sfx": r["sfx"], "fishtoys": r["fishtoys"], "total": r["total"]}
