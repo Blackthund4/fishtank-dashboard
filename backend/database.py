@@ -37,10 +37,16 @@ def init_db():
             timestamp_local TEXT NOT NULL,
             data JSON NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
-        CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp_server);
+        -- Composite index for keyset pagination (before_id) and poll:vote subqueries
+        DROP INDEX IF EXISTS idx_events_type;
+        CREATE INDEX IF NOT EXISTS idx_events_type_id ON events(event_type, id);
         CREATE INDEX IF NOT EXISTS idx_events_type_ts_local ON events(event_type, timestamp_local);
         CREATE INDEX IF NOT EXISTS idx_events_ts_local ON events(timestamp_local);
+        -- Partial index for fishtoy dedup and superchat ID lookups
+        CREATE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)
+            WHERE event_id IS NOT NULL;
+        -- Drop unused timestamp_server index (never queried)
+        DROP INDEX IF EXISTS idx_events_ts;
 
         CREATE TABLE IF NOT EXISTS stock_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,8 +60,25 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_stock_ticker ON stock_history(ticker);
         CREATE INDEX IF NOT EXISTS idx_stock_ts ON stock_history(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_stock_ticker_ts ON stock_history(ticker, timestamp);
         CREATE INDEX IF NOT EXISTS idx_events_sentiment ON events(event_type, timestamp_local)
             WHERE json_extract(data, '$.sentiment') IS NOT NULL;
+
+        -- Covering indexes for user search (COLLATE NOCASE) and analytics
+        CREATE INDEX IF NOT EXISTS idx_chat_user_ts ON events(
+            event_type, timestamp_local, json_extract(data, '$.user.displayName')
+        ) WHERE event_type = 'chat:message'
+          AND json_extract(data, '$.user.displayName') IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_tts_sender_ts ON events(
+            event_type, timestamp_local, json_extract(data, '$.displayName')
+        ) WHERE event_type = 'tts:update'
+          AND json_extract(data, '$.displayName') IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_sfx_sender_ts ON events(
+            event_type, timestamp_local, json_extract(data, '$.displayName')
+        ) WHERE event_type = 'sfx:update'
+          AND json_extract(data, '$.displayName') IS NOT NULL;
     """)
     conn.commit()
 
