@@ -12,6 +12,8 @@ from pathlib import Path
 
 DB_PATH = Path(os.environ.get("FISHTANK_DB_PATH", Path(__file__).parent / "fishtank.db"))
 
+FISHTOY_TYPE = "fishtoy:used"
+
 _local = threading.local()
 
 
@@ -115,6 +117,8 @@ def init_db():
             WHERE item_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_events_ext_feature ON events(event_type, feature)
             WHERE feature IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_display_name_nocase
+            ON events(display_name COLLATE NOCASE) WHERE display_name IS NOT NULL;
     """)
     conn.commit()
 
@@ -299,15 +303,14 @@ def get_stats(since=None):
     fishtoy_stats = conn.execute("""
         SELECT COUNT(*) as total,
             COALESCE(SUM(cost), 0) as total_cost
-        FROM events WHERE event_type LIKE 'fishtoy%%'
-    """ + since_clause, since_params).fetchone()
+        FROM events WHERE event_type = ?
+    """ + since_clause, [FISHTOY_TYPE] + since_params).fetchone()
 
     # Scoped to cost-bearing event types only
     all_spend = conn.execute("""
         SELECT COALESCE(SUM(cost), 0) as total
-        FROM events WHERE (event_type IN ('tts:update', 'sfx:update', 'super-chat:new')
-            OR event_type LIKE 'fishtoy%')
-    """ + since_clause, since_params).fetchone()
+        FROM events WHERE event_type IN ('tts:update', 'sfx:update', 'super-chat:new', ?)
+    """ + since_clause, [FISHTOY_TYPE] + since_params).fetchone()
 
     # Poll token spend: sum final vote scores for each completed poll
     poll_tokens_rows = conn.execute("""
@@ -359,9 +362,9 @@ def get_stats(since=None):
 
     top_targets = conn.execute("""
         SELECT target, COUNT(*) as count
-        FROM events WHERE event_type LIKE 'fishtoy%%'
+        FROM events WHERE event_type = ?
             AND target IS NOT NULL
-    """ + since_clause + " GROUP BY target ORDER BY count DESC LIMIT 10", since_params).fetchall()
+    """ + since_clause + " GROUP BY target ORDER BY count DESC LIMIT 10", [FISHTOY_TYPE] + since_params).fetchall()
 
     # Per-type leaderboards and UNION ALL top_senders are expensive (json_extract
     # GROUP BY across 600k+ rows). Only compute when `since` is set (24h sidebar).
@@ -372,7 +375,7 @@ def get_stats(since=None):
                 SELECT display_name as sender,
                     COALESCE(SUM(cost), 0) as total_spend,
                     COUNT(*) as total_count
-                FROM events WHERE event_type LIKE 'fishtoy%%'
+                FROM events WHERE event_type = ?
                     AND display_name IS NOT NULL
                     AND timestamp_local >= ?
                 GROUP BY sender
@@ -393,7 +396,7 @@ def get_stats(since=None):
                     AND timestamp_local >= ?
                 GROUP BY sender
             ) GROUP BY sender ORDER BY spend DESC LIMIT 5
-        """, (since, since, since)).fetchall()
+        """, (FISHTOY_TYPE, since, since, since)).fetchall()
 
         top_tts_senders = conn.execute("""
             SELECT display_name as name, COUNT(*) as count,
@@ -418,17 +421,17 @@ def get_stats(since=None):
         top_fishtoy_senders = conn.execute("""
             SELECT display_name as name, COUNT(*) as count,
                 COALESCE(SUM(cost), 0) as spend
-            FROM events WHERE event_type LIKE 'fishtoy%%'
+            FROM events WHERE event_type = ?
                 AND display_name IS NOT NULL
-        """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", since_params).fetchall()
+        """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", [FISHTOY_TYPE] + since_params).fetchall()
     else:
         top_senders_rows = conn.execute("""
             SELECT display_name as sender, COUNT(*) as count,
                 COALESCE(SUM(cost), 0) as spend
-            FROM events WHERE event_type LIKE 'fishtoy%%'
+            FROM events WHERE event_type = ?
                 AND display_name IS NOT NULL
             GROUP BY sender ORDER BY count DESC LIMIT 10
-        """).fetchall()
+        """, (FISHTOY_TYPE,)).fetchall()
         top_senders = top_senders_rows
         top_tts_senders = []
         top_sfx_senders = []
@@ -458,8 +461,8 @@ def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0, be
     """Get fishtoy events with optional filters."""
     conn = _get_conn()
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
-    conditions = ["event_type LIKE 'fishtoy%'"]
-    params = []
+    conditions = ["event_type = ?"]
+    params = [FISHTOY_TYPE]
 
     if target:
         conditions.append("target = ?")
@@ -502,11 +505,11 @@ def get_targets():
         SELECT target, COUNT(*) as count,
             COALESCE(SUM(cost), 0) as spend
         FROM events
-        WHERE event_type LIKE 'fishtoy%'
+        WHERE event_type = ?
             AND target IS NOT NULL
         GROUP BY target
         ORDER BY count DESC
-    """).fetchall()
+    """, (FISHTOY_TYPE,)).fetchall()
     return [{"target": r["target"], "count": r["count"], "spend": r["spend"]} for r in rows]
 
 
@@ -518,25 +521,25 @@ def get_target_stats(target):
     item_rows = conn.execute("""
         SELECT item_id, COUNT(*) as count, COALESCE(SUM(cost), 0) as spend
         FROM events
-        WHERE event_type LIKE 'fishtoy%' AND target = ?
+        WHERE event_type = ? AND target = ?
         GROUP BY item_id ORDER BY count DESC
-    """, (target,)).fetchall()
+    """, (FISHTOY_TYPE, target)).fetchall()
 
     # Top senders
     sender_rows = conn.execute("""
         SELECT display_name as name, COUNT(*) as count
         FROM events
-        WHERE event_type LIKE 'fishtoy%' AND target = ? AND display_name IS NOT NULL
+        WHERE event_type = ? AND target = ? AND display_name IS NOT NULL
         GROUP BY display_name ORDER BY count DESC LIMIT 10
-    """, (target,)).fetchall()
+    """, (FISHTOY_TYPE, target)).fetchall()
 
     # Total + metadata count
     totals = conn.execute("""
         SELECT COUNT(*) as total, COALESCE(SUM(cost), 0) as spend,
             SUM(CASE WHEN metadata IS NOT NULL THEN 1 ELSE 0 END) as with_meta
         FROM events
-        WHERE event_type LIKE 'fishtoy%' AND target = ?
-    """, (target,)).fetchone()
+        WHERE event_type = ? AND target = ?
+    """, (FISHTOY_TYPE, target)).fetchone()
 
     return {
         "total": totals["total"],
@@ -1004,10 +1007,10 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
     """Get only fishtoy events that have metadata (hidden content)."""
     conn = _get_conn()
     conditions = [
-        "event_type LIKE 'fishtoy%'",
+        "event_type = ?",
         "metadata IS NOT NULL",
     ]
-    params = []
+    params = [FISHTOY_TYPE]
 
     if target:
         conditions.append("target = ?")
@@ -1042,14 +1045,12 @@ def get_hidden_content_targets():
     rows = conn.execute("""
         SELECT target, COUNT(*) as count
         FROM events
-        WHERE event_type LIKE 'fishtoy%' AND metadata IS NOT NULL AND target IS NOT NULL
+        WHERE event_type = ? AND metadata IS NOT NULL
         GROUP BY target ORDER BY count DESC
-    """).fetchall()
-    total = conn.execute("""
-        SELECT COUNT(*) FROM events
-        WHERE event_type LIKE 'fishtoy%' AND metadata IS NOT NULL
-    """).fetchone()[0]
-    return {"total": total, "targets": [{"target": r["target"], "count": r["count"]} for r in rows]}
+    """, (FISHTOY_TYPE,)).fetchall()
+    targets = [{"target": r["target"], "count": r["count"]} for r in rows if r["target"] is not None]
+    total = sum(r["count"] for r in rows)
+    return {"total": total, "targets": targets}
 
 
 # ============================================================
@@ -1087,10 +1088,12 @@ def get_superchats(limit=50, since=None):
 
 
 def get_known_superchat_ids():
-    """Return set of event_ids for all stored super-chat:new events."""
+    """Return set of event_ids for recent super-chat:new events (7-day window for dedup)."""
     conn = _get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     rows = conn.execute(
-        "SELECT event_id FROM events WHERE event_type = 'super-chat:new' AND event_id IS NOT NULL"
+        "SELECT event_id FROM events WHERE event_type = 'super-chat:new' AND event_id IS NOT NULL AND timestamp_local >= ?",
+        (cutoff,)
     ).fetchall()
     return {r["event_id"] for r in rows}
 
@@ -1229,10 +1232,10 @@ def search_user(username, limit=500):
     # Fishtoys
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
-        WHERE event_type LIKE 'fishtoy%'
+        WHERE event_type = ?
         AND display_name = ? COLLATE NOCASE
-        Order BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
+        ORDER BY id DESC LIMIT ?
+    """, (FISHTOY_TYPE, username, limit)).fetchall()
     results["fishtoys"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
     results["totals"] = {
@@ -1464,9 +1467,9 @@ def get_known_fishtoy_ids(limit=200):
     conn = _get_conn()
     rows = conn.execute("""
         SELECT event_id FROM events
-        WHERE event_type LIKE 'fishtoy%%' AND event_id IS NOT NULL
+        WHERE event_type = ? AND event_id IS NOT NULL
         ORDER BY id DESC LIMIT ?
-    """, (limit,)).fetchall()
+    """, (FISHTOY_TYPE, limit)).fetchall()
     return {row["event_id"] for row in rows}
 
 
@@ -1484,11 +1487,10 @@ def get_peak_hours():
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
             SUM(CASE WHEN event_type = 'tts:update' THEN 1 ELSE 0 END) as tts,
             SUM(CASE WHEN event_type = 'sfx:update' THEN 1 ELSE 0 END) as sfx,
-            SUM(CASE WHEN event_type LIKE 'fishtoy%%' THEN 1 ELSE 0 END) as fishtoys,
+            SUM(CASE WHEN event_type = 'fishtoy:used' THEN 1 ELSE 0 END) as fishtoys,
             COUNT(*) as total
         FROM events
-        WHERE (event_type IN ('tts:update', 'sfx:update')
-            OR event_type LIKE 'fishtoy%%')
+        WHERE event_type IN ('tts:update', 'sfx:update', 'fishtoy:used')
             AND timestamp_local >= datetime('now', '-24 hours')
         GROUP BY hour ORDER BY hour
     """).fetchall()

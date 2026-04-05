@@ -388,6 +388,23 @@ export default function App() {
   }, [activePoll?.startedAt, activePoll?.ended])
 
   // Superchat countdown + auto-expiry
+  // Pre-compute expiry timestamps once per superchat set change
+  const scExpiries = useMemo(() => {
+    const map = new Map()
+    for (const sc of activeSuperchats) {
+      const d = sc.data || {}
+      const dur = d.duration
+      if (!dur) continue
+      const created = d.createdAt || d.updatedAt || sc.timestamp_local
+      const startMs = typeof created === 'number'
+        ? (created > 1e12 ? created : created * 1000)
+        : Date.parse(created)
+      if (!startMs || isNaN(startMs)) continue
+      map.set(String(sc.id || d.id), startMs + dur * 60000)
+    }
+    return map
+  }, [activeSuperchats])
+
   useEffect(() => {
     if (activeSuperchats.length === 0) {
       setScCountdowns({})
@@ -396,37 +413,27 @@ export default function App() {
     const tick = () => {
       const now = Date.now()
       const counts = {}
-      const expired = []
-      for (const sc of activeSuperchats) {
-        const d = sc.data || {}
-        const dur = d.duration // minutes
-        if (!dur) continue
-        const created = d.createdAt || d.updatedAt || sc.timestamp_local
-        const startMs = typeof created === 'number'
-          ? (created > 1e12 ? created : created * 1000)
-          : Date.parse(created)
-        if (!startMs || isNaN(startMs)) continue
-        const expiresAt = startMs + dur * 60000
+      const expiredSet = new Set()
+      for (const [key, expiresAt] of scExpiries) {
         const remaining = Math.floor((expiresAt - now) / 1000)
-        const key = String(sc.id || d.id)
         if (remaining <= 0) {
-          expired.push(key)
+          expiredSet.add(key)
         } else {
           counts[key] = remaining
         }
       }
       setScCountdowns(counts)
-      if (expired.length > 0) {
+      if (expiredSet.size > 0) {
         setActiveSuperchats(prev => prev.filter(sc => {
           const key = String(sc.id || sc.data?.id)
-          return !expired.includes(key)
+          return !expiredSet.has(key)
         }))
       }
     }
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [activeSuperchats])
+  }, [scExpiries])
 
   // Debounce search text for server fetches (300ms)
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -468,51 +475,35 @@ export default function App() {
   // Sorted chat and activity arrays
   const sortedChats = useMemo(() => sortByTimestamp(chats), [chats])
   const sortedActivity = useMemo(() => {
-    let filtered = activity
-    // Type filter (guards WS events client-side; server already filtered historical)
-    if (activityFilter === 'fishtoys') filtered = filtered.filter(a => a.event === 'fishtoy:used')
-    else if (activityFilter === 'tts') filtered = filtered.filter(a => a.event === 'tts:update')
-    else if (activityFilter === 'sfx') filtered = filtered.filter(a => a.event === 'sfx:update')
-    else if (activityFilter === 'sc') filtered = filtered.filter(a => a.event === 'super-chat:new')
-    // Time range filter (client-side)
-    if (activityTimeRange !== 'all') {
-      const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 }[activityTimeRange]
-      if (hours) {
-        const cutoff = Date.now() - hours * 3600000
-        filtered = filtered.filter(a => getEventTimestamp(a) >= cutoff)
+    const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 }[activityTimeRange]
+    const cutoff = hours ? Date.now() - hours * 3600000 : 0
+    const q = searchText.trim().toLowerCase()
+
+    const filtered = activity.filter(a => {
+      // Type filter
+      if (activityFilter === 'fishtoys' && a.event !== 'fishtoy:used') return false
+      if (activityFilter === 'tts' && a.event !== 'tts:update') return false
+      if (activityFilter === 'sfx' && a.event !== 'sfx:update') return false
+      if (activityFilter === 'sc' && a.event !== 'super-chat:new') return false
+      // Time range filter
+      if (cutoff && getEventTimestamp(a) < cutoff) return false
+      // Fishtoy-specific filters
+      if (a.event === 'fishtoy:used') {
+        if (filterCategory) {
+          const cat = itemCatalog[String(a.data?.itemId || '')]
+          if (cat?.type !== filterCategory) return false
+        }
+        if (filterTarget && a.data?.target !== filterTarget) return false
+        if (filterItemId && String(a.data?.itemId) !== String(filterItemId)) return false
+        if (q) {
+          const meta = a.data?.metadata
+          const name = a.data?.displayName
+          if (!(meta && String(meta).toLowerCase().includes(q)) &&
+              !(name && name.toLowerCase().includes(q))) return false
+        }
       }
-    }
-    // Category filter (fishtoy-only, client-side)
-    if (filterCategory) {
-      filtered = filtered.filter(f => {
-        if (f.event !== 'fishtoy:used') return true
-        const cat = itemCatalog[String(f.data?.itemId || '')]
-        return cat?.type === filterCategory
-      })
-    }
-    // Client-side guards for WS events that arrived after server fetch
-    if (filterTarget) {
-      filtered = filtered.filter(f => {
-        if (f.event !== 'fishtoy:used') return true
-        return f.data?.target === filterTarget
-      })
-    }
-    if (filterItemId) {
-      filtered = filtered.filter(f => {
-        if (f.event !== 'fishtoy:used') return true
-        return String(f.data?.itemId) === String(filterItemId)
-      })
-    }
-    if (searchText.trim()) {
-      const q = searchText.toLowerCase()
-      filtered = filtered.filter(f => {
-        if (f.event !== 'fishtoy:used') return true
-        const meta = f.data?.metadata
-        const name = f.data?.displayName
-        return (meta && String(meta).toLowerCase().includes(q)) ||
-               (name && name.toLowerCase().includes(q))
-      })
-    }
+      return true
+    })
     return sortByTimestamp(filtered)
   }, [activity, activityFilter, activityTimeRange, filterCategory, filterTarget, filterItemId, searchText, itemCatalog])
 
@@ -546,13 +537,14 @@ export default function App() {
   // Unique item types seen in fishtoys for filter dropdown
   const seenItemTypes = useMemo(() => {
     const map = new Map()
-    activity.filter(a => a.event === 'fishtoy:used').forEach(f => {
-      const iid = String(f.data?.itemId || '')
+    for (const a of activity) {
+      if (a.event !== 'fishtoy:used') continue
+      const iid = String(a.data?.itemId || '')
       if (iid && !map.has(iid)) {
         const cat = itemCatalog[iid]
         map.set(iid, cat?.name || `Item #${iid}`)
       }
-    })
+    }
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]))
   }, [activity, itemCatalog])
 
@@ -587,6 +579,61 @@ export default function App() {
     setSearchText('')
     setActivityFilter('all')
   }
+
+  // Memoized computed values for render
+  const sortedStocks = useMemo(() =>
+    [...stocks].sort((a, b) => b.currentPrice - a.currentPrice),
+    [stocks]
+  )
+  const filteredDirectorMessages = useMemo(() => {
+    if (directorTimeRange === 'all') return notifications
+    const hours = { '1h': 1, '6h': 6, '24h': 24 }[directorTimeRange]
+    if (!hours) return notifications
+    const cutoff = Date.now() - hours * 3600000
+    return notifications.filter(n => Date.parse(n.timestamp) >= cutoff)
+  }, [notifications, directorTimeRange])
+  const filteredSystemEvents = useMemo(() => {
+    if (systemFilter === 'all') return systemEvents
+    if (systemFilter === 'toggle') return systemEvents.filter(e => e.event === 'feature-toggles:update')
+    if (systemFilter === 'stox') return systemEvents.filter(e => e.event?.startsWith('stock:'))
+    return systemEvents.filter(e => e.event === 'tts:price' || e.event === 'sfx:price')
+  }, [systemEvents, systemFilter])
+  const pollVoteBars = useMemo(() => {
+    if (pollVotes.length === 0) return null
+    const total = pollVotes.reduce((s, v) => s + (v.score || 0), 0) || 1
+    const maxScore = Math.max(...pollVotes.map(v => v.score || 0))
+    return (
+      <div className="flex gap-2">
+        {pollVotes.map((v) => {
+          const score = v.score || 0
+          const pct = Math.round(score / total * 100)
+          const isLeading = score === maxScore && maxScore > 0
+          return (
+            <div key={v.value} className="flex-1">
+              <div className="flex items-center justify-between text-[10px] mb-0.5">
+                <span className={`font-medium truncate ${isLeading ? 'text-white' : 'text-purple-200/70'}`}>{v.value}</span>
+                <span className={`font-mono ml-1 ${isLeading ? 'text-purple-300' : 'text-purple-400/60'}`}>
+                  {score.toLocaleString()}t ({pct}%)
+                </span>
+              </div>
+              <div className="h-2 bg-purple-900/50 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${isLeading ? 'bg-purple-400' : 'bg-purple-500/50'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }, [pollVotes])
+  const filteredFishtoyStatus = useMemo(() =>
+    [...fishtoyStatus]
+      .filter(item => fishtoyFilter === 'all' || (fishtoyFilter === 'enabled' ? item.enabled : !item.enabled))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+    [fishtoyStatus, fishtoyFilter]
+  )
 
   return (
     <div className="h-screen flex flex-col">
@@ -669,34 +716,7 @@ export default function App() {
               </span>
             )}
           </div>
-          {pollVotes.length > 0 && (
-            <div className="flex gap-2">
-              {(() => {
-                const total = pollVotes.reduce((s, v) => s + (v.score || 0), 0) || 1
-                const maxScore = Math.max(...pollVotes.map(v => v.score || 0))
-                return pollVotes.map((v, i) => {
-                  const pct = Math.round((v.score || 0) / total * 100)
-                  const isLeading = (v.score || 0) === maxScore && maxScore > 0
-                  return (
-                    <div key={v.value} className="flex-1">
-                      <div className="flex items-center justify-between text-[10px] mb-0.5">
-                        <span className={`font-medium truncate ${isLeading ? 'text-white' : 'text-purple-200/70'}`}>{v.value}</span>
-                        <span className={`font-mono ml-1 ${isLeading ? 'text-purple-300' : 'text-purple-400/60'}`}>
-                          {(v.score || 0).toLocaleString()}t ({pct}%)
-                        </span>
-                      </div>
-                      <div className="h-2 bg-purple-900/50 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${isLeading ? 'bg-purple-400' : 'bg-purple-500/50'}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  )
-                })
-              })()}
-            </div>
-          )}
+          {pollVoteBars}
         </div>
       )}
 
@@ -1026,7 +1046,7 @@ export default function App() {
                 </div>
               </div>
               <div className="flex gap-2 overflow-x-auto">
-                {[...stocks].sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
+                {sortedStocks.map(s => {
                   const apiFields = { '1h': 'lastHour', 'today': 'today', '1w': 'lastWeek', 'ipo': 'ipoPrice' }
                   const apiField = apiFields[stoxRange]
                   const base = apiField ? s[apiField] : stoxDeltas[s.tickerSymbol]
@@ -1097,18 +1117,9 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              {(() => {
-                let filtered = notifications
-                if (directorTimeRange !== 'all') {
-                  const hours = { '1h': 1, '6h': 6, '24h': 24 }[directorTimeRange]
-                  if (hours) {
-                    const cutoff = Date.now() - hours * 3600000
-                    filtered = filtered.filter(n => Date.parse(n.timestamp) >= cutoff)
-                  }
-                }
-                return filtered.length > 0 ? (
+              {filteredDirectorMessages.length > 0 ? (
                   <div className="space-y-1 max-h-[150px] overflow-y-auto">
-                    {filtered.map(n => (
+                    {filteredDirectorMessages.map(n => (
                       <div key={n.id} className="flex items-start gap-1.5 p-1.5 bg-yellow-500/5 border border-yellow-500/20 rounded">
                         <div className="min-w-0 flex-1">
                           <p className="text-xs text-tank-bright break-words">{n.message}</p>
@@ -1121,8 +1132,7 @@ export default function App() {
                   <div className="text-[10px] text-tank-muted font-mono">
                     {directorTimeRange !== 'all' ? `No messages in last ${directorTimeRange}` : 'No director messages yet'}
                   </div>
-                )
-              })()}
+                )}
             </div>
 
             {/* Poll History */}
@@ -1231,14 +1241,9 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              {(() => {
-                const filtered = systemFilter === 'all' ? systemEvents
-                  : systemFilter === 'toggle' ? systemEvents.filter(e => e.event === 'feature-toggles:update')
-                  : systemFilter === 'stox' ? systemEvents.filter(e => e.event?.startsWith('stock:'))
-                  : systemEvents.filter(e => e.event === 'tts:price' || e.event === 'sfx:price')
-                return filtered.length > 0 ? (
+              {filteredSystemEvents.length > 0 ? (
                   <div className="space-y-0.5 max-h-[150px] overflow-y-auto">
-                    {filtered.map(e => {
+                    {filteredSystemEvents.map(e => {
                       const fmt = formatSystemEvent(e)
                       return (
                         <div key={e.dbId} className="flex items-center gap-1.5 text-[10px] p-1 bg-tank-bg rounded">
@@ -1255,8 +1260,7 @@ export default function App() {
                   <div className="text-[10px] text-tank-muted font-mono">
                     {systemFilter !== 'all' ? `No ${systemFilter} events` : 'No system events yet'}
                   </div>
-                )
-              })()}
+                )}
             </div>
           </div>
 
@@ -1293,10 +1297,7 @@ export default function App() {
                 </div>
               )}
               <div className="flex flex-wrap gap-1">
-                {[...fishtoyStatus]
-                  .filter(item => fishtoyFilter === 'all' || (fishtoyFilter === 'enabled' ? item.enabled : !item.enabled))
-                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-                  .map(item => {
+                {filteredFishtoyStatus.map(item => {
                     const isActive = filterItemId === String(item.id)
                     return (
                       <button
