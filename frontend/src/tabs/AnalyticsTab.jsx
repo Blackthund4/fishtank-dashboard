@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, memo } from 'react'
 import { TrendingUp, Volume2, MessageSquare, Users, Zap, Fish } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
 
@@ -260,7 +260,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       }>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           {sortedContestants.map(c => {
-            const stock = c.tickerSymbol ? stocks.find(s => s.tickerSymbol === c.tickerSymbol) : null
+            const stock = c.tickerSymbol ? stockMap.get(c.tickerSymbol) : null
             return (
               <div key={c.id} className={`bg-tank-bg border rounded-lg p-2.5 ${
                 c.eliminatedAt ? 'border-red-500/30 opacity-60' : 'border-tank-border'
@@ -539,7 +539,7 @@ function Section({ title, icon: Icon, badge, extra, children }) {
   )
 }
 
-function SentimentHourlyBar({ data }) {
+const SentimentHourlyBar = memo(function SentimentHourlyBar({ data }) {
   const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
   const maxAbs = Math.max(...sorted.map(d => Math.abs(d.avg_sentiment)), 0.01)
   const halfHeight = 20
@@ -569,9 +569,9 @@ function SentimentHourlyBar({ data }) {
       })}
     </div>
   )
-}
+})
 
-function HourlyBar({ data, color }) {
+const HourlyBar = memo(function HourlyBar({ data, color }) {
   const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
   const max = Math.max(...sorted.map(d => d.count), 1)
   return (
@@ -601,9 +601,9 @@ function HourlyBar({ data, color }) {
       })}
     </div>
   )
-}
+})
 
-function StackedHourlyBar({ data }) {
+const StackedHourlyBar = memo(function StackedHourlyBar({ data }) {
   const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
   const max = Math.max(...sorted.map(d => d.total), 1)
   return (
@@ -641,4 +641,4 @@ function StackedHourlyBar({ data }) {
       </div>
     </div>
   )
-}
+})

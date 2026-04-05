@@ -241,7 +241,10 @@ export default function ChartsTab({ stocks }) {
     })
   }, [stockData])
 
-  const visibleTickers = Object.keys(stockToggles).filter(t => stockToggles[t])
+  const visibleTickers = useMemo(() =>
+    new Set(Object.keys(stockToggles).filter(t => stockToggles[t])),
+    [stockToggles]
+  )
 
   function toggleEliminated() {
     const next = !showEliminated
@@ -290,7 +293,7 @@ export default function ChartsTab({ stocks }) {
                 tickFormatter={v => v.toLocaleString()} />
               <Tooltip content={<StockTooltip range={stockRange} tickerColors={tickerColors} />} />
               {Object.keys(stockData).sort().map(ticker => {
-                if (!visibleTickers.includes(ticker)) return null
+                if (!visibleTickers.has(ticker)) return null
                 return <Line key={ticker} type="monotone" dataKey={ticker} stroke={tickerColors[ticker]}
                   strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
               })}

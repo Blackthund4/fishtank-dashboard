@@ -1032,10 +1032,7 @@ def api_events(
 
 @app.get("/api/stats")
 def api_stats(since: str = Query(None, description="ISO timestamp to filter from")):
-    # Truncate to minute precision so clients with slightly different since values
-    # share the same cache entry instead of each triggering a full DB scan.
-    if since and len(since) > 16:
-        since = since[:16] + ":00"
+    since = _normalize_since(since)
     return _cached_query(f"stats:{since}", database.get_stats, since)
 
 
@@ -1164,27 +1161,38 @@ def api_stock_history(
     return database.get_stock_history(ticker=ticker, limit=limit, since=since)
 
 
+def _normalize_since(since):
+    """Truncate since to minute precision for cache key dedup."""
+    if since and len(since) > 16:
+        return since[:16] + ":00"
+    return since
+
+
 @app.get("/api/analytics/tts-sfx")
 def api_tts_sfx_analytics(since: str = Query(None)):
     """TTS and SFX analytics: top rooms, top senders, hourly activity."""
+    since = _normalize_since(since)
     return _cached_query(f"tts-sfx:{since}", database.get_tts_sfx_analytics, since)
 
 
 @app.get("/api/analytics/chat")
 def api_chat_analytics(since: str = Query(None)):
     """Chat analytics: top chatters, hourly volume."""
+    since = _normalize_since(since)
     return _cached_query(f"chat:{since}", database.get_chat_analytics, since)
 
 
 @app.get("/api/analytics/chat-sentiment")
 def api_chat_sentiment(since: str = Query(None)):
     """Chat sentiment analytics: overall mood, hourly breakdown."""
+    since = _normalize_since(since)
     return _cached_query(f"chat-sentiment:{since}", database.get_chat_sentiment, since)
 
 
 @app.get("/api/analytics/tts-sentiment")
 def api_tts_sentiment(since: str = Query(None)):
     """TTS sentiment analytics: overall mood, hourly breakdown, mood by contestant."""
+    since = _normalize_since(since)
     return _cached_query(f"tts-sentiment:{since}", database.get_tts_sentiment, since)
 
 

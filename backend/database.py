@@ -944,14 +944,14 @@ def get_tts_sfx_analytics(since=None):
         FROM events WHERE event_type = 'sfx:update' AND display_name IS NOT NULL
     """ + since_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", since_params).fetchall()
 
+    hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
+    hourly_params = since_params if since else []
     hourly = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
             COUNT(*) as count
         FROM events WHERE event_type IN ('tts:update', 'sfx:update')
-            AND timestamp_local >= datetime('now', '-24 hours')
-        GROUP BY hour ORDER BY hour
-    """).fetchall()
+    """ + hourly_clause + " GROUP BY hour ORDER BY hour", hourly_params).fetchall()
 
     return {
         "top_rooms": [{"room": r["room"], "count": r["count"]} for r in top_rooms],
@@ -984,14 +984,14 @@ def get_chat_analytics(since=None):
         FROM events WHERE event_type = 'chat:message' AND display_name IS NOT NULL
     """ + since_clause + " GROUP BY name ORDER BY count DESC LIMIT 15", since_params).fetchall()
 
+    hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
+    hourly_params = since_params if since else []
     hourly = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
             COUNT(*) as count
         FROM events WHERE event_type = 'chat:message'
-            AND timestamp_local >= datetime('now', '-24 hours')
-        GROUP BY hour ORDER BY hour
-    """).fetchall()
+    """ + hourly_clause + " GROUP BY hour ORDER BY hour", hourly_params).fetchall()
 
     return {
         "total": total,
@@ -1535,6 +1535,8 @@ def _sentiment_base(conn, type_clause, since=None):
 
     base_where = f"{type_clause} AND sentiment IS NOT NULL"
 
+    hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
+    hourly_params = list(params) if since else []
     hourly = conn.execute(f"""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
@@ -1542,9 +1544,7 @@ def _sentiment_base(conn, type_clause, since=None):
             COUNT(*) as message_count
         FROM events
         WHERE {base_where}
-            AND timestamp_local >= datetime('now', '-24 hours')
-        GROUP BY hour ORDER BY hour
-    """).fetchall()
+    """ + hourly_clause + " GROUP BY hour ORDER BY hour", hourly_params).fetchall()
 
     overall_row = conn.execute(f"""
         SELECT
