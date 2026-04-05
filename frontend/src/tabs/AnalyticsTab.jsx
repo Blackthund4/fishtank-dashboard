@@ -31,11 +31,11 @@ const STOCK_SORTS = [
 ]
 
 function getMoodLabel(score) {
-  if (score >= 0.5)  return { label: 'Excited', bgColor: 'bg-green-500',    textColor: 'text-white' }
-  if (score >= 0.15) return { label: 'Happy',   bgColor: 'bg-lime-400',     textColor: 'text-gray-900' }
-  if (score >= -0.15)return { label: 'Neutral', bgColor: 'bg-gray-500/60',  textColor: 'text-gray-100' }
-  if (score >= -0.5) return { label: 'Grumpy',  bgColor: 'bg-orange-500',   textColor: 'text-white' }
-  return               { label: 'Hostile', bgColor: 'bg-red-600',      textColor: 'text-white' }
+  if (score >= 0.3)   return { label: 'Excited', bgColor: 'bg-green-500',    textColor: 'text-white' }
+  if (score >= 0.08)  return { label: 'Happy',   bgColor: 'bg-lime-400',     textColor: 'text-gray-900' }
+  if (score >= -0.08) return { label: 'Neutral', bgColor: 'bg-gray-500/60',  textColor: 'text-gray-100' }
+  if (score >= -0.3)  return { label: 'Grumpy',  bgColor: 'bg-orange-500',   textColor: 'text-white' }
+  return                { label: 'Hostile', bgColor: 'bg-red-600',      textColor: 'text-white' }
 }
 
 function TimeFilter({ value, onChange }) {
