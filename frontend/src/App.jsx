@@ -593,7 +593,7 @@ export default function App() {
       )}
 
       {/* Tab navigation */}
-      <div className="bg-tank-surface border-b border-tank-border px-3 flex items-center gap-1 shrink-0">
+      <div className="bg-tank-surface border-b border-tank-border px-2 sm:px-3 flex items-center gap-0.5 sm:gap-1 shrink-0 overflow-x-auto">
         {[
           { id: 'dashboard', label: 'Dashboard', icon: Fish },
           { id: 'analytics', label: 'Analytics', icon: BarChart3 },
@@ -701,9 +701,9 @@ export default function App() {
       )}
 
       {activeTab === 'dashboard' && (
-      <main className="flex-1 flex flex-col md:flex-row gap-2 p-2 min-h-0">
+      <main className="flex-1 flex flex-col md:flex-row gap-2 p-2 min-h-0 overflow-y-auto md:overflow-hidden">
         {/* LEFT: Fishtoys panel */}
-        <div className="w-full md:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border rounded-lg overflow-hidden">
+        <div className="w-full md:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border rounded-lg overflow-hidden min-h-[400px] md:min-h-0">
           {/* Filter bar */}
           <div className="border-b border-tank-border p-2 space-y-1.5 shrink-0">
             <div className="flex items-center justify-between">
@@ -1205,12 +1205,12 @@ export default function App() {
           )}
 
           {/* Bottom: Chat + Activity side by side */}
-          <div className="flex-1 flex flex-col md:flex-row gap-2 min-h-0">
+          <div className="flex-1 flex flex-col md:flex-row gap-2 min-h-[600px] md:min-h-0">
             <Panel
               title="Chat (Season Pass)"
               icon={MessageSquare}
               count={stats.chats}
-              className="flex-1"
+              className="flex-1 min-h-[300px] md:min-h-0"
               extra={activeSuperchats.length > 0 ? (
                 <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
                   {activeSuperchats.length} pinned
@@ -1268,7 +1268,7 @@ export default function App() {
               title="Activity"
               icon={Radio}
               count={stats.tts + stats.sfx}
-              className="w-full md:w-[420px] md:shrink-0"
+              className="w-full md:w-[420px] md:shrink-0 min-h-[400px] md:min-h-0"
               virtualized
               extra={
                 <div className="flex items-center gap-2">
