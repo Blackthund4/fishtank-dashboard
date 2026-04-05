@@ -1000,8 +1000,9 @@ def api_events(
     type: str = Query(None, description="Filter by event type (comma-separated)"),
     limit: int = Query(200, le=1000),
     since_id: int = Query(None, description="Only return events with id > this"),
+    before_id: int = Query(None, description="Only return events with id < this (keyset pagination)"),
 ):
-    return database.get_events(event_type=type, limit=limit, since_id=since_id)
+    return database.get_events(event_type=type, limit=limit, since_id=since_id, before_id=before_id)
 
 
 @app.get("/api/stats")

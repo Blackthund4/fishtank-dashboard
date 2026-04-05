@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star } from 'lucide-react'
+import { Virtuoso } from 'react-virtuoso'
 import { useWebSocket } from './useWebSocket'
 import { formatDateTime } from './utils/formatTime'
 import StatusBar from './components/StatusBar'
@@ -145,6 +146,8 @@ export default function App() {
   const [allTargets, setAllTargets] = useState([])
   const [activeSuperchats, setActiveSuperchats] = useState([])
   const [activityFilter, setActivityFilter] = useState('all')
+  const [activityHasMore, setActivityHasMore] = useState(true)
+  const [activityLoading, setActivityLoading] = useState(false)
   const directorRef = useRef(null)
   // Load catalog + historical data on mount
   useEffect(() => {
@@ -258,7 +261,7 @@ export default function App() {
         setStats(s => ({ ...s, chats: s.chats + 1 }))
         setSessionStats(s => ({ ...s, chats: s.chats + 1 }))
       } else if (ACTIVITY_TYPES.has(msg.event_type)) {
-        setActivity(prev => [item, ...prev].slice(0, MAX_EVENTS))
+        setActivity(prev => [item, ...prev])
         if (msg.event_type.startsWith('tts')) {
           const cost = msg.data?.cost || 0
           setStats(s => ({ ...s, tts: s.tts + 1, total_spend: s.total_spend + cost }))
@@ -274,7 +277,7 @@ export default function App() {
         setSessionStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
         setStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
         // Add to activity feed
-        setActivity(prev => [item, ...prev].slice(0, MAX_EVENTS))
+        setActivity(prev => [item, ...prev])
         // Add to pinned superchats (dedup by id)
         const scId = String(msg.data?.id || msg.db_id)
         setActiveSuperchats(prev => {
@@ -372,6 +375,33 @@ export default function App() {
     else if (activityFilter === 'sc') filtered = activity.filter(a => a.event === 'super-chat:new')
     return sortByTimestamp(filtered)
   }, [activity, activityFilter])
+
+  const loadMoreActivity = useCallback(() => {
+    if (activityLoading || !activityHasMore) return
+    const minId = activity.reduce((min, a) => {
+      const id = a.dbId
+      return id && (min === null || id < min) ? id : min
+    }, null)
+    if (minId === null) return
+    setActivityLoading(true)
+    fetch(`/api/events?type=tts:update,sfx:update,happening,super-chat:new&limit=200&before_id=${minId}`)
+      .then(r => r.json())
+      .then(events => {
+        if (events.length === 0) {
+          setActivityHasMore(false)
+        } else {
+          const newItems = events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))
+          setActivity(prev => {
+            const existingIds = new Set(prev.map(a => a.dbId).filter(Boolean))
+            const unique = newItems.filter(a => !existingIds.has(a.dbId))
+            return [...prev, ...unique]
+          })
+          if (events.length < 200) setActivityHasMore(false)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setActivityLoading(false))
+  }, [activity, activityLoading, activityHasMore])
 
   // Unique item types seen in fishtoys for filter dropdown
   const seenItemTypes = useMemo(() => {
@@ -990,6 +1020,7 @@ export default function App() {
               icon={Radio}
               count={stats.tts + stats.sfx}
               className="w-full md:w-[340px] md:shrink-0"
+              virtualized
               extra={
                 <div className="flex gap-1">
                   {[
@@ -1018,9 +1049,24 @@ export default function App() {
               {sortedActivity.length === 0 ? (
                 <EmptyState text={activityFilter !== 'all' ? `No ${activityFilter.toUpperCase()} events yet` : "Waiting for TTS / SFX / events..."} />
               ) : (
-                sortedActivity.map((item) => (
-                  <ActivityCard key={item.dbId || item.data?.id} data={item.data} eventType={item.event} roomMap={roomMap} />
-                ))
+                <Virtuoso
+                  style={{ height: '100%' }}
+                  data={sortedActivity}
+                  endReached={loadMoreActivity}
+                  overscan={200}
+                  itemContent={(index, item) => (
+                    <div className="px-2 py-0.5">
+                      <ActivityCard data={item.data} eventType={item.event} roomMap={roomMap} />
+                    </div>
+                  )}
+                  components={{
+                    Footer: () => activityLoading ? (
+                      <div className="text-center text-[10px] text-tank-muted py-2">Loading...</div>
+                    ) : !activityHasMore ? (
+                      <div className="text-center text-[10px] text-tank-muted py-2">No more events</div>
+                    ) : null
+                  }}
+                />
               )}
             </Panel>
           </div>

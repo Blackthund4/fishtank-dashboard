@@ -226,7 +226,7 @@ def store_event(event_type: str, data):
     return cursor.lastrowid
 
 
-def get_events(event_type=None, limit=200, since_id=None):
+def get_events(event_type=None, limit=200, since_id=None, before_id=None):
     conn = _get_conn()
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
     conditions = []
@@ -241,6 +241,10 @@ def get_events(event_type=None, limit=200, since_id=None):
     if since_id is not None:
         conditions.append("id > ?")
         params.append(since_id)
+
+    if before_id is not None:
+        conditions.append("id < ?")
+        params.append(before_id)
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)

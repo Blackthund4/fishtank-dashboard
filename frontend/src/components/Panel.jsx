@@ -1,16 +1,17 @@
 import { useEffect, useRef } from 'react'
 
-export default function Panel({ title, icon: Icon, count, children, className = '' }) {
+export default function Panel({ title, icon: Icon, count, extra, children, className = '', virtualized = false }) {
   const scrollRef = useRef(null)
   const isScrolledToTop = useRef(true)
 
   useEffect(() => {
+    if (virtualized) return
     const el = scrollRef.current
     if (!el) return
     if (isScrolledToTop.current) {
       el.scrollTop = 0
     }
-  }, [count])  // only scroll when item count changes
+  }, [count, virtualized])
 
   const handleScroll = (e) => {
     isScrolledToTop.current = e.target.scrollTop < 10
@@ -25,19 +26,28 @@ export default function Panel({ title, icon: Icon, count, children, className = 
             {title}
           </span>
         </div>
-        {count !== undefined && (
-          <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
-            {count}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {extra}
+          {count !== undefined && (
+            <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
+              {count}
+            </span>
+          )}
+        </div>
       </div>
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-2 space-y-1.5"
-      >
-        {children}
-      </div>
+      {virtualized ? (
+        <div className="flex-1 min-h-0">
+          {children}
+        </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-2 space-y-1.5"
+        >
+          {children}
+        </div>
+      )}
     </div>
   )
 }
