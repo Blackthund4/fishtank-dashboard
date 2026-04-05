@@ -1298,23 +1298,31 @@ def api_poll_latest():
     return database.get_latest_poll_state()
 
 
+@app.get("/api/stocks/delta")
+def api_stock_deltas(range: str = Query('3h')):
+    """Return base prices per ticker for custom time range delta calculation."""
+    if range not in {'3h', '12h', '3d'}:
+        range = '3h'
+    return _cached_query(f"stock-delta:{range}", database.get_stock_deltas, range)
+
+
 @app.get("/api/charts/stocks")
 def api_charts_stocks(range: str = Query('24h')):
-    if range not in {'1h', '6h', '12h', '24h', '3d', '7d', 'all'}:
+    if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:
         range = '24h'
     return _cached_query(f"charts-stocks:{range}", database.get_stock_history_chart, range)
 
 
 @app.get("/api/charts/spend")
 def api_charts_spend(range: str = Query('24h')):
-    if range not in {'1h', '6h', '12h', '24h', '3d', '7d', 'all'}:
+    if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:
         range = '24h'
     return _cached_query(f"charts-spend:{range}", database.get_spend_trends, range)
 
 
 @app.get("/api/charts/chatters")
 def api_charts_chatters(range: str = Query('24h')):
-    if range not in {'1h', '6h', '12h', '24h', '3d', '7d', 'all'}:
+    if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:
         range = '24h'
     return _cached_query(f"charts-chatters:{range}", database.get_chat_chart, range)
 

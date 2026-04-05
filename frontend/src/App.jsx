@@ -137,6 +137,8 @@ export default function App() {
   const [filterItemId, setFilterItemId] = useState(null)
   const [filterCategory, setFilterCategory] = useState(null)
   const [searchText, setSearchText] = useState('')
+  const [stoxRange, setStoxRange] = useState('today')
+  const [stoxDeltas, setStoxDeltas] = useState({})
   const [activeTab, setActiveTab] = useState('dashboard')
 
   // Polls and notifications
@@ -237,6 +239,14 @@ export default function App() {
       })
       .catch(() => {})
   }, [])
+
+  // Fetch custom delta base prices when stoxRange is a computed range
+  useEffect(() => {
+    if (['3h', '12h', '3d'].includes(stoxRange)) {
+      fetch(`/api/stocks/delta?range=${stoxRange}`)
+        .then(r => r.json()).then(setStoxDeltas).catch(() => {})
+    }
+  }, [stoxRange])
 
   // Live events
   useEffect(() => {
@@ -915,20 +925,51 @@ export default function App() {
             <div className="bg-tank-surface border border-tank-border rounded-lg p-2 shrink-0">
               <div className="flex items-center gap-2 mb-1.5">
                 <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">STO-X</h3>
+                <div className="flex gap-0.5 ml-auto">
+                  {[
+                    { id: '1h', label: '1h' },
+                    { id: '3h', label: '3h' },
+                    { id: '12h', label: '12h' },
+                    { id: 'today', label: 'Today' },
+                    { id: '3d', label: '3d' },
+                    { id: '1w', label: '1w' },
+                    { id: 'ipo', label: 'IPO' },
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setStoxRange(t.id)}
+                      className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                        stoxRange === t.id
+                          ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+                          : 'text-tank-muted hover:text-tank-text'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="flex gap-2 overflow-x-auto">
                 {[...stocks].sort((a, b) => b.currentPrice - a.currentPrice).map(s => {
-                  const change = s.currentPrice - s.today
-                  const changePct = s.today > 0 ? ((change / s.today) * 100).toFixed(1) : 0
+                  const apiFields = { '1h': 'lastHour', 'today': 'today', '1w': 'lastWeek', 'ipo': 'ipoPrice' }
+                  const apiField = apiFields[stoxRange]
+                  const base = apiField ? s[apiField] : stoxDeltas[s.tickerSymbol]
+                  const change = base != null ? s.currentPrice - base : 0
+                  const changePct = base > 0 ? ((change / base) * 100).toFixed(1) : 0
                   const isUp = change > 0
                   const isDown = change < 0
+                  const isBigMover = Math.abs(parseFloat(changePct)) >= 10
                   return (
                     <div
                       key={s.tickerSymbol}
                       className={`flex flex-col items-center px-3 py-1.5 rounded border min-w-[80px] ${
                         filterTarget === s.tickerSymbol
                           ? 'border-tank-accent bg-tank-accent/5'
-                          : 'border-tank-border'
+                          : isBigMover
+                            ? isUp
+                              ? 'border-green-500/60 bg-green-500/5 shadow-[0_0_8px_rgba(34,197,94,0.15)]'
+                              : 'border-red-500/60 bg-red-500/5 shadow-[0_0_8px_rgba(239,68,68,0.15)]'
+                            : 'border-tank-border'
                       }`}
                       role="button"
                       onClick={() => setFilterTarget(filterTarget === s.tickerSymbol ? null : s.tickerSymbol)}

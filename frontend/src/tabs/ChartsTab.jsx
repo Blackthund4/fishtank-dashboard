@@ -6,7 +6,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 
-const RANGES = ['1h', '6h', '12h', '24h', '3d', '7d', 'all']
+const RANGES = ['30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all']
 
 const TICKER_COLORS = [
   '#60a5fa', '#34d399', '#f59e0b', '#f87171', '#a78bfa',

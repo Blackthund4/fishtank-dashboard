@@ -655,7 +655,9 @@ def get_stock_history_chart(range_str='24h'):
     conn = _get_conn()
     now = datetime.now(timezone.utc)
     config = {
+        '30m': (now - timedelta(minutes=30), 'raw'),
         '1h':  (now - timedelta(hours=1),  'raw'),
+        '2h':  (now - timedelta(hours=2),  '5min'),
         '6h':  (now - timedelta(hours=6),  '5min'),
         '12h': (now - timedelta(hours=12), '15min'),
         '24h': (now - timedelta(hours=24), '15min'),
@@ -687,12 +689,35 @@ def get_stock_history_chart(range_str='24h'):
     return result
 
 
+def get_stock_deltas(range_str):
+    """Get earliest recorded price per ticker within a time range for delta calculation."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc)
+    windows = {'3h': 3, '12h': 12, '3d': 72}
+    hours = windows.get(range_str)
+    if not hours:
+        return {}
+    since = (now - timedelta(hours=hours)).isoformat()
+    rows = conn.execute("""
+        SELECT sh.ticker, sh.price
+        FROM stock_history sh
+        INNER JOIN (
+            SELECT ticker, MIN(timestamp) AS min_ts
+            FROM stock_history WHERE timestamp >= ?
+            GROUP BY ticker
+        ) m ON sh.ticker = m.ticker AND sh.timestamp = m.min_ts
+    """, [since]).fetchall()
+    return {row['ticker']: row['price'] for row in rows}
+
+
 def get_spend_trends(range_str='24h'):
     """Token spend over time bucketed by event type, using extracted cost column."""
     conn = _get_conn()
     now = datetime.now(timezone.utc)
     config = {
+        '30m': (now - timedelta(minutes=30), '5min'),
         '1h':  (now - timedelta(hours=1),  '5min'),
+        '2h':  (now - timedelta(hours=2),  '5min'),
         '6h':  (now - timedelta(hours=6),  'hourly'),
         '12h': (now - timedelta(hours=12), 'hourly'),
         '24h': (now - timedelta(hours=24), 'hourly'),
@@ -756,7 +781,9 @@ def get_chat_chart(range_str='24h'):
     conn = _get_conn()
     now = datetime.now(timezone.utc)
     config = {
+        '30m': (now - timedelta(minutes=30), '5min'),
         '1h':  (now - timedelta(hours=1),  '5min'),
+        '2h':  (now - timedelta(hours=2),  '5min'),
         '6h':  (now - timedelta(hours=6),  'hourly'),
         '12h': (now - timedelta(hours=12), 'hourly'),
         '24h': (now - timedelta(hours=24), 'hourly'),
