@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fishclient"
+version = "0.1.4"
+description = "client for interacting with FishTank.live"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+ "requests>=2.25.0",
+ "websockets>=11.0.3",
+ "msgpack>=1.0.7",
+]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+authors = [
+ { name = "pluhian"}
+]
+
+[project.urls]
+Homepage = "https://github.com/pluhian/fishclient"
+Repository = "https://github.com/pluhian/fishclient"

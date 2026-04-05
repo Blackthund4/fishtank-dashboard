@@ -15,7 +15,8 @@ WORKDIR /app
 # Install gosu for dropping privileges at runtime
 RUN apt-get update && apt-get install -y gosu && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies (vendor/fishclient must be present before pip runs)
+COPY backend/vendor/ ./vendor/
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 

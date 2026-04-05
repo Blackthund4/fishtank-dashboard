@@ -13,4 +13,5 @@ token_cache.json
 .git
 .gitignore
 *.md
+!backend/vendor/**/README.md
 scripts/
