@@ -22,7 +22,7 @@ import logging
 import os
 import time as _time
 import types
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from threading import Thread, Event, Lock
@@ -80,7 +80,7 @@ EVENTS = [
     "super-chat:delete",
 ]
 
-FISHTOY_POLL_INTERVAL = 2  # seconds
+FISHTOY_POLL_INTERVAL = 5  # seconds
 
 # ---- Cached catalog data (loaded on startup) ----
 _catalog_lock = Lock()
@@ -122,10 +122,15 @@ def _cached_query(key, func, *args):
 # ============================================================
 
 MAX_WS_CLIENTS = 50  # Max concurrent WebSocket connections
+BUILD_VERSION = os.environ.get("BUILD_VERSION", "dev")
+
+# Lightweight cache for /api/health event count — avoids a COUNT(*) on every monitor ping
+_health_event_count: dict = {"value": 0, "ts": 0.0}
+_HEALTH_COUNT_TTL = 30  # seconds
 
 # Per-IP rate limiting: requests per window
 _rate_limit_lock = Lock()
-_rate_limits: dict = defaultdict(list)  # ip -> [timestamps]
+_rate_limits: dict = defaultdict(deque)  # ip -> deque of timestamps
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 120    # max requests per window per IP
 
@@ -133,13 +138,15 @@ RATE_LIMIT_MAX = 120    # max requests per window per IP
 def _check_rate_limit(ip: str) -> bool:
     """Return True if the request should be rejected."""
     now = _time.time()
+    cutoff = now - RATE_LIMIT_WINDOW
     with _rate_limit_lock:
-        timestamps = _rate_limits[ip]
-        cutoff = now - RATE_LIMIT_WINDOW
-        _rate_limits[ip] = [t for t in timestamps if t > cutoff]
-        if len(_rate_limits[ip]) >= RATE_LIMIT_MAX:
+        dq = _rate_limits[ip]
+        # Pop expired entries from the front — O(n_expired) amortised, not O(n_total)
+        while dq and dq[0] <= cutoff:
+            dq.popleft()
+        if len(dq) >= RATE_LIMIT_MAX:
             return True
-        _rate_limits[ip].append(now)
+        dq.append(now)
         return False
 
 
@@ -148,7 +155,7 @@ def _prune_rate_limits():
     now = _time.time()
     cutoff = now - RATE_LIMIT_WINDOW
     with _rate_limit_lock:
-        stale_ips = [ip for ip, ts in _rate_limits.items() if not ts or ts[-1] < cutoff]
+        stale_ips = [ip for ip, dq in _rate_limits.items() if not dq or dq[-1] < cutoff]
         for ip in stale_ips:
             del _rate_limits[ip]
 
@@ -922,13 +929,18 @@ def api_health():
     if _last_stock_poll:
         stock_age = int((now - _last_stock_poll).total_seconds())
 
-    # Database health
-    try:
-        total_events = database.get_event_count()
+    # Database health — count cached 30s to avoid a COUNT(*) on every monitor ping
+    now_ts = _time.time()
+    if now_ts - _health_event_count["ts"] >= _HEALTH_COUNT_TTL:
+        try:
+            _health_event_count["value"] = database.get_event_count()
+            _health_event_count["ts"] = now_ts
+            db_ok = True
+        except Exception:
+            db_ok = False
+    else:
         db_ok = True
-    except Exception:
-        total_events = 0
-        db_ok = False
+    total_events = _health_event_count["value"]
 
     # Overall status
     issues = []
@@ -938,7 +950,7 @@ def api_health():
         issues.append(f"fishtoy poller stale ({fishtoy_age}s)")
     elif fishtoy_age is None and auth.is_configured:
         issues.append("fishtoy poller not started")
-    if stock_age is not None and stock_age > 120:
+    if stock_age is not None and stock_age > 90:
         issues.append(f"stock poller stale ({stock_age}s)")
     elif stock_age is None and auth.is_configured:
         issues.append("stock poller not started")
@@ -1116,7 +1128,7 @@ def api_user_suggest(q: str = Query("", description="Username prefix")):
     """Autocomplete suggestions for usernames."""
     if len(q) < 2:
         return []
-    return database.suggest_users(prefix=q, limit=10)
+    return _cached_query(f"suggest:{q.lower()}", database.suggest_users, q, 10)
 
 
 @app.get("/api/stocks/count")

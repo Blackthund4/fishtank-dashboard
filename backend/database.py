@@ -21,6 +21,8 @@ def _get_conn():
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
         _local.conn.execute("PRAGMA synchronous=NORMAL")
+        _local.conn.execute("PRAGMA temp_store=MEMORY")
+        _local.conn.execute("PRAGMA cache_size=-16384")  # 16 MB page cache per connection
     return _local.conn
 
 
@@ -310,8 +312,9 @@ def get_tts_sfx_analytics(since=None):
 
     top_rooms = conn.execute("""
         SELECT json_extract(data, '$.room') as room, COUNT(*) as count
-        FROM events WHERE event_type IN ('tts:update', 'sfx:update') AND room IS NOT NULL
-    """ + since_clause + " GROUP BY room ORDER BY count DESC LIMIT 10", since_params).fetchall()
+        FROM events WHERE event_type IN ('tts:update', 'sfx:update')
+            AND json_extract(data, '$.room') IS NOT NULL
+    """ + since_clause + " GROUP BY json_extract(data, '$.room') ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
     top_tts_senders = conn.execute("""
         SELECT json_extract(data, '$.displayName') as sender,
@@ -504,9 +507,12 @@ def get_price_changes(limit=100):
 
 
 def search_user(username, limit=500):
-    """Search across all event types for a specific username (case-insensitive)."""
+    """Search across all event types for a specific username (case-insensitive).
+
+    Uses COLLATE NOCASE instead of LOWER() so SQLite can use the covering indexes
+    (idx_chat_user_ts, idx_tts_sender_ts, idx_sfx_sender_ts) rather than full table scans.
+    """
     conn = _get_conn()
-    username_lower = username.lower()
     results = {
         "username": username,
         "chat": [],
@@ -515,40 +521,40 @@ def search_user(username, limit=500):
         "fishtoys": [],
     }
 
-    # Chat messages
+    # Chat messages — uses idx_chat_user_ts covering index
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type = 'chat:message'
-        AND LOWER(json_extract(data, '$.user.displayName')) = ?
+        AND json_extract(data, '$.user.displayName') = ? COLLATE NOCASE
         ORDER BY id DESC LIMIT ?
-    """, (username_lower, limit)).fetchall()
+    """, (username, limit)).fetchall()
     results["chat"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
-    # TTS
+    # TTS — uses idx_tts_sender_ts covering index
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type = 'tts:update'
-        AND LOWER(json_extract(data, '$.displayName')) = ?
-        ORDER BY id DESC LIMIT ?
-    """, (username_lower, limit)).fetchall()
+        AND json_extract(data, '$.displayName') = ? COLLATE NOCASE
+        Order BY id DESC LIMIT ?
+    """, (username, limit)).fetchall()
     results["tts"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
-    # SFX
+    # SFX — uses idx_sfx_sender_ts covering index
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type = 'sfx:update'
-        AND LOWER(json_extract(data, '$.displayName')) = ?
+        AND json_extract(data, '$.displayName') = ? COLLATE NOCASE
         ORDER BY id DESC LIMIT ?
-    """, (username_lower, limit)).fetchall()
+    """, (username, limit)).fetchall()
     results["sfx"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
-    # Fishtoys
+    # Fishtoys — uses idx_events_type on event_type, then NOCASE on displayName
     rows = conn.execute("""
         SELECT id, timestamp_local, data FROM events
         WHERE event_type LIKE 'fishtoy%'
-        AND LOWER(json_extract(data, '$.displayName')) = ?
+        AND json_extract(data, '$.displayName') = ? COLLATE NOCASE
         ORDER BY id DESC LIMIT ?
-    """, (username_lower, limit)).fetchall()
+    """, (username, limit)).fetchall()
     results["fishtoys"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 
     results["totals"] = {
@@ -567,27 +573,31 @@ def search_user(username, limit=500):
 
 
 def suggest_users(prefix, limit=10):
-    """Return distinct displayNames matching a prefix (case-insensitive)."""
-    conn = _get_conn()
-    prefix_lower = prefix.lower() + "%"
+    """Return distinct displayNames matching a prefix (case-insensitive).
 
-    # Search across chat and TTS/SFX senders
+    Uses COLLATE NOCASE on the json_extract expression directly so SQLite can use
+    the covering indexes for prefix LIKE lookups, and avoids the broken LOWER(alias)
+    pattern which referenced a SELECT alias in WHERE (undefined behaviour in SQLite).
+    """
+    conn = _get_conn()
+    prefix_pattern = prefix + "%"
+
     rows = conn.execute("""
         SELECT DISTINCT name FROM (
             SELECT json_extract(data, '$.user.displayName') as name
             FROM events WHERE event_type = 'chat:message'
-            AND LOWER(name) LIKE ?
+            AND json_extract(data, '$.user.displayName') LIKE ? COLLATE NOCASE
             UNION
             SELECT json_extract(data, '$.displayName') as name
             FROM events WHERE event_type IN ('tts:update', 'sfx:update')
-            AND LOWER(name) LIKE ?
+            AND json_extract(data, '$.displayName') LIKE ? COLLATE NOCASE
             UNION
             SELECT json_extract(data, '$.displayName') as name
             FROM events WHERE event_type LIKE 'fishtoy%'
-            AND LOWER(name) LIKE ?
+            AND json_extract(data, '$.displayName') LIKE ? COLLATE NOCASE
         ) WHERE name IS NOT NULL
         LIMIT ?
-    """, (prefix_lower, prefix_lower, prefix_lower, limit)).fetchall()
+    """, (prefix_pattern, prefix_pattern, prefix_pattern, limit)).fetchall()
     return [row["name"] for row in rows]
 
 
