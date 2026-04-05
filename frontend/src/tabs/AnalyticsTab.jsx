@@ -1,48 +1,6 @@
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
-import { TrendingUp, Volume2, MessageSquare, Users, Bell, Vote, Zap, Fish } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { TrendingUp, Volume2, MessageSquare, Users, Zap, Fish } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
-
-function formatSystemEvent(e) {
-  const d = e.data || {}
-    const time = formatDateTime(e.timestamp || d.updatedAt || d.createdAt)
-
-  if (e.event === 'feature-toggles:update') {
-    const name = (d.feature || '').toUpperCase() || 'Unknown'
-    const state = d.enabled ? 'enabled' : 'disabled'
-    const price = d.metadata ? ` (${d.metadata} tokens)` : ''
-    return { badge: 'TOGGLE', badgeClass: d.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400', message: `${name} ${state}${price}`, time }
-  }
-  if (e.event === 'stock:update') {
-    if (d.oldTickerSymbol && d.newTickerSymbol) {
-      return { badge: 'STO-X', badgeClass: 'bg-blue-500/10 text-blue-400', message: `${d.oldTickerSymbol} renamed to ${d.newTickerSymbol}`, time }
-    }
-    const ticker = d.tickerSymbol || '?'
-    const price = d.currentPrice ?? '?'
-    return { badge: 'STO-X', badgeClass: 'bg-blue-500/10 text-blue-400', message: `${ticker} price updated to ${price}`, time }
-  }
-  if (e.event === 'stock:new') {
-    const ticker = d.tickerSymbol || '?'
-    return { badge: 'STO-X', badgeClass: 'bg-green-500/10 text-green-400', message: `${ticker} added to market`, time }
-  }
-  if (e.event === 'stock:remove') {
-    const ticker = d.tickerSymbol || '?'
-    return { badge: 'STO-X', badgeClass: 'bg-red-500/10 text-red-400', message: `${ticker} removed from market`, time }
-  }
-  if (e.event === 'stock:split') {
-    const ticker = d.tickerSymbol || '?'
-    return { badge: 'STO-X', badgeClass: 'bg-yellow-500/10 text-yellow-400', message: `${ticker} stock split`, time }
-  }
-  if (e.event === 'tts:price') {
-    const price = typeof d === 'number' ? d : d.price || d.cost || JSON.stringify(d)
-    return { badge: 'TTS', badgeClass: 'bg-purple-500/10 text-purple-400', message: `TTS price changed to ${price} tokens`, time }
-  }
-  if (e.event === 'sfx:price') {
-    const price = typeof d === 'number' ? d : d.price || d.cost || JSON.stringify(d)
-    return { badge: 'SFX', badgeClass: 'bg-indigo-500/10 text-indigo-400', message: `SFX price changed to ${price} tokens`, time }
-  }
-  // Fallback
-  return { badge: e.event.split(':')[0].toUpperCase(), badgeClass: 'bg-tank-highlight text-tank-muted', message: typeof d === 'string' ? d : JSON.stringify(d).substring(0, 100), time }
-}
 
 function getSinceISO(period) {
   if (!period) return null
@@ -101,13 +59,12 @@ function TimeFilter({ value, onChange }) {
   )
 }
 
-const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, itemCatalog, notifications = [], systemEvents = [], featureToggles = {} }, ref) {
+function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }) {
   const [stockHistory, setStockHistory] = useState([])
   const [stocks, setStocks] = useState([])
   const [ttsAnalytics, setTtsAnalytics] = useState(null)
   const [chatAnalytics, setChatAnalytics] = useState(null)
   const [fishtoyStatus, setFishtoyStatus] = useState([])
-  const [polls, setPolls] = useState([])
   const [priceChanges, setPriceChanges] = useState([])
   const [stockCount, setStockCount] = useState(0)
   const [peakHours, setPeakHours] = useState(null)
@@ -121,22 +78,6 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
 
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
-  const directorRef = useRef(null)
-  const [directorHighlight, setDirectorHighlight] = useState(false)
-  const highlightTimer = useRef(null)
-
-  useEffect(() => {
-    return () => { if (highlightTimer.current) clearTimeout(highlightTimer.current) }
-  }, [])
-
-  useImperativeHandle(ref, () => ({
-    scrollToDirector: () => {
-      directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      setDirectorHighlight(true)
-      if (highlightTimer.current) clearTimeout(highlightTimer.current)
-      highlightTimer.current = setTimeout(() => setDirectorHighlight(false), 2000)
-    }
-  }))
 
   // Fetch data that doesn't depend on time filters
   useEffect(() => {
@@ -145,7 +86,6 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
-      fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
       fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
       fetch('/api/analytics/peak-hours').then(r => r.json()).then(setPeakHours).catch(() => {})
     }
@@ -568,120 +508,29 @@ const AnalyticsTab = forwardRef(function AnalyticsTab({ contestants, roomMap, it
         </div>
       </Section>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {/* Director Messages */}
-        <div ref={directorRef} className={directorHighlight ? 'animate-highlight-pulse rounded-lg' : ''}>
-          <Section title="Director Messages" icon={Bell}>
-            {notifications.length > 0 ? (
-              <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
-                {notifications.map(n => (
-                  <div key={n.id} className="flex items-start gap-2 p-2 bg-yellow-500/5 border border-yellow-500/20 rounded">
-                    <Bell className="w-3.5 h-3.5 text-yellow-400 shrink-0 mt-0.5" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm text-tank-bright break-words">{n.message}</p>
-                      <span className="text-[10px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
-                    </div>
-                  </div>
-                ))}
+      {/* Price Changes */}
+      <Section title="Price Changes" icon={Zap}>
+        {priceChanges.length > 0 ? (
+          <div className="space-y-1 max-h-[200px] overflow-y-auto">
+            {priceChanges.map(p => (
+              <div key={p.id} className="flex items-center justify-between text-xs p-1.5 bg-tank-bg rounded">
+                <span className={`font-mono px-1.5 py-0.5 rounded ${
+                  p.event_type === 'tts:price' ? 'bg-purple-500/10 text-purple-400' : 'bg-indigo-500/10 text-indigo-400'
+                }`}>
+                  {p.event_type === 'tts:price' ? 'TTS' : 'SFX'}
+                </span>
+                <span className="text-tank-bright font-mono">{typeof p.data === 'number' ? `${p.data}t` : JSON.stringify(p.data)}</span>
+                <span className="text-[10px] text-tank-muted font-mono">{formatDateTime(p.timestamp_local)}</span>
               </div>
-            ) : (
-              <div className="text-xs text-tank-muted font-mono">No director messages yet</div>
-            )}
-          </Section>
-        </div>
-
-        {/* Poll History */}
-        <Section title="Poll History" icon={Vote}>
-          {polls.length > 0 ? (
-            <div className="space-y-2 max-h-[300px] overflow-y-auto">
-              {polls.map(p => {
-                const d = p.data || {}
-                const question = d.question || d.poll?.question
-                const answers = d.answers || d.poll?.answers
-                return (
-                  <div key={p.id} className={`p-2 rounded border ${
-                    p.event_type === 'poll:stop'
-                      ? 'border-purple-500/30 bg-purple-500/5'
-                      : 'border-tank-border bg-tank-bg'
-                  }`}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                        p.event_type === 'poll:stop'
-                          ? 'bg-purple-500/10 text-purple-400'
-                          : 'bg-tank-highlight text-tank-muted'
-                      }`}>
-                        {p.event_type === 'poll:stop' ? 'RESULT' : 'STARTED'}
-                      </span>
-                      <span className="text-[10px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
-                    </div>
-                    {question && <p className="text-xs text-tank-bright mb-1">{question}</p>}
-                    {d.winner && (
-                      <div className="text-xs">
-                        Winner: <span className="font-semibold text-purple-400">{d.winner}</span>
-                      </div>
-                    )}
-                    {answers && !d.winner && (
-                      <div className="text-[10px] text-tank-muted">
-                        Options: {answers.join(', ')}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="text-xs text-tank-muted font-mono">No polls recorded yet</div>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {/* Price Changes */}
-        <Section title="Price Changes" icon={Zap}>
-          {priceChanges.length > 0 ? (
-            <div className="space-y-1 max-h-[200px] overflow-y-auto">
-              {priceChanges.map(p => (
-                <div key={p.id} className="flex items-center justify-between text-xs p-1.5 bg-tank-bg rounded">
-                  <span className={`font-mono px-1.5 py-0.5 rounded ${
-                    p.event_type === 'tts:price' ? 'bg-purple-500/10 text-purple-400' : 'bg-indigo-500/10 text-indigo-400'
-                  }`}>
-                    {p.event_type === 'tts:price' ? 'TTS' : 'SFX'}
-                  </span>
-                  <span className="text-tank-bright font-mono">{typeof p.data === 'number' ? `${p.data}t` : JSON.stringify(p.data)}</span>
-                  <span className="text-[10px] text-tank-muted font-mono">{formatDateTime(p.timestamp_local)}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-xs text-tank-muted font-mono">No price changes recorded</div>
-          )}
-        </Section>
-
-        {/* System Events */}
-        <Section title="System Events" icon={Zap}>
-          {systemEvents.length > 0 ? (
-            <div className="space-y-1 max-h-[200px] overflow-y-auto">
-              {systemEvents.map(e => {
-                const fmt = formatSystemEvent(e)
-                return (
-                  <div key={e.dbId} className="flex items-center gap-2 text-xs p-1.5 bg-tank-bg rounded">
-                    <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded shrink-0 ${fmt.badgeClass}`}>
-                      {fmt.badge}
-                    </span>
-                    <span className="text-tank-text flex-1">{fmt.message}</span>
-                    {fmt.time && <span className="text-[10px] text-tank-muted font-mono shrink-0">{fmt.time}</span>}
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="text-xs text-tank-muted font-mono">No system events yet</div>
-          )}
-        </Section>
-      </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-tank-muted font-mono">No price changes recorded</div>
+        )}
+      </Section>
     </div>
   )
-})
+}
 
 export default AnalyticsTab
 

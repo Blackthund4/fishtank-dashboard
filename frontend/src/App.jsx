@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User } from 'lucide-react'
+import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star } from 'lucide-react'
 import { useWebSocket } from './useWebSocket'
+import { formatDateTime } from './utils/formatTime'
 import StatusBar from './components/StatusBar'
 import Panel from './components/Panel'
 import FishtoyCard from './components/FishtoyCard'
@@ -52,9 +53,51 @@ function normalizeStats(raw) {
     poll_tokens: raw.poll_tokens || 0,
     superchat_tokens: raw.superchat_tokens || 0,
     top_targets: (raw.top_targets || []).map(t => ({ target: t.name, count: t.count })),
-    top_senders: (raw.top_senders || []).map(s => ({ name: s.name, count: s.count })),
+    top_senders: (raw.top_senders || []).map(s => ({ name: s.name, count: s.count, spend: s.spend || 0 })),
+    top_tts_senders: (raw.top_tts_senders || []).map(s => ({ name: s.name, count: s.count, spend: s.spend || 0 })),
+    top_sfx_senders: (raw.top_sfx_senders || []).map(s => ({ name: s.name, count: s.count, spend: s.spend || 0 })),
+    top_chat_senders: (raw.top_chat_senders || []).map(s => ({ name: s.name, count: s.count })),
+    top_fishtoy_senders: (raw.top_fishtoy_senders || []).map(s => ({ name: s.name, count: s.count, spend: s.spend || 0 })),
     total_events: raw.total_events || 0,
   }
+}
+
+function formatSystemEvent(e) {
+  const d = e.data || {}
+  const time = formatDateTime(e.timestamp || d.updatedAt || d.createdAt)
+
+  if (e.event === 'feature-toggles:update') {
+    const name = (d.feature || '').toUpperCase() || 'Unknown'
+    const state = d.enabled ? 'enabled' : 'disabled'
+    const price = d.metadata ? ` (${d.metadata} tokens)` : ''
+    return { badge: 'TOGGLE', badgeClass: d.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400', message: `${name} ${state}${price}`, time }
+  }
+  if (e.event === 'stock:update') {
+    if (d.oldTickerSymbol && d.newTickerSymbol) {
+      return { badge: 'STO-X', badgeClass: 'bg-blue-500/10 text-blue-400', message: `${d.oldTickerSymbol} renamed to ${d.newTickerSymbol}`, time }
+    }
+    const ticker = d.tickerSymbol || '?'
+    const price = d.currentPrice ?? '?'
+    return { badge: 'STO-X', badgeClass: 'bg-blue-500/10 text-blue-400', message: `${ticker} price updated to ${price}`, time }
+  }
+  if (e.event === 'stock:new') {
+    return { badge: 'STO-X', badgeClass: 'bg-green-500/10 text-green-400', message: `${d.tickerSymbol || '?'} added to market`, time }
+  }
+  if (e.event === 'stock:remove') {
+    return { badge: 'STO-X', badgeClass: 'bg-red-500/10 text-red-400', message: `${d.tickerSymbol || '?'} removed from market`, time }
+  }
+  if (e.event === 'stock:split') {
+    return { badge: 'STO-X', badgeClass: 'bg-yellow-500/10 text-yellow-400', message: `${d.tickerSymbol || '?'} stock split`, time }
+  }
+  if (e.event === 'tts:price') {
+    const price = typeof d === 'number' ? d : d.price || d.cost || JSON.stringify(d)
+    return { badge: 'TTS', badgeClass: 'bg-purple-500/10 text-purple-400', message: `TTS price changed to ${price} tokens`, time }
+  }
+  if (e.event === 'sfx:price') {
+    const price = typeof d === 'number' ? d : d.price || d.cost || JSON.stringify(d)
+    return { badge: 'SFX', badgeClass: 'bg-indigo-500/10 text-indigo-400', message: `SFX price changed to ${price} tokens`, time }
+  }
+  return { badge: e.event.split(':')[0].toUpperCase(), badgeClass: 'bg-tank-highlight text-tank-muted', message: typeof d === 'string' ? d : JSON.stringify(d).substring(0, 100), time }
 }
 
 // $10 = 100 tokens -> 1 token = $0.10
@@ -69,11 +112,11 @@ export default function App() {
   const [activity, setActivity] = useState([])
   const [stats, setStats] = useState({
     fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
-    top_targets: [], top_senders: [], total_events: 0,
+    top_targets: [], top_senders: [], top_tts_senders: [], top_sfx_senders: [], top_chat_senders: [], top_fishtoy_senders: [], total_events: 0,
   })
   const [sessionStats, setSessionStats] = useState({
     fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
-    top_targets: [], top_senders: [], total_events: 0,
+    top_targets: [], top_senders: [], top_tts_senders: [], top_sfx_senders: [], top_chat_senders: [], top_fishtoy_senders: [], total_events: 0,
   })
 
   // Catalog data
@@ -95,7 +138,11 @@ export default function App() {
   const [notifications, setNotifications] = useState([])
   const [systemEvents, setSystemEvents] = useState([])
   const [featureToggles, setFeatureToggles] = useState({})
-  const analyticsRef = useRef(null)
+  const [polls, setPolls] = useState([])
+  const [fishtoyStatus, setFishtoyStatus] = useState([])
+  const [fishtoyFilter, setFishtoyFilter] = useState('enabled')
+  const [allTargets, setAllTargets] = useState([])
+  const directorRef = useRef(null)
   // Load catalog + historical data on mount
   useEffect(() => {
     fetch('/api/items').then(r => r.json()).then(setItemCatalog).catch(() => {})
@@ -106,6 +153,9 @@ export default function App() {
     const since24h = new Date(Date.now() - 24 * 3600000).toISOString()
     fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(r => r.json()).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
     fetch('/api/feature-toggles').then(r => r.json()).then(setFeatureToggles).catch(() => {})
+    fetch('/api/targets').then(r => r.json()).then(setAllTargets).catch(() => {})
+    fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
+    fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
     fetch('/api/notifications').then(r => r.json()).then(data => {
       setNotifications(data.map(n => ({
         id: n.id,
@@ -181,6 +231,19 @@ export default function App() {
         const cost = msg.data?.cost || 0
         setStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
         setSessionStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
+        // Incrementally update allTargets
+        const target = msg.data?.target
+        if (target) {
+          setAllTargets(prev => {
+            const idx = prev.findIndex(t => t.target === target)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = { ...updated[idx], count: updated[idx].count + 1, spend: updated[idx].spend + cost }
+              return updated.sort((a, b) => b.count - a.count)
+            }
+            return [{ target, count: 1, spend: cost }, ...prev]
+          })
+        }
       } else if (CHAT_TYPES.has(msg.event_type)) {
         setChats(prev => [item, ...prev].slice(0, MAX_EVENTS))
         setStats(s => ({ ...s, chats: s.chats + 1 }))
@@ -213,6 +276,7 @@ export default function App() {
         setPollVotes(Array.isArray(msg.data) ? msg.data : [])
       } else if (msg.event_type === 'poll:stop') {
         setActivePoll(prev => prev ? { ...prev, ended: true, winner: msg.data?.winner } : null)
+        fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
       } else if (NOTIFICATION_TYPES.has(msg.event_type)) {
         const notif = {
           id: msg.db_id,
@@ -247,6 +311,7 @@ export default function App() {
       fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(r => r.json()).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/feature-toggles').then(r => r.json()).then(setFeatureToggles).catch(() => {})
+      fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
     }, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -295,21 +360,8 @@ export default function App() {
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]))
   }, [fishtoys, itemCatalog])
 
-  // Unique targets seen in fishtoy data, sorted by count
-  const seenTargets = useMemo(() => {
-    const counts = new Map()
-    const spend = new Map()
-    fishtoys.forEach(f => {
-      const t = f.data?.target
-      if (t) {
-        counts.set(t, (counts.get(t) || 0) + 1)
-        spend.set(t, (spend.get(t) || 0) + (f.data?.cost || 0))
-      }
-    })
-    return Array.from(counts.entries())
-      .map(([target, count]) => ({ target, count, spend: spend.get(target) || 0 }))
-      .sort((a, b) => b.count - a.count)
-  }, [fishtoys])
+  // Targets sourced from DB via /api/targets, incrementally updated from WS
+  const seenTargets = allTargets
 
   // Target-specific stats when a target is selected
   const targetStats = useMemo(() => {
@@ -399,8 +451,8 @@ export default function App() {
           {notifications.length > 1 && (
             <button
               onClick={() => {
-                setActiveTab('analytics')
-                setTimeout(() => analyticsRef.current?.scrollToDirector(), 400)
+                setActiveTab('dashboard')
+                setTimeout(() => directorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
               }}
               className="text-[10px] font-mono text-yellow-400/60 hover:text-yellow-400 underline cursor-pointer"
             >
@@ -543,151 +595,109 @@ export default function App() {
           </div>
         </div>
 
-        {/* RIGHT: Everything else */}
+        {/* CENTER: Everything else */}
         <div className="flex-1 flex flex-col gap-2 min-w-0">
 
-          {/* Top row: Targets + Stats side by side */}
-          <div className="flex flex-col md:flex-row gap-2 shrink-0">
-            {/* Targets + Target detail */}
-            <div className="flex-1 flex flex-col gap-2 min-w-0">
-              {/* Target pills */}
-              {seenTargets.length > 0 && (
-                <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Targets</h3>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {seenTargets.map(({ target, count, spend }) => {
-                      const isActive = filterTarget === target
-                      const contestant = contestants.find(c => c.name === target)
-                      return (
-                        <button
-                          key={target}
-                          onClick={() => setFilterTarget(isActive ? null : target)}
-                          className={`text-[11px] font-medium px-2 py-0.5 rounded-full border transition-colors ${
-                            isActive
-                              ? 'border-tank-accent bg-tank-accent/10 text-tank-accent'
-                              : 'border-tank-border hover:border-tank-muted text-tank-text'
-                          }`}
-                          style={contestant?.color && !isActive ? { borderColor: contestant.color + '40' } : undefined}
-                          title={`${count} fishtoys, ${spend.toLocaleString()} tokens (${tokensToUSD(spend)})`}
-                        >
-                          {target}
-                          <span className="text-[9px] text-tank-muted ml-1">{count}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
+          {/* Top row: Targets + Target detail */}
+          <div className="shrink-0 flex flex-col gap-2">
+            {/* Target pills */}
+            {seenTargets.length > 0 && (
+              <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Targets</h3>
                 </div>
-              )}
-
-              {/* Target detail (when selected) */}
-              {filterTarget && targetStats && (
-                <div className="bg-tank-surface border border-tank-accent/30 rounded-lg p-2.5">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => setFilterTarget(null)} className="text-tank-muted hover:text-tank-bright">
-                        <X className="w-3.5 h-3.5" />
+                <div className="flex flex-wrap gap-1">
+                  {seenTargets.map(({ target, count, spend }) => {
+                    const isActive = filterTarget === target
+                    const contestant = contestants.find(c => c.name === target)
+                    return (
+                      <button
+                        key={target}
+                        onClick={() => setFilterTarget(isActive ? null : target)}
+                        className={`text-[11px] font-medium px-2 py-0.5 rounded-full border transition-colors ${
+                          isActive
+                            ? 'border-tank-accent bg-tank-accent/10 text-tank-accent'
+                            : 'border-tank-border hover:border-tank-muted text-tank-text'
+                        }`}
+                        style={contestant?.color && !isActive ? { borderColor: contestant.color + '40' } : undefined}
+                        title={`${count} fishtoys, ${spend.toLocaleString()} tokens (${tokensToUSD(spend)})`}
+                      >
+                        {target}
+                        <span className="text-[9px] text-tank-muted ml-1">{count}</span>
                       </button>
-                      <span className="text-sm font-bold text-tank-accent">{filterTarget}</span>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1 sm:gap-3 text-[10px] font-mono">
-                      <span className="text-tank-accent">{targetStats.total} fishtoys</span>
-                      <span className="text-tank-warn">{targetStats.totalSpend.toLocaleString()} tokens ({tokensToUSD(targetStats.totalSpend)})</span>
-                      {targetStats.withMeta > 0 && (
-                        <span className="text-tank-accent">{targetStats.withMeta} with content</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex flex-col md:flex-row gap-4">
-                    {/* Items used */}
-                    {targetStats.topItems.length > 0 && (
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1">Items used</h4>
-                        <div className="space-y-0.5">
-                          {targetStats.topItems.map(item => {
-                            const isActive = filterItemId === item.id
-                            return (
-                              <button
-                                key={item.id}
-                                onClick={() => setFilterItemId(isActive ? null : item.id)}
-                                className={`w-full flex items-center justify-between text-left px-1.5 py-0.5 rounded text-xs transition-colors ${
-                                  isActive
-                                    ? 'bg-tank-accent/10 text-tank-accent'
-                                    : 'hover:bg-tank-highlight text-tank-text'
-                                }`}
-                              >
-                                <span className="truncate">{item.name}</span>
-                                <div className="flex items-center gap-2 shrink-0 ml-2">
-                                  <span className="font-mono text-tank-muted">{item.count}</span>
-                                  <span className="font-mono text-tank-warn text-[10px]">{item.spend.toLocaleString()}t ({tokensToUSD(item.spend)})</span>
-                                </div>
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-                    {/* Top senders to this target */}
-                    {targetStats.topSenders.length > 0 && (
-                      <div className="w-full md:w-[180px] md:shrink-0">
-                        <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1">Top senders</h4>
-                        <div className="space-y-0.5">
-                          {targetStats.topSenders.slice(0, 5).map((s, i) => (
-                            <div key={s.name} className="flex items-center justify-between text-xs">
-                              <div className="flex items-center gap-1">
-                                <span className="text-[10px] font-mono text-tank-muted w-3">{i + 1}.</span>
-                                <span className="text-tank-bright truncate">{s.name}</span>
-                              </div>
-                              <span className="font-mono text-tank-accent shrink-0 ml-1">{s.count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                    )
+                  })}
                 </div>
-              )}
-            </div>
-
-            {/* Session stats (always visible, right side) */}
-            <div className="w-full md:w-[200px] md:shrink-0 bg-tank-surface border border-tank-border rounded-lg p-2.5">
-              <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">
-                Last 24 Hours
-              </h3>
-              <div className="space-y-1.5">
-                <StatRow label="Fishtoys" value={sessionStats.fishtoys} color="text-tank-accent" />
-                <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
-                <StatRow label="TTS" value={sessionStats.tts} color="text-purple-400" />
-                <StatRow label="SFX" value={sessionStats.sfx} color="text-indigo-400" />
-                {sessionStats.poll_tokens > 0 && (
-                  <StatRow label="Poll Votes" value={sessionStats.poll_tokens.toLocaleString()} color="text-cyan-400" />
-                )}
-                {sessionStats.superchat_tokens > 0 && (
-                  <StatRow label="Superchats" value={sessionStats.superchat_tokens.toLocaleString()} color="text-yellow-400" />
-                )}
-                <div className="w-full h-px bg-tank-border my-0.5" />
-                <StatRow label="Tokens" value={sessionStats.total_spend.toLocaleString()} color="text-tank-warn" />
-                <StatRow label="Est. Revenue" value={tokensToUSD(sessionStats.total_spend)} color="text-green-400" />
               </div>
-              {/* Top senders (global, only when no target selected) */}
-              {!filterTarget && sessionStats.top_senders && sessionStats.top_senders.length > 0 && (
-                <div className="border-t border-tank-border/50 pt-2 mt-2">
-                  <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Senders</h4>
-                  <div className="space-y-1">
-                    {sessionStats.top_senders.slice(0, 5).map((s, i) => (
-                      <div key={s.name} className="flex items-center justify-between text-[11px]">
-                        <div className="flex items-center gap-1">
-                          <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
-                          <span className="text-tank-bright truncate">{s.name}</span>
-                        </div>
-                        <span className="font-mono text-tank-accent shrink-0">{s.count}</span>
-                      </div>
-                    ))}
+            )}
+
+            {/* Target detail (when selected) */}
+            {filterTarget && targetStats && (
+              <div className="bg-tank-surface border border-tank-accent/30 rounded-lg p-2.5">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setFilterTarget(null)} className="text-tank-muted hover:text-tank-bright">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-sm font-bold text-tank-accent">{filterTarget}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1 sm:gap-3 text-[10px] font-mono">
+                    <span className="text-tank-accent">{targetStats.total} fishtoys</span>
+                    <span className="text-tank-warn">{targetStats.totalSpend.toLocaleString()} tokens ({tokensToUSD(targetStats.totalSpend)})</span>
+                    {targetStats.withMeta > 0 && (
+                      <span className="text-tank-accent">{targetStats.withMeta} with content</span>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
+                <div className="flex flex-col md:flex-row gap-4">
+                  {/* Items used */}
+                  {targetStats.topItems.length > 0 && (
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1">Items used</h4>
+                      <div className="space-y-0.5">
+                        {targetStats.topItems.map(item => {
+                          const isActive = filterItemId === item.id
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => setFilterItemId(isActive ? null : item.id)}
+                              className={`w-full flex items-center justify-between text-left px-1.5 py-0.5 rounded text-xs transition-colors ${
+                                isActive
+                                  ? 'bg-tank-accent/10 text-tank-accent'
+                                  : 'hover:bg-tank-highlight text-tank-text'
+                              }`}
+                            >
+                              <span className="truncate">{item.name}</span>
+                              <div className="flex items-center gap-2 shrink-0 ml-2">
+                                <span className="font-mono text-tank-muted">{item.count}</span>
+                                <span className="font-mono text-tank-warn text-[10px]">{item.spend.toLocaleString()}t ({tokensToUSD(item.spend)})</span>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {/* Top senders to this target */}
+                  {targetStats.topSenders.length > 0 && (
+                    <div className="w-full md:w-[180px] md:shrink-0">
+                      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1">Top senders</h4>
+                      <div className="space-y-0.5">
+                        {targetStats.topSenders.slice(0, 5).map((s, i) => (
+                          <div key={s.name} className="flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] font-mono text-tank-muted w-3">{i + 1}.</span>
+                              <span className="text-tank-bright truncate">{s.name}</span>
+                            </div>
+                            <span className="font-mono text-tank-accent shrink-0 ml-1">{s.count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* STO-X ticker */}
@@ -726,6 +736,182 @@ export default function App() {
             </div>
           )}
 
+          {/* Fishtoy Availability pills */}
+          {fishtoyStatus.length > 0 && (
+            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5 shrink-0">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-tank-muted" />
+                  <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Fishtoy Availability</h3>
+                  <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
+                    {fishtoyStatus.filter(f => f.enabled).length}/{fishtoyStatus.length}
+                  </span>
+                </div>
+                <div className="flex gap-1">
+                  {['enabled', 'all', 'disabled'].map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setFishtoyFilter(f)}
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                        fishtoyFilter === f
+                          ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                          : 'text-tank-muted hover:text-tank-text'
+                      }`}
+                    >
+                      {f.charAt(0).toUpperCase() + f.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {featureToggles.fishtoys && !featureToggles.fishtoys.enabled && (
+                <div className="text-[10px] text-red-400 font-mono mb-1.5 p-1.5 bg-red-500/5 border border-red-500/20 rounded">
+                  Fishtoys globally disabled by production
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1">
+                {[...fishtoyStatus]
+                  .filter(item => fishtoyFilter === 'all' || (fishtoyFilter === 'enabled' ? item.enabled : !item.enabled))
+                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                  .map(item => {
+                    const isActive = filterItemId === String(item.id)
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setFilterItemId(isActive ? null : String(item.id))}
+                        className={`text-[10px] font-medium px-2 py-1 rounded border transition-colors ${
+                          isActive
+                            ? 'border-tank-accent bg-tank-accent/10 text-tank-accent'
+                            : item.enabled
+                              ? 'border-green-500/30 hover:border-green-400/60 text-tank-text'
+                              : 'border-red-500/30 hover:border-red-400/40 text-tank-muted'
+                        }`}
+                      >
+                        {item.name}
+                        <span className="text-[9px] text-tank-warn ml-1">{item.cost}t</span>
+                        {item.type === 'BIGTOY' && (
+                          <Star className={`w-2.5 h-2.5 inline ml-0.5 ${isActive ? 'text-tank-accent' : 'text-purple-400'}`} />
+                        )}
+                      </button>
+                    )
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* Info grid: Director Messages, Poll History, System Events */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
+            {/* Director Messages */}
+            <div ref={directorRef} className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Bell className="w-3.5 h-3.5 text-yellow-400" />
+                <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Director Messages</h3>
+              </div>
+              {notifications.length > 0 ? (
+                <div className="space-y-1 max-h-[150px] overflow-y-auto">
+                  {notifications.map(n => (
+                    <div key={n.id} className="flex items-start gap-1.5 p-1.5 bg-yellow-500/5 border border-yellow-500/20 rounded">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs text-tank-bright break-words">{n.message}</p>
+                        <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[10px] text-tank-muted font-mono">No director messages yet</div>
+              )}
+            </div>
+
+            {/* Poll History */}
+            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Vote className="w-3.5 h-3.5 text-purple-400" />
+                <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Poll History</h3>
+              </div>
+              {polls.length > 0 ? (
+                <div className="space-y-1.5 max-h-[150px] overflow-y-auto">
+                  {polls.map(p => {
+                    const d = p.data || {}
+                    const question = d.question || d.poll?.question
+                    const votes = d.votes || d.scores || []
+                    const total = votes.reduce((s, v) => s + (v.score || 0), 0) || 1
+                    return (
+                      <div key={p.id} className={`p-1.5 rounded border ${
+                        p.event_type === 'poll:stop'
+                          ? 'border-purple-500/30 bg-purple-500/5'
+                          : 'border-tank-border bg-tank-bg'
+                      }`}>
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className={`text-[9px] font-mono px-1 py-0.5 rounded ${
+                            p.event_type === 'poll:stop'
+                              ? 'bg-purple-500/10 text-purple-400'
+                              : 'bg-tank-highlight text-tank-muted'
+                          }`}>
+                            {p.event_type === 'poll:stop' ? 'RESULT' : 'STARTED'}
+                          </span>
+                          <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
+                        </div>
+                        {question && <p className="text-[11px] text-tank-bright mb-0.5">{question}</p>}
+                        {votes.length > 0 && (
+                          <div className="space-y-0.5">
+                            {[...votes].sort((a, b) => (b.score || 0) - (a.score || 0)).map((v, i) => (
+                              <div key={v.value} className="flex items-center gap-1">
+                                <span className="text-[9px] w-3 shrink-0">{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`}</span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center justify-between text-[9px]">
+                                    <span className="text-tank-bright truncate">{v.value}</span>
+                                    <span className="text-purple-400 font-mono ml-1">{Math.round(v.score / total * 100)}%</span>
+                                  </div>
+                                  <div className="h-1 bg-tank-bg rounded-full overflow-hidden">
+                                    <div className="h-full rounded-full bg-purple-400/70" style={{ width: `${Math.round(v.score / total * 100)}%` }} />
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {d.winner && (
+                          <div className="text-[10px] mt-0.5">
+                            Winner: <span className="font-semibold text-purple-400">{d.winner}</span>
+                            {votes.length > 0 && <span className="text-tank-muted ml-1">({total.toLocaleString()} tokens)</span>}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-[10px] text-tank-muted font-mono">No polls recorded yet</div>
+              )}
+            </div>
+
+            {/* System Events */}
+            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Zap className="w-3.5 h-3.5 text-tank-muted" />
+                <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">System Events</h3>
+              </div>
+              {systemEvents.length > 0 ? (
+                <div className="space-y-0.5 max-h-[150px] overflow-y-auto">
+                  {systemEvents.map(e => {
+                    const fmt = formatSystemEvent(e)
+                    return (
+                      <div key={e.dbId} className="flex items-center gap-1.5 text-[10px] p-1 bg-tank-bg rounded">
+                        <span className={`font-mono text-[9px] px-1 py-0.5 rounded shrink-0 ${fmt.badgeClass}`}>
+                          {fmt.badge}
+                        </span>
+                        <span className="text-tank-text flex-1 truncate">{fmt.message}</span>
+                        {fmt.time && <span className="text-[9px] text-tank-muted font-mono shrink-0">{fmt.time}</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-[10px] text-tank-muted font-mono">No system events yet</div>
+              )}
+            </div>
+          </div>
+
           {/* Bottom: Chat + Activity side by side */}
           <div className="flex-1 flex flex-col md:flex-row gap-2 min-h-0">
             <Panel title="Chat (Season Pass)" icon={MessageSquare} count={stats.chats} className="flex-1">
@@ -750,17 +936,138 @@ export default function App() {
           </div>
 
         </div>
+
+        {/* RIGHT: 24h sidebar */}
+        <div className="w-full md:w-[280px] md:shrink-0 overflow-y-auto bg-tank-surface border border-tank-border rounded-lg p-2.5">
+          <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">
+            Last 24 Hours
+          </h3>
+          <div className="space-y-1.5">
+            <StatRow label="Fishtoys" value={sessionStats.fishtoys} color="text-tank-accent" />
+            <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
+            <StatRow label="TTS" value={sessionStats.tts} color="text-purple-400" />
+            <StatRow label="SFX" value={sessionStats.sfx} color="text-indigo-400" />
+            {sessionStats.poll_tokens > 0 && (
+              <StatRow label="Poll Votes" value={sessionStats.poll_tokens.toLocaleString()} color="text-cyan-400" />
+            )}
+            {sessionStats.superchat_tokens > 0 && (
+              <StatRow label="Superchats" value={sessionStats.superchat_tokens.toLocaleString()} color="text-yellow-400" />
+            )}
+            <div className="w-full h-px bg-tank-border my-0.5" />
+            <StatRow label="Tokens" value={sessionStats.total_spend.toLocaleString()} color="text-tank-warn" />
+            <StatRow label="Est. Revenue" value={tokensToUSD(sessionStats.total_spend)} color="text-green-400" />
+          </div>
+
+          {/* Top Spenders (TTS, SFX & Fishtoys) */}
+          {sessionStats.top_senders && sessionStats.top_senders.length > 0 && (
+            <div className="border-t border-tank-border/50 pt-2 mt-2">
+              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Spenders (TTS, SFX & Fishtoys)</h4>
+              <div className="space-y-1">
+                {sessionStats.top_senders.slice(0, 5).map((s, i) => (
+                  <div key={s.name} className="flex items-center justify-between text-[11px]">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+                      <span className="text-tank-bright truncate">{s.name}</span>
+                    </div>
+                    <div className="flex flex-col items-end shrink-0">
+                      <span className="font-mono text-tank-warn text-[10px]">{s.spend.toLocaleString()}t</span>
+                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top TTS */}
+          {sessionStats.top_tts_senders && sessionStats.top_tts_senders.length > 0 && (
+            <div className="border-t border-tank-border/50 pt-2 mt-2">
+              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top TTS</h4>
+              <div className="space-y-1">
+                {sessionStats.top_tts_senders.slice(0, 5).map((s, i) => (
+                  <div key={s.name} className="flex items-center justify-between text-[11px]">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+                      <span className="text-tank-bright truncate">{s.name}</span>
+                    </div>
+                    <div className="flex flex-col items-end shrink-0">
+                      <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spend.toLocaleString()}t</span>
+                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top SFX */}
+          {sessionStats.top_sfx_senders && sessionStats.top_sfx_senders.length > 0 && (
+            <div className="border-t border-tank-border/50 pt-2 mt-2">
+              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top SFX</h4>
+              <div className="space-y-1">
+                {sessionStats.top_sfx_senders.slice(0, 5).map((s, i) => (
+                  <div key={s.name} className="flex items-center justify-between text-[11px]">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+                      <span className="text-tank-bright truncate">{s.name}</span>
+                    </div>
+                    <div className="flex flex-col items-end shrink-0">
+                      <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spend.toLocaleString()}t</span>
+                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Chat */}
+          {sessionStats.top_chat_senders && sessionStats.top_chat_senders.length > 0 && (
+            <div className="border-t border-tank-border/50 pt-2 mt-2">
+              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Chat</h4>
+              <div className="space-y-1">
+                {sessionStats.top_chat_senders.slice(0, 5).map((s, i) => (
+                  <div key={s.name} className="flex items-center justify-between text-[11px]">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+                      <span className="text-tank-bright truncate">{s.name}</span>
+                    </div>
+                    <span className="font-mono text-blue-400 shrink-0 text-[10px]">{s.count} msg</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Fishtoy */}
+          {sessionStats.top_fishtoy_senders && sessionStats.top_fishtoy_senders.length > 0 && (
+            <div className="border-t border-tank-border/50 pt-2 mt-2">
+              <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">Top Fishtoy</h4>
+              <div className="space-y-1">
+                {sessionStats.top_fishtoy_senders.slice(0, 5).map((s, i) => (
+                  <div key={s.name} className="flex items-center justify-between text-[11px]">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+                      <span className="text-tank-bright truncate">{s.name}</span>
+                    </div>
+                    <div className="flex flex-col items-end shrink-0">
+                      <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spend.toLocaleString()}t</span>
+                      <span className="font-mono text-green-400 text-[9px]">{tokensToUSD(s.spend)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </main>
       )}
 
       {activeTab === 'analytics' && (
         <AnalyticsTab
-          ref={analyticsRef}
           contestants={contestants}
           roomMap={roomMap}
           itemCatalog={itemCatalog}
-          notifications={notifications}
-          systemEvents={systemEvents}
           featureToggles={featureToggles}
         />
       )}

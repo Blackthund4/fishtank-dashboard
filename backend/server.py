@@ -1119,6 +1119,12 @@ def api_fishtoy_availability():
     ]
 
 
+@app.get("/api/targets")
+def api_targets():
+    """Get all fishtoy targets with total count and spend."""
+    return _cached_query("targets", database.get_targets)
+
+
 @app.get("/api/fishtoys")
 def api_fishtoys(
     target: str = Query(None, description="Filter by contestant target name"),
