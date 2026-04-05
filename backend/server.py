@@ -1012,8 +1012,12 @@ def api_events(
     limit: int = Query(200, le=1000),
     since_id: int = Query(None, description="Only return events with id > this"),
     before_id: int = Query(None, description="Only return events with id < this (keyset pagination)"),
+    target: str = Query(None, description="Filter by contestant target name"),
+    item_id: str = Query(None, description="Filter by item ID"),
+    search: str = Query(None, description="Search metadata and sender name"),
 ):
-    return database.get_events(event_type=type, limit=limit, since_id=since_id, before_id=before_id)
+    return database.get_events(event_type=type, limit=limit, since_id=since_id, before_id=before_id,
+                               target=target, item_id=item_id, search=search)
 
 
 @app.get("/api/stats")

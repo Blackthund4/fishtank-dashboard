@@ -127,9 +127,6 @@ export default function App() {
   const { isConnected, addListener } = useWebSocket()
   const [serverVersion, setServerVersion] = useState(null)
   const [knownVersion, setKnownVersion] = useState(null)
-  const [fishtoys, setFishtoys] = useState([])
-  const [fishtoyHasMore, setFishtoyHasMore] = useState(true)
-  const [fishtoyLoading, setFishtoyLoading] = useState(false)
   const [chats, setChats] = useState([])
   const [activity, setActivity] = useState([])
   const [stats, setStats] = useState({
@@ -199,7 +196,7 @@ export default function App() {
       })))
     }).catch(() => {})
 
-    // Fishtoys fetched by fishtoyApiParams effect (server-side filters + pagination)
+    // Activity fetched by feedApiParams effect (unified feed with server-side filters + pagination)
 
     // Fetch chat messages
     fetch('/api/events?type=chat:message&limit=500')
@@ -215,13 +212,7 @@ export default function App() {
       .then(data => setActiveSuperchats(data.filter(sc => !sc.deleted)))
       .catch(() => {})
 
-    // Fetch activity (TTS/SFX/happening/superchat) separately so chat doesn't crowd them out
-    fetch('/api/events?type=tts:update,sfx:update,happening,super-chat:new&limit=500')
-      .then(r => r.json())
-      .then(events => {
-        setActivity(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
-      })
-      .catch(() => {})
+    // Activity (unified feed) fetched by feedApiParams effect below
 
     // Fetch system events separately so one type doesn't crowd out others
     Promise.all([
@@ -283,7 +274,7 @@ export default function App() {
       const item = { event: msg.event_type, data: msg.data, dbId: msg.db_id }
 
       if (FISHTOY_TYPES.has(msg.event_type)) {
-        setFishtoys(prev => [item, ...prev])
+        setActivity(prev => [item, ...prev])
         const cost = msg.data?.cost || 0
         setStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
         setSessionStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
@@ -444,85 +435,46 @@ export default function App() {
     return () => clearTimeout(id)
   }, [searchText])
 
-  // Build fishtoy API URL from current server-side filters
-  const fishtoyApiParams = useMemo(() => {
+  // Build unified feed API URL from current filters
+  const feedApiParams = useMemo(() => {
     const p = new URLSearchParams()
     p.set('limit', '500')
+    const typeMap = {
+      all: 'fishtoy:used,tts:update,sfx:update,happening,super-chat:new',
+      fishtoys: 'fishtoy:used',
+      tts: 'tts:update',
+      sfx: 'sfx:update',
+      sc: 'super-chat:new',
+    }
+    p.set('type', typeMap[activityFilter] || typeMap.all)
     if (filterTarget) p.set('target', filterTarget)
     if (filterItemId) p.set('item_id', filterItemId)
     if (debouncedSearch) p.set('search', debouncedSearch)
     return p.toString()
-  }, [filterTarget, filterItemId, debouncedSearch])
+  }, [activityFilter, filterTarget, filterItemId, debouncedSearch])
 
-  // Re-fetch fishtoys when server-side filters change
+  // Re-fetch unified feed when filters change
   useEffect(() => {
-    setFishtoyHasMore(true)
-    fetch(`/api/fishtoys?${fishtoyApiParams}`)
+    setActivityHasMore(true)
+    fetch(`/api/events?${feedApiParams}`)
       .then(r => r.json())
       .then(events => {
-        setFishtoys(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
-        if (events.length < 500) setFishtoyHasMore(false)
+        setActivity(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
+        if (events.length < 500) setActivityHasMore(false)
       })
       .catch(() => {})
-  }, [fishtoyApiParams])
-
-  // Client-side filters: category (not a server param) + WS event guard for target/itemId/search
-  const filteredFishtoys = useMemo(() => {
-    let result = fishtoys
-    if (filterTarget) result = result.filter(f => f.data?.target === filterTarget)
-    if (filterItemId) result = result.filter(f => String(f.data?.itemId) === String(filterItemId))
-    if (filterCategory) {
-      result = result.filter(f => {
-        const cat = itemCatalog[String(f.data?.itemId || '')]
-        return cat?.type === filterCategory
-      })
-    }
-    if (searchText.trim()) {
-      const q = searchText.toLowerCase()
-      result = result.filter(f => {
-        const meta = f.data?.metadata
-        const name = f.data?.displayName
-        return (meta && String(meta).toLowerCase().includes(q)) ||
-               (name && name.toLowerCase().includes(q))
-      })
-    }
-    return sortByTimestamp(result)
-  }, [fishtoys, filterTarget, filterCategory, filterItemId, searchText, itemCatalog])
-
-  const loadMoreFishtoys = useCallback(() => {
-    if (fishtoyLoading || !fishtoyHasMore) return
-    const minId = fishtoys.reduce((min, f) => {
-      const id = f.dbId
-      return id && (min === null || id < min) ? id : min
-    }, null)
-    if (minId === null) return
-    setFishtoyLoading(true)
-    fetch(`/api/fishtoys?${fishtoyApiParams}&before_id=${minId}`)
-      .then(r => r.json())
-      .then(events => {
-        if (events.length === 0) {
-          setFishtoyHasMore(false)
-        } else {
-          const newItems = events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))
-          setFishtoys(prev => {
-            const existingIds = new Set(prev.map(f => f.dbId).filter(Boolean))
-            const unique = newItems.filter(f => !existingIds.has(f.dbId))
-            return [...prev, ...unique]
-          })
-          if (events.length < 500) setFishtoyHasMore(false)
-        }
-      })
-      .catch(() => {})
-      .finally(() => setFishtoyLoading(false))
-  }, [fishtoys, fishtoyLoading, fishtoyHasMore, fishtoyApiParams])
+  }, [feedApiParams])
 
   // Sorted chat and activity arrays
   const sortedChats = useMemo(() => sortByTimestamp(chats), [chats])
   const sortedActivity = useMemo(() => {
     let filtered = activity
-    if (activityFilter === 'tts') filtered = filtered.filter(a => a.event === 'tts:update')
+    // Type filter (guards WS events client-side; server already filtered historical)
+    if (activityFilter === 'fishtoys') filtered = filtered.filter(a => a.event === 'fishtoy:used')
+    else if (activityFilter === 'tts') filtered = filtered.filter(a => a.event === 'tts:update')
     else if (activityFilter === 'sfx') filtered = filtered.filter(a => a.event === 'sfx:update')
     else if (activityFilter === 'sc') filtered = filtered.filter(a => a.event === 'super-chat:new')
+    // Time range filter (client-side)
     if (activityTimeRange !== 'all') {
       const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 }[activityTimeRange]
       if (hours) {
@@ -530,8 +482,39 @@ export default function App() {
         filtered = filtered.filter(a => getEventTimestamp(a) >= cutoff)
       }
     }
+    // Category filter (fishtoy-only, client-side)
+    if (filterCategory) {
+      filtered = filtered.filter(f => {
+        if (f.event !== 'fishtoy:used') return true
+        const cat = itemCatalog[String(f.data?.itemId || '')]
+        return cat?.type === filterCategory
+      })
+    }
+    // Client-side guards for WS events that arrived after server fetch
+    if (filterTarget) {
+      filtered = filtered.filter(f => {
+        if (f.event !== 'fishtoy:used') return true
+        return f.data?.target === filterTarget
+      })
+    }
+    if (filterItemId) {
+      filtered = filtered.filter(f => {
+        if (f.event !== 'fishtoy:used') return true
+        return String(f.data?.itemId) === String(filterItemId)
+      })
+    }
+    if (searchText.trim()) {
+      const q = searchText.toLowerCase()
+      filtered = filtered.filter(f => {
+        if (f.event !== 'fishtoy:used') return true
+        const meta = f.data?.metadata
+        const name = f.data?.displayName
+        return (meta && String(meta).toLowerCase().includes(q)) ||
+               (name && name.toLowerCase().includes(q))
+      })
+    }
     return sortByTimestamp(filtered)
-  }, [activity, activityFilter, activityTimeRange])
+  }, [activity, activityFilter, activityTimeRange, filterCategory, filterTarget, filterItemId, searchText, itemCatalog])
 
   const loadMoreActivity = useCallback(() => {
     if (activityLoading || !activityHasMore) return
@@ -541,7 +524,7 @@ export default function App() {
     }, null)
     if (minId === null) return
     setActivityLoading(true)
-    fetch(`/api/events?type=tts:update,sfx:update,happening,super-chat:new&limit=200&before_id=${minId}`)
+    fetch(`/api/events?${feedApiParams}&before_id=${minId}`)
       .then(r => r.json())
       .then(events => {
         if (events.length === 0) {
@@ -553,17 +536,17 @@ export default function App() {
             const unique = newItems.filter(a => !existingIds.has(a.dbId))
             return [...prev, ...unique]
           })
-          if (events.length < 200) setActivityHasMore(false)
+          if (events.length < 500) setActivityHasMore(false)
         }
       })
       .catch(() => {})
       .finally(() => setActivityLoading(false))
-  }, [activity, activityLoading, activityHasMore])
+  }, [activity, activityLoading, activityHasMore, feedApiParams])
 
   // Unique item types seen in fishtoys for filter dropdown
   const seenItemTypes = useMemo(() => {
     const map = new Map()
-    fishtoys.forEach(f => {
+    activity.filter(a => a.event === 'fishtoy:used').forEach(f => {
       const iid = String(f.data?.itemId || '')
       if (iid && !map.has(iid)) {
         const cat = itemCatalog[iid]
@@ -571,7 +554,7 @@ export default function App() {
       }
     })
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]))
-  }, [fishtoys, itemCatalog])
+  }, [activity, itemCatalog])
 
   // Targets sourced from DB via /api/targets, incrementally updated from WS
   const seenTargets = allTargets
@@ -602,6 +585,7 @@ export default function App() {
     setFilterCategory(null)
     setFilterItemId(null)
     setSearchText('')
+    setActivityFilter('all')
   }
 
   return (
@@ -730,16 +714,20 @@ export default function App() {
 
       {activeTab === 'dashboard' && (
       <main className="flex-1 flex flex-col md:flex-row gap-2 p-2 min-h-0 overflow-y-auto md:overflow-hidden">
-        {/* LEFT: Fishtoys panel */}
+        {/* LEFT: Unified Activity panel */}
         <div className="w-full md:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border rounded-lg overflow-hidden min-h-[400px] md:min-h-0">
           {/* Filter bar */}
           <div className="border-b border-tank-border p-2 space-y-1.5 shrink-0">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Fish className="w-4 h-4 text-tank-accent" />
-                <span className="text-xs font-semibold text-tank-bright uppercase tracking-wider">Fishtoys</span>
+                <Radio className="w-4 h-4 text-tank-accent" />
+                <span className="text-xs font-semibold text-tank-bright uppercase tracking-wider">Activity</span>
                 <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
-                  {hasActiveFilters ? `${filteredFishtoys.length} / ${stats.fishtoys}` : stats.fishtoys}
+                  {activityFilter === 'fishtoys'
+                    ? hasActiveFilters ? `${sortedActivity.length} / ${stats.fishtoys}` : stats.fishtoys
+                    : activityFilter === 'tts' ? stats.tts
+                    : activityFilter === 'sfx' ? stats.sfx
+                    : stats.fishtoys + stats.tts + stats.sfx}
                 </span>
               </div>
               {hasActiveFilters && (
@@ -748,84 +736,151 @@ export default function App() {
                 </button>
               )}
             </div>
-            <div className="flex gap-1">
-              {[null, 'FISHTOY', 'BIGTOY'].map(cat => (
-                <button
-                  key={cat || 'all'}
-                  onClick={() => setFilterCategory(cat)}
-                  className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
-                    filterCategory === cat
-                      ? cat === 'BIGTOY'
-                        ? 'border-purple-400 bg-purple-500/10 text-purple-400'
-                        : 'border-tank-accent bg-tank-accent/10 text-tank-accent'
-                      : 'border-tank-border text-tank-muted hover:border-tank-muted'
-                  }`}
-                >
-                  {cat || 'All'}
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-1.5">
-              <div className="relative flex-1">
-                <Search className="w-3 h-3 text-tank-muted absolute left-2 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Search metadata / sender..."
-                  value={searchText}
-                  onChange={e => setSearchText(e.target.value)}
-                  className="w-full bg-tank-bg border border-tank-border rounded text-xs text-tank-text pl-7 pr-2 py-1 font-mono placeholder:text-tank-muted/50 focus:border-tank-accent/50 focus:outline-none"
-                />
-              </div>
-              <select
-                value={filterItemId || ''}
-                onChange={e => setFilterItemId(e.target.value || null)}
-                className="bg-tank-bg border border-tank-border rounded text-xs text-tank-text px-1.5 py-1 font-mono focus:border-tank-accent/50 focus:outline-none max-w-[140px]"
-              >
-                <option value="">All types</option>
-                {seenItemTypes.map(([id, name]) => (
-                  <option key={id} value={id}>{name}</option>
-                ))}
-              </select>
-            </div>
-            {filterTarget && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-mono text-tank-muted">Target:</span>
-                <span className="text-[10px] font-mono text-tank-warn bg-tank-warn/10 px-1.5 py-0.5 rounded flex items-center gap-1">
-                  {filterTarget}
-                  <button onClick={() => setFilterTarget(null)} className="hover:text-tank-danger">
-                    <X className="w-2.5 h-2.5" />
+            {/* Type + time range filters */}
+            <div className="flex items-center gap-2">
+              <div className="flex gap-0.5">
+                {[
+                  { id: 'all', label: 'All' },
+                  { id: 'fishtoys', label: 'Fishtoys' },
+                  { id: 'tts', label: 'TTS' },
+                  { id: 'sfx', label: 'SFX' },
+                  { id: 'sc', label: 'SC' },
+                ].map(f => {
+                  const disabled = hasActiveFilters && f.id !== 'all' && f.id !== 'fishtoys'
+                  return (
+                  <button
+                    key={f.id}
+                    onClick={() => !disabled && setActivityFilter(f.id)}
+                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                      disabled
+                        ? 'text-tank-muted/30 cursor-not-allowed'
+                        : activityFilter === f.id
+                          ? f.id === 'sc'
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                            : f.id === 'fishtoys'
+                              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
+                              : 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                          : 'text-tank-muted hover:text-tank-text'
+                    }`}
+                  >
+                    {f.label}
                   </button>
-                </span>
+                  )
+                })}
               </div>
+              <div className="w-px h-3 bg-tank-border" />
+              <div className="flex gap-0.5">
+                {[
+                  { id: '1h', label: '1h' },
+                  { id: '6h', label: '6h' },
+                  { id: '24h', label: '24h' },
+                  { id: '7d', label: '7d' },
+                  { id: 'all', label: '\u221E' },
+                ].map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setActivityTimeRange(t.id)}
+                    className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                      activityTimeRange === t.id
+                        ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
+                        : 'text-tank-muted hover:text-tank-text'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Fishtoy sub-filters (shown when fishtoys visible) */}
+            {(activityFilter === 'fishtoys' || activityFilter === 'all') && (
+              <>
+                <div className="flex gap-1">
+                  {[null, 'FISHTOY', 'BIGTOY'].map(cat => (
+                    <button
+                      key={cat || 'all'}
+                      onClick={() => setFilterCategory(cat)}
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
+                        filterCategory === cat
+                          ? cat === 'BIGTOY'
+                            ? 'border-purple-400 bg-purple-500/10 text-purple-400'
+                            : 'border-tank-accent bg-tank-accent/10 text-tank-accent'
+                          : 'border-tank-border text-tank-muted hover:border-tank-muted'
+                      }`}
+                    >
+                      {cat || 'All'}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex gap-1.5">
+                  <div className="relative flex-1">
+                    <Search className="w-3 h-3 text-tank-muted absolute left-2 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search metadata / sender..."
+                      value={searchText}
+                      onChange={e => setSearchText(e.target.value)}
+                      className="w-full bg-tank-bg border border-tank-border rounded text-xs text-tank-text pl-7 pr-2 py-1 font-mono placeholder:text-tank-muted/50 focus:border-tank-accent/50 focus:outline-none"
+                    />
+                  </div>
+                  <select
+                    value={filterItemId || ''}
+                    onChange={e => setFilterItemId(e.target.value || null)}
+                    className="bg-tank-bg border border-tank-border rounded text-xs text-tank-text px-1.5 py-1 font-mono focus:border-tank-accent/50 focus:outline-none max-w-[140px]"
+                  >
+                    <option value="">All items</option>
+                    {seenItemTypes.map(([id, name]) => (
+                      <option key={id} value={id}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+                {filterTarget && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-mono text-tank-muted">Target:</span>
+                    <span className="text-[10px] font-mono text-tank-warn bg-tank-warn/10 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      {filterTarget}
+                      <button onClick={() => setFilterTarget(null)} className="hover:text-tank-danger">
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </div>
-          {/* Fishtoy list */}
+          {/* Unified activity list */}
           <div className="flex-1 min-h-0">
-            {filteredFishtoys.length === 0 ? (
+            {sortedActivity.length === 0 ? (
               <div className="p-2">
-                <EmptyState text={hasActiveFilters ? "No fishtoys match filters" : "Waiting for fishtoy events..."} />
+                <EmptyState text={hasActiveFilters || activityFilter !== 'all' ? "No events match filters" : "Waiting for events..."} />
               </div>
             ) : (
               <Virtuoso
                 style={{ height: '100%' }}
-                data={filteredFishtoys}
-                endReached={loadMoreFishtoys}
+                data={sortedActivity}
+                endReached={loadMoreActivity}
                 overscan={200}
                 itemContent={(index, item) => (
                   <div className="px-2 py-0.5">
-                    <FishtoyCard
-                      data={item.data}
-                      eventType={item.event}
-                      itemCatalog={itemCatalog}
-                      onTargetClick={setFilterTarget}
-                    />
+                    {item.event === 'fishtoy:used' ? (
+                      <FishtoyCard
+                        data={item.data}
+                        eventType={item.event}
+                        itemCatalog={itemCatalog}
+                        onTargetClick={(target) => {
+                          setFilterTarget(target)
+                          setActivityFilter('fishtoys')
+                        }}
+                      />
+                    ) : (
+                      <ActivityCard data={item.data} eventType={item.event} roomMap={roomMap} />
+                    )}
                   </div>
                 )}
                 components={{
-                  Footer: () => fishtoyLoading ? (
+                  Footer: () => activityLoading ? (
                     <div className="text-center text-[10px] text-tank-muted py-2">Loading...</div>
-                  ) : !fishtoyHasMore ? (
-                    <div className="text-center text-[10px] text-tank-muted py-2">No more fishtoys</div>
+                  ) : !activityHasMore ? (
+                    <div className="text-center text-[10px] text-tank-muted py-2">No more events</div>
                   ) : null
                 }}
               />
@@ -851,7 +906,10 @@ export default function App() {
                     return (
                       <button
                         key={target}
-                        onClick={() => setFilterTarget(isActive ? null : target)}
+                        onClick={() => {
+                          setFilterTarget(isActive ? null : target)
+                          if (!isActive) setActivityFilter('fishtoys')
+                        }}
                         className={`text-[11px] font-medium px-2 py-0.5 rounded-full border transition-colors ${
                           isActive
                             ? 'border-tank-accent bg-tank-accent/10 text-tank-accent'
@@ -1264,8 +1322,8 @@ export default function App() {
             </div>
           )}
 
-          {/* Bottom: Chat + Activity side by side */}
-          <div className="flex-1 flex flex-col md:flex-row gap-2 min-h-[600px] md:min-h-0">
+          {/* Bottom: Chat */}
+          <div className="flex-1 flex flex-col min-h-[600px] md:min-h-0">
             <Panel
               title="Chat (Season Pass)"
               icon={MessageSquare}
@@ -1321,85 +1379,6 @@ export default function App() {
                 sortedChats.map((item) => (
                   <ChatMessage key={item.dbId || item.data?.id} data={item.data} />
                 ))
-              )}
-            </Panel>
-
-            <Panel
-              title="Activity"
-              icon={Radio}
-              count={stats.tts + stats.sfx}
-              className="w-full md:w-[420px] md:shrink-0 min-h-[400px] md:min-h-0"
-              virtualized
-              extra={
-                <div className="flex items-center gap-2">
-                  <div className="flex gap-0.5">
-                    {[
-                      { id: 'all', label: 'All' },
-                      { id: 'tts', label: 'TTS' },
-                      { id: 'sfx', label: 'SFX' },
-                      { id: 'sc', label: 'SC' },
-                    ].map(f => (
-                      <button
-                        key={f.id}
-                        onClick={() => setActivityFilter(f.id)}
-                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-                          activityFilter === f.id
-                            ? f.id === 'sc'
-                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                              : 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
-                            : 'text-tank-muted hover:text-tank-text'
-                        }`}
-                      >
-                        {f.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="w-px h-3 bg-tank-border" />
-                  <div className="flex gap-0.5">
-                    {[
-                      { id: '1h', label: '1h' },
-                      { id: '6h', label: '6h' },
-                      { id: '24h', label: '24h' },
-                      { id: '7d', label: '7d' },
-                      { id: 'all', label: '\u221E' },
-                    ].map(t => (
-                      <button
-                        key={t.id}
-                        onClick={() => setActivityTimeRange(t.id)}
-                        className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
-                          activityTimeRange === t.id
-                            ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
-                            : 'text-tank-muted hover:text-tank-text'
-                        }`}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              }
-            >
-              {sortedActivity.length === 0 ? (
-                <EmptyState text={activityFilter !== 'all' ? `No ${activityFilter.toUpperCase()} events yet` : "Waiting for TTS / SFX / events..."} />
-              ) : (
-                <Virtuoso
-                  style={{ height: '100%' }}
-                  data={sortedActivity}
-                  endReached={loadMoreActivity}
-                  overscan={200}
-                  itemContent={(index, item) => (
-                    <div className="px-2 py-0.5">
-                      <ActivityCard data={item.data} eventType={item.event} roomMap={roomMap} />
-                    </div>
-                  )}
-                  components={{
-                    Footer: () => activityLoading ? (
-                      <div className="text-center text-[10px] text-tank-muted py-2">Loading...</div>
-                    ) : !activityHasMore ? (
-                      <div className="text-center text-[10px] text-tank-muted py-2">No more events</div>
-                    ) : null
-                  }}
-                />
               )}
             </Panel>
           </div>
