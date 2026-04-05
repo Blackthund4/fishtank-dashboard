@@ -82,63 +82,51 @@ def test_store_event_handles_non_dict():
 
 
 def test_extract_columns_tts():
-    result = database._extract_columns("tts:update", {
+    ext = database._extract_columns("tts:update", {
         "displayName": "Alice", "cost": 200, "room": "room-1", "message": "hi"
     })
-    sentiment, cost, display_name, target, room, metadata, item_id, feature = result
-    assert cost == 200
-    assert display_name == "Alice"
-    assert room == "room-1"
-    assert metadata is None
-    assert item_id is None
-    assert feature is None
+    assert ext["cost"] == 200
+    assert ext["display_name"] == "Alice"
+    assert ext["room"] == "room-1"
+    assert ext["metadata"] is None
+    assert ext["item_id"] is None
+    assert ext["feature"] is None
 
 
 def test_extract_columns_fishtoy():
-    result = database._extract_columns("fishtoy:used", {
+    ext = database._extract_columns("fishtoy:used", {
         "displayName": "Bob", "target": "Contestant", "cost": 50,
         "itemId": 42, "metadata": "secret message"
     })
-    _, cost, display_name, target, room, metadata, item_id, feature = result
-    assert display_name == "Bob"
-    assert target == "Contestant"
-    assert cost == 50
-    assert item_id == "42"
-    assert metadata == "secret message"
+    assert ext["display_name"] == "Bob"
+    assert ext["target"] == "Contestant"
+    assert ext["cost"] == 50
+    assert ext["item_id"] == "42"
+    assert ext["metadata"] == "secret message"
 
 
 def test_extract_columns_feature_toggle():
-    result = database._extract_columns("feature-toggles:update", {
+    ext = database._extract_columns("feature-toggles:update", {
         "feature": "tts", "enabled": True
     })
-    _, _, _, _, _, _, _, feature = result
-    assert feature == "tts"
+    assert ext["feature"] == "tts"
 
 
 def test_extract_columns_metadata_normalization():
-    # None metadata
-    _, _, _, _, _, metadata, _, _ = database._extract_columns("fishtoy:used", {"metadata": None})
-    assert metadata is None
-    # "null" string
-    _, _, _, _, _, metadata, _, _ = database._extract_columns("fishtoy:used", {"metadata": "null"})
-    assert metadata is None
-    # empty string
-    _, _, _, _, _, metadata, _, _ = database._extract_columns("fishtoy:used", {"metadata": ""})
-    assert metadata is None
-    # valid string preserved
-    _, _, _, _, _, metadata, _, _ = database._extract_columns("fishtoy:used", {"metadata": "hello"})
-    assert metadata == "hello"
+    assert database._extract_columns("fishtoy:used", {"metadata": None})["metadata"] is None
+    assert database._extract_columns("fishtoy:used", {"metadata": "null"})["metadata"] is None
+    assert database._extract_columns("fishtoy:used", {"metadata": ""})["metadata"] is None
+    assert database._extract_columns("fishtoy:used", {"metadata": "hello"})["metadata"] == "hello"
 
 
 def test_extract_columns_non_dict():
-    result = database._extract_columns("poll:vote", [1, 2, 3])
-    assert result == (None, None, None, None, None, None, None, None)
+    ext = database._extract_columns("poll:vote", [1, 2, 3])
+    assert all(v is None for v in ext.values())
 
 
 def test_extract_columns_chat_user_fallback():
-    result = database._extract_columns("chat:message", {"user": {"displayName": "Charlie"}})
-    _, _, display_name, _, _, _, _, _ = result
-    assert display_name == "Charlie"
+    ext = database._extract_columns("chat:message", {"user": {"displayName": "Charlie"}})
+    assert ext["display_name"] == "Charlie"
 
 
 # ============================================================
