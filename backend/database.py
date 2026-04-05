@@ -562,39 +562,52 @@ def get_targets():
 
 
 def get_target_stats(target):
-    """Get detailed stats for a specific fishtoy target from full DB history."""
+    """Get detailed stats for a specific fishtoy target from full DB history.
+    Single query fetches items, senders, and totals via UNION ALL."""
     conn = _get_conn()
 
-    # Item breakdown
-    item_rows = conn.execute("""
-        SELECT item_id, COUNT(*) as count, COALESCE(SUM(cost), 0) as spend
+    rows = conn.execute("""
+        SELECT 'item' as qtype, item_id as key, COUNT(*) as count,
+            COALESCE(SUM(cost), 0) as spend
         FROM events
         WHERE event_type = ? AND target = ?
-        GROUP BY item_id ORDER BY count DESC
-    """, (FISHTOY_TYPE, target)).fetchall()
-
-    # Top senders
-    sender_rows = conn.execute("""
-        SELECT display_name as name, COUNT(*) as count
+        GROUP BY item_id
+        UNION ALL
+        SELECT 'sender' as qtype, display_name as key, COUNT(*) as count, 0 as spend
         FROM events
         WHERE event_type = ? AND target = ? AND display_name IS NOT NULL
-        GROUP BY display_name ORDER BY count DESC LIMIT 10
-    """, (FISHTOY_TYPE, target)).fetchall()
+        GROUP BY display_name
+    """, (FISHTOY_TYPE, target, FISHTOY_TYPE, target)).fetchall()
 
-    # Total + metadata count
-    totals = conn.execute("""
-        SELECT COUNT(*) as total, COALESCE(SUM(cost), 0) as spend,
-            SUM(CASE WHEN metadata IS NOT NULL THEN 1 ELSE 0 END) as with_meta
-        FROM events
-        WHERE event_type = ? AND target = ?
+    items = []
+    senders = []
+    total = 0
+    total_spend = 0
+    with_meta = 0
+    for r in rows:
+        if r["qtype"] == "item":
+            items.append({"id": r["key"], "count": r["count"], "spend": r["spend"]})
+            total += r["count"]
+            total_spend += r["spend"]
+        else:
+            senders.append({"name": r["key"], "count": r["count"]})
+
+    # Metadata count — lightweight single scan on the target index
+    meta_row = conn.execute("""
+        SELECT SUM(CASE WHEN metadata IS NOT NULL THEN 1 ELSE 0 END) as with_meta
+        FROM events WHERE event_type = ? AND target = ?
     """, (FISHTOY_TYPE, target)).fetchone()
+    with_meta = meta_row["with_meta"] or 0
+
+    items.sort(key=lambda x: x["count"], reverse=True)
+    senders.sort(key=lambda x: x["count"], reverse=True)
 
     return {
-        "total": totals["total"],
-        "totalSpend": totals["spend"],
-        "withMeta": totals["with_meta"],
-        "topItems": [{"id": r["item_id"], "count": r["count"], "spend": r["spend"]} for r in item_rows],
-        "topSenders": [{"name": r["name"], "count": r["count"]} for r in sender_rows],
+        "total": total,
+        "totalSpend": total_spend,
+        "withMeta": with_meta,
+        "topItems": items,
+        "topSenders": senders[:10],
     }
 
 
@@ -1267,61 +1280,43 @@ def get_price_changes(limit=100):
 def search_user(username, limit=500):
     """Search across all event types for a specific username (case-insensitive).
 
-    Uses COLLATE NOCASE instead of LOWER() so SQLite can use the covering indexes
-    (idx_chat_user_ts, idx_tts_sender_ts, idx_sfx_sender_ts) rather than full table scans.
+    Single UNION ALL query — each branch uses idx_events_ext_sender_ts independently.
     """
     conn = _get_conn()
-    results = {
-        "username": username,
-        "chat": [],
-        "tts": [],
-        "sfx": [],
-        "fishtoys": [],
-    }
-
-    # Chat messages — uses idx_events_ext_sender_ts
     rows = conn.execute("""
-        SELECT id, timestamp_local, data FROM events
-        WHERE event_type = 'chat:message'
-        AND display_name = ? COLLATE NOCASE
-        ORDER BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
-    results["chat"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
+        SELECT * FROM (
+            SELECT event_type, id, timestamp_local, data FROM events
+            WHERE event_type = 'chat:message' AND display_name = ? COLLATE NOCASE
+            ORDER BY id DESC LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+            SELECT event_type, id, timestamp_local, data FROM events
+            WHERE event_type = 'tts:update' AND display_name = ? COLLATE NOCASE
+            ORDER BY id DESC LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+            SELECT event_type, id, timestamp_local, data FROM events
+            WHERE event_type = 'sfx:update' AND display_name = ? COLLATE NOCASE
+            ORDER BY id DESC LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+            SELECT event_type, id, timestamp_local, data FROM events
+            WHERE event_type = ? AND display_name = ? COLLATE NOCASE
+            ORDER BY id DESC LIMIT ?
+        )
+    """, (username, limit, username, limit, username, limit, FISHTOY_TYPE, username, limit)).fetchall()
 
-    # TTS
-    rows = conn.execute("""
-        SELECT id, timestamp_local, data FROM events
-        WHERE event_type = 'tts:update'
-        AND display_name = ? COLLATE NOCASE
-        ORDER BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
-    results["tts"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
+    results = {"username": username, "chat": [], "tts": [], "sfx": [], "fishtoys": []}
+    type_map = {"chat:message": "chat", "tts:update": "tts", "sfx:update": "sfx", FISHTOY_TYPE: "fishtoys"}
+    for r in rows:
+        key = type_map.get(r["event_type"])
+        if key:
+            results[key].append({"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])})
 
-    # SFX
-    rows = conn.execute("""
-        SELECT id, timestamp_local, data FROM events
-        WHERE event_type = 'sfx:update'
-        AND display_name = ? COLLATE NOCASE
-        ORDER BY id DESC LIMIT ?
-    """, (username, limit)).fetchall()
-    results["sfx"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
-
-    # Fishtoys
-    rows = conn.execute("""
-        SELECT id, timestamp_local, data FROM events
-        WHERE event_type = ?
-        AND display_name = ? COLLATE NOCASE
-        ORDER BY id DESC LIMIT ?
-    """, (FISHTOY_TYPE, username, limit)).fetchall()
-    results["fishtoys"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
-
-    results["totals"] = {
-        "chat": len(results["chat"]),
-        "tts": len(results["tts"]),
-        "sfx": len(results["sfx"]),
-        "fishtoys": len(results["fishtoys"]),
-    }
-
+    results["totals"] = {k: len(results[k]) for k in ("chat", "tts", "sfx", "fishtoys")}
     return results
 
 
@@ -1366,8 +1361,8 @@ def get_stock_snapshot_count():
 def get_latest_poll_state():
     """Reconstruct the current/latest poll state from database.
 
-    Returns the most recent poll:start, its latest vote tallies,
-    and the poll:stop if it exists.
+    Single query fetches the most recent poll:start, its stop (if any),
+    and the latest vote tallies — all in one round-trip.
     """
     conn = _get_conn()
 
@@ -1383,26 +1378,28 @@ def get_latest_poll_state():
 
     start_data = json.loads(start["data"])
     poll_info = start_data.get("poll", start_data)
-    pid = poll_info.get("pid", "")
 
-    # Check if there's a poll:stop after this start
-    stop = conn.execute("""
-        SELECT id, timestamp_local, data FROM events
-        WHERE event_type = 'poll:stop' AND id > ?
-        ORDER BY id ASC LIMIT 1
-    """, (start["id"],)).fetchone()
+    # Fetch stop + last vote in one query
+    rows = conn.execute("""
+        SELECT event_type, timestamp_local, data FROM events
+        WHERE event_type IN ('poll:stop', 'poll:vote') AND id > ?
+        ORDER BY id DESC
+    """, (start["id"],)).fetchall()
 
-    # Get the latest vote tallies after this start
-    last_vote = conn.execute("""
-        SELECT data FROM events
-        WHERE event_type = 'poll:vote' AND id > ?
-        ORDER BY id DESC LIMIT 1
-    """, (start["id"],)).fetchone()
+    stop = None
+    last_vote = None
+    for row in rows:
+        if row["event_type"] == "poll:stop" and not stop:
+            stop = row
+        elif row["event_type"] == "poll:vote" and not last_vote:
+            last_vote = row
+        if stop and last_vote:
+            break
 
     result = {
         "question": poll_info.get("question"),
         "answers": poll_info.get("answers", []),
-        "pid": pid,
+        "pid": poll_info.get("pid", ""),
         "started_at": start["timestamp_local"],
         "active": stop is None,
     }
