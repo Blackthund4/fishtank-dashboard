@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Virtuoso } from 'react-virtuoso'
-import { FileText, Search, X, ArrowRight } from 'lucide-react'
+import { FileText, Search, X, ArrowRight, Crosshair } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
 
 export default function HiddenContentTab({ itemCatalog }) {
@@ -158,7 +158,7 @@ export default function HiddenContentTab({ itemCatalog }) {
       {/* Sidebar: targets with hidden content */}
       <div className="w-full md:w-[180px] md:shrink-0 flex flex-col gap-2">
         <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
-          <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">By Target</h3>
+          <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2 flex items-center gap-1.5"><Crosshair className="w-3 h-3" />By Target</h3>
           <div className="space-y-1">
             {targetData.targets.map(({ target, count }) => (
               <button

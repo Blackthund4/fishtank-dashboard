@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo, lazy, Suspense } from 'react'
-import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star, TrendingUp } from 'lucide-react'
+import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star, TrendingUp, Crosshair, Box, Users, Clock, Trophy, Crown } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
 import { useWebSocket } from './useWebSocket'
 import { formatDateTime } from './utils/formatTime'
@@ -597,28 +597,46 @@ export default function App() {
     if (systemFilter === 'stox') return systemEvents.filter(e => e.event?.startsWith('stock:'))
     return systemEvents.filter(e => e.event === 'tts:price' || e.event === 'sfx:price')
   }, [systemEvents, systemFilter])
+  const POLL_COLORS = ['#c084fc', '#a78bfa', '#818cf8', '#7dd3fc', '#67e8f9', '#6ee7b7', '#fcd34d', '#fca5a5']
   const pollVoteBars = useMemo(() => {
     if (pollVotes.length === 0) return null
     const total = pollVotes.reduce((s, v) => s + (v.score || 0), 0) || 1
-    const maxScore = Math.max(...pollVotes.map(v => v.score || 0))
+    const sorted = [...pollVotes].sort((a, b) => (b.score || 0) - (a.score || 0))
+    const maxScore = sorted[0]?.score || 0
+    const secondScore = sorted[1]?.score || 0
+    const delta = maxScore > 0 && sorted.length > 1 ? maxScore - secondScore : 0
     return (
-      <div className="flex gap-2">
-        {pollVotes.map((v) => {
+      <div className="space-y-1.5">
+        {pollVotes.map((v, i) => {
           const score = v.score || 0
           const pct = Math.round(score / total * 100)
           const isLeading = score === maxScore && maxScore > 0
+          const color = POLL_COLORS[i % POLL_COLORS.length]
           return (
-            <div key={v.value} className="flex-1">
+            <div key={v.value}>
               <div className="flex items-center justify-between text-[10px] mb-0.5">
-                <span className={`font-medium truncate ${isLeading ? 'text-white' : 'text-purple-200/70'}`}>{v.value}</span>
-                <span className={`font-mono ml-1 ${isLeading ? 'text-purple-300' : 'text-purple-400/60'}`}>
-                  {score.toLocaleString()}t ({pct}%)
+                <span className="flex items-center gap-1">
+                  {isLeading && <Crown className="w-3 h-3 text-yellow-400" />}
+                  <span className={`font-medium truncate ${isLeading ? 'text-white' : 'text-purple-200/70'}`}>{v.value}</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  {isLeading && delta > 0 && (
+                    <span className="text-[9px] font-mono text-yellow-400/70">+{delta.toLocaleString()}t ahead</span>
+                  )}
+                  <span className={`font-mono ${isLeading ? 'text-purple-200' : 'text-purple-400/60'}`}>
+                    {score.toLocaleString()}t ({pct}%)
+                  </span>
                 </span>
               </div>
-              <div className="h-2 bg-purple-900/50 rounded-full overflow-hidden">
+              <div className="h-3.5 bg-purple-900/40 rounded overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all ${isLeading ? 'bg-purple-400' : 'bg-purple-500/50'}`}
-                  style={{ width: `${pct}%` }}
+                  className={`h-full rounded transition-all duration-500 ${isLeading ? 'shadow-[0_0_10px_rgba(192,132,252,0.4)]' : ''}`}
+                  style={{
+                    width: `${Math.max(pct, 1)}%`,
+                    background: isLeading
+                      ? `linear-gradient(90deg, ${color}, ${color}cc)`
+                      : `${color}55`,
+                  }}
                 />
               </div>
             </div>
@@ -917,6 +935,7 @@ export default function App() {
             {seenTargets.length > 0 && (
               <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
                 <div className="flex items-center gap-2 mb-1.5">
+                  <Crosshair className="w-3.5 h-3.5 text-tank-muted" />
                   <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Targets</h3>
                 </div>
                 <div className="flex flex-wrap gap-1">
@@ -969,7 +988,7 @@ export default function App() {
                   {/* Items used */}
                   {targetStats.topItems.length > 0 && (
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1">Items used</h4>
+                      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1 flex items-center gap-1.5"><Box className="w-3 h-3" />Items used</h4>
                       <div className="space-y-0.5">
                         {targetStats.topItems.map(item => {
                           const isActive = filterItemId === item.id
@@ -997,7 +1016,7 @@ export default function App() {
                   {/* Top senders to this target */}
                   {targetStats.topSenders.length > 0 && (
                     <div className="w-full md:w-[180px] md:shrink-0">
-                      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1">Top senders</h4>
+                      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1 flex items-center gap-1.5"><Users className="w-3 h-3" />Top senders</h4>
                       <div className="space-y-0.5">
                         {targetStats.topSenders.slice(0, 5).map((s, i) => (
                           <div key={s.name} className="flex items-center justify-between text-xs">
@@ -1020,6 +1039,7 @@ export default function App() {
           {stocks.length > 0 && (
             <div className="bg-tank-surface border border-tank-border rounded-lg p-2 shrink-0">
               <div className="flex items-center gap-2 mb-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
                 <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">STO-X</h3>
                 <div className="flex gap-0.5 ml-auto">
                   {[
@@ -1423,7 +1443,7 @@ function LeaderboardSection({ title, items, renderItem }) {
   if (!items || items.length === 0) return null
   return (
     <div className="border-t border-tank-border/50 pt-2 mt-2">
-      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5">{title}</h4>
+      <h4 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-1.5 flex items-center gap-1.5"><Trophy className="w-3 h-3" />{title}</h4>
       <div className="space-y-1">
         {items.map((s, i) => renderItem(s, i))}
       </div>
@@ -1465,7 +1485,8 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
 
   return (
     <div className="w-full md:w-[280px] md:shrink-0 overflow-y-auto bg-tank-surface border border-tank-border rounded-lg p-2.5">
-      <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2">
+      <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+        <Clock className="w-3.5 h-3.5" />
         Last 24 Hours
       </h3>
       <div className="space-y-1.5">
