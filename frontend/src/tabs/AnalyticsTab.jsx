@@ -166,6 +166,23 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
   const ttsToggle = featureToggles.tts
   const sfxToggle = featureToggles.sfx
 
+  const ttsMoodBadge = useMemo(() => {
+    if (!ttsSentiment) return null
+    const { label, bgColor, textColor } = getMoodLabel(ttsSentiment.overall.avg)
+    return <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded ${bgColor} ${textColor}`}>{label}</span>
+  }, [ttsSentiment?.overall?.avg])
+
+  const chatMoodBadge = useMemo(() => {
+    if (!chatSentiment) return null
+    const { label, bgColor, textColor } = getMoodLabel(chatSentiment.overall.avg)
+    return <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded ${bgColor} ${textColor}`}>{label}</span>
+  }, [chatSentiment?.overall?.avg])
+
+  const sortedFishtoyStatus = useMemo(() =>
+    [...fishtoyStatus].sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+    [fishtoyStatus]
+  )
+
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
       {/* STO-X */}
@@ -326,10 +343,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* TTS/SFX Analytics */}
         <Section title="TTS / SFX Analytics" icon={Volume2}
-          badge={ttsSentiment && (() => {
-            const { label, bgColor, textColor } = getMoodLabel(ttsSentiment.overall.avg)
-            return <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded ${bgColor} ${textColor}`}>{label}</span>
-          })()}
+          badge={ttsMoodBadge}
           extra={
           <div className="flex items-center gap-2">
             {ttsToggle !== undefined && (
@@ -413,10 +427,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
 
         {/* Chat Analytics */}
         <Section title="Chat Analytics" icon={MessageSquare}
-          badge={chatSentiment && (() => {
-            const { label, bgColor, textColor } = getMoodLabel(chatSentiment.overall.avg)
-            return <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded ${bgColor} ${textColor}`}>{label}</span>
-          })()}
+          badge={chatMoodBadge}
           extra={
           <div className="flex items-center gap-2">
             <TimeFilter value={chatPeriod} onChange={setChatPeriod} />
@@ -473,7 +484,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
           </div>
         )}
         <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
-          {[...fishtoyStatus].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(f => (
+          {sortedFishtoyStatus.map(f => (
             <div key={f.id} className={`px-2 py-1.5 rounded border text-xs ${
               f.enabled
                 ? 'border-tank-accent/30 bg-tank-accent/5'
@@ -540,99 +551,104 @@ function Section({ title, icon: Icon, badge, extra, children }) {
 }
 
 const SentimentHourlyBar = memo(function SentimentHourlyBar({ data }) {
-  const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
-  const maxAbs = Math.max(...sorted.map(d => Math.abs(d.avg_sentiment)), 0.01)
-  const halfHeight = 20
+  const bars = useMemo(() => {
+    const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
+    const maxAbs = Math.max(...sorted.map(d => Math.abs(d.avg_sentiment)), 0.01)
+    return sorted.map(d => ({
+      key: d.ts || d.hour,
+      label: d.ts ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.hour + ':00',
+      score: d.avg_sentiment || 0,
+      count: d.message_count || 0,
+      barH: (Math.abs(d.avg_sentiment || 0) / maxAbs) * 20,
+    }))
+  }, [data])
   return (
-    <div className="flex gap-px" style={{ height: `${halfHeight * 2}px` }}>
-      {sorted.map(d => {
-        const label = d.ts
-          ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : d.hour + ':00'
-        const score = d.avg_sentiment || 0
-        const count = d.message_count || 0
-        const barH = (Math.abs(score) / maxAbs) * halfHeight
-        const isPositive = score >= 0
-        return (
-          <div
-            key={d.ts || d.hour}
-            className="flex-1 flex flex-col relative"
-            title={`${label}\nSentiment: ${score.toFixed(3)}\nMessages: ${count}`}
-          >
-            {isPositive ? (
-              <div className="absolute w-full bg-green-400/70 rounded-t-sm" style={{ bottom: `${halfHeight}px`, height: `${Math.max(barH, 1)}px` }} />
-            ) : (
-              <div className="absolute w-full bg-red-400/70 rounded-b-sm" style={{ top: `${halfHeight}px`, height: `${Math.max(barH, 1)}px` }} />
-            )}
-          </div>
-        )
-      })}
+    <div className="flex gap-px" style={{ height: '40px' }}>
+      {bars.map(b => (
+        <div
+          key={b.key}
+          className="flex-1 flex flex-col relative"
+          title={`${b.label}\nSentiment: ${b.score.toFixed(3)}\nMessages: ${b.count}`}
+        >
+          {b.score >= 0 ? (
+            <div className="absolute w-full bg-green-400/70 rounded-t-sm" style={{ bottom: '20px', height: `${Math.max(b.barH, 1)}px` }} />
+          ) : (
+            <div className="absolute w-full bg-red-400/70 rounded-b-sm" style={{ top: '20px', height: `${Math.max(b.barH, 1)}px` }} />
+          )}
+        </div>
+      ))}
     </div>
   )
 })
 
 const HourlyBar = memo(function HourlyBar({ data, color }) {
-  const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
-  const max = Math.max(...sorted.map(d => d.count), 1)
+  const bars = useMemo(() => {
+    const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
+    const max = Math.max(...sorted.map(d => d.count), 1)
+    return sorted.map((d, i) => ({
+      key: d.ts || d.hour,
+      label: d.ts ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.hour + ':00',
+      pct: (d.count / max) * 100,
+      count: d.count,
+      showLabel: i === 0 || i === sorted.length - 1 || i % 6 === 0,
+    }))
+  }, [data])
   return (
     <div className="flex items-end gap-px h-12">
-      {sorted.map((d, i) => {
-        const label = d.ts
-          ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : d.hour + ':00'
-        const pct = (d.count / max) * 100
-        return (
-          <div
-            key={d.ts || d.hour}
-            className="flex-1 flex flex-col items-center"
-            title={`${label} — ${d.count} events`}
-          >
-            <div className="w-full relative" style={{ height: '40px' }}>
-              <div
-                className={`absolute bottom-0 w-full rounded-t-sm ${color} opacity-70`}
-                style={{ height: `${Math.max(pct, 2)}%` }}
-              />
-            </div>
-            {(i === 0 || i === sorted.length - 1 || i % 6 === 0) && (
-              <span className="text-[8px] text-tank-muted mt-0.5">{label}</span>
-            )}
+      {bars.map(b => (
+        <div
+          key={b.key}
+          className="flex-1 flex flex-col items-center"
+          title={`${b.label} — ${b.count} events`}
+        >
+          <div className="w-full relative" style={{ height: '40px' }}>
+            <div
+              className={`absolute bottom-0 w-full rounded-t-sm ${color} opacity-70`}
+              style={{ height: `${Math.max(b.pct, 2)}%` }}
+            />
           </div>
-        )
-      })}
+          {b.showLabel && (
+            <span className="text-[8px] text-tank-muted mt-0.5">{b.label}</span>
+          )}
+        </div>
+      ))}
     </div>
   )
 })
 
 const StackedHourlyBar = memo(function StackedHourlyBar({ data }) {
-  const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
-  const max = Math.max(...sorted.map(d => d.total), 1)
+  const bars = useMemo(() => {
+    const sorted = [...data].sort((a, b) => (a.ts || a.hour) < (b.ts || b.hour) ? -1 : 1)
+    const max = Math.max(...sorted.map(d => d.total), 1)
+    return sorted.map((d, i) => ({
+      key: d.ts || d.hour,
+      label: d.ts ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.hour + ':00',
+      ttsPct: (d.tts / max) * 100,
+      sfxPct: (d.sfx / max) * 100,
+      fishPct: (d.fishtoys / max) * 100,
+      tts: d.tts, sfx: d.sfx, fishtoys: d.fishtoys, total: d.total,
+      showLabel: i === 0 || i === sorted.length - 1 || i % 4 === 0,
+    }))
+  }, [data])
   return (
     <div>
       <div className="flex items-end gap-px h-20">
-        {sorted.map((d, i) => {
-          const label = d.ts
-            ? new Date(d.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : d.hour + ':00'
-          const ttsPct = (d.tts / max) * 100
-          const sfxPct = (d.sfx / max) * 100
-          const fishPct = (d.fishtoys / max) * 100
-          return (
-            <div
-              key={d.ts || d.hour}
-              className="flex-1 flex flex-col items-center"
-              title={`${label}\nTTS: ${d.tts}\nSFX: ${d.sfx}\nFishtoys: ${d.fishtoys}\nTotal: ${d.total}`}
-            >
-              <div className="w-full flex flex-col-reverse" style={{ height: '64px' }}>
-                <div className="w-full bg-purple-400/70 rounded-t-sm" style={{ height: `${ttsPct}%` }} />
-                <div className="w-full bg-indigo-400/70" style={{ height: `${sfxPct}%` }} />
-                <div className="w-full bg-emerald-400/70" style={{ height: `${fishPct}%` }} />
-              </div>
-              {(i === 0 || i === sorted.length - 1 || i % 4 === 0) && (
-                <span className="text-[8px] text-tank-muted mt-0.5">{label}</span>
-              )}
+        {bars.map(b => (
+          <div
+            key={b.key}
+            className="flex-1 flex flex-col items-center"
+            title={`${b.label}\nTTS: ${b.tts}\nSFX: ${b.sfx}\nFishtoys: ${b.fishtoys}\nTotal: ${b.total}`}
+          >
+            <div className="w-full flex flex-col-reverse" style={{ height: '64px' }}>
+              <div className="w-full bg-purple-400/70 rounded-t-sm" style={{ height: `${b.ttsPct}%` }} />
+              <div className="w-full bg-indigo-400/70" style={{ height: `${b.sfxPct}%` }} />
+              <div className="w-full bg-emerald-400/70" style={{ height: `${b.fishPct}%` }} />
             </div>
-          )
-        })}
+            {b.showLabel && (
+              <span className="text-[8px] text-tank-muted mt-0.5">{b.label}</span>
+            )}
+          </div>
+        ))}
       </div>
       <div className="flex items-center gap-3 mt-2">
         <span className="flex items-center gap-1 text-[9px] text-tank-muted"><span className="w-2 h-2 rounded-sm bg-purple-400/70" />TTS</span>

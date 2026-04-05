@@ -121,6 +121,12 @@ def init_db():
             ON events(display_name COLLATE NOCASE) WHERE display_name IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_events_sc_delete
             ON events(event_type, event_id) WHERE event_type = 'super-chat:delete';
+        CREATE INDEX IF NOT EXISTS idx_events_sentiment_ts
+            ON events(event_type, timestamp_local, sentiment)
+            WHERE sentiment IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_tts_sentiment_target
+            ON events(event_type, target, sentiment)
+            WHERE event_type = 'tts:update' AND sentiment IS NOT NULL AND target IS NOT NULL;
     """)
     conn.commit()
 
@@ -1526,7 +1532,8 @@ def _mood_label(avg):
 
 
 def _sentiment_base(conn, type_clause, since=None):
-    """Shared sentiment query logic for a given event type filter."""
+    """Shared sentiment query logic for a given event type filter.
+    Single query computes both hourly breakdown and overall stats."""
     since_clause = ""
     params = []
     if since:
@@ -1537,37 +1544,41 @@ def _sentiment_base(conn, type_clause, since=None):
 
     hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
     hourly_params = list(params) if since else []
-    hourly = conn.execute(f"""
+
+    # Single query: hourly rows + one overall row via UNION ALL
+    rows = conn.execute(f"""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
             AVG(sentiment) as avg_sentiment,
-            COUNT(*) as message_count
+            COUNT(*) as message_count,
+            SUM(CASE WHEN sentiment >= 0.05 THEN 1 ELSE 0 END) as positive,
+            SUM(CASE WHEN sentiment <= -0.05 THEN 1 ELSE 0 END) as negative,
+            SUM(CASE WHEN sentiment > -0.05 AND sentiment < 0.05 THEN 1 ELSE 0 END) as neutral
         FROM events
         WHERE {base_where}
     """ + hourly_clause + " GROUP BY hour ORDER BY hour", hourly_params).fetchall()
 
-    overall_row = conn.execute(f"""
-        SELECT
-            AVG(sentiment) as avg,
-            SUM(CASE WHEN sentiment >= 0.05 THEN 1 ELSE 0 END) as positive,
-            SUM(CASE WHEN sentiment <= -0.05 THEN 1 ELSE 0 END) as negative,
-            SUM(CASE WHEN sentiment > -0.05 AND sentiment < 0.05 THEN 1 ELSE 0 END) as neutral,
-            COUNT(*) as total
-        FROM events
-        WHERE {base_where}{since_clause}
-    """, params).fetchone()
+    # Compute overall from hourly rows (avoids second table scan)
+    total = sum(r["message_count"] for r in rows)
+    if total > 0:
+        weighted_sum = sum(r["avg_sentiment"] * r["message_count"] for r in rows)
+        avg = round(weighted_sum / total, 4)
+        pos = sum(r["positive"] for r in rows)
+        neg = sum(r["negative"] for r in rows)
+        neu = sum(r["neutral"] for r in rows)
+    else:
+        avg = 0
+        pos = neg = neu = 0
 
-    total = overall_row["total"] if overall_row["total"] else 0
-    avg = round(overall_row["avg"] or 0, 4)
     overall = {
         "avg": avg,
-        "positive_pct": round((overall_row["positive"] or 0) / total * 100, 1) if total > 0 else 0,
-        "neutral_pct": round((overall_row["neutral"] or 0) / total * 100, 1) if total > 0 else 0,
-        "negative_pct": round((overall_row["negative"] or 0) / total * 100, 1) if total > 0 else 0,
+        "positive_pct": round(pos / total * 100, 1) if total > 0 else 0,
+        "neutral_pct": round(neu / total * 100, 1) if total > 0 else 0,
+        "negative_pct": round(neg / total * 100, 1) if total > 0 else 0,
     }
 
     return {
-        "hourly": [{"hour": r["hour"], "ts": r["ts"], "avg_sentiment": round(r["avg_sentiment"], 4), "message_count": r["message_count"]} for r in hourly],
+        "hourly": [{"hour": r["hour"], "ts": r["ts"], "avg_sentiment": round(r["avg_sentiment"], 4), "message_count": r["message_count"]} for r in rows],
         "overall": overall,
         "label": _mood_label(avg),
     }
