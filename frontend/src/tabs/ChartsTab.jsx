@@ -15,10 +15,10 @@ const TICKER_COLORS = [
 ]
 
 const SPEND_COLORS = {
-  tts: '#a78bfa', sfx: '#818cf8', fishtoy: '#34d399', poll: '#f59e0b',
+  tts: '#a78bfa', sfx: '#818cf8', fishtoy: '#34d399', poll: '#f59e0b', superchat: '#f472b6',
 }
 const SPEND_LABELS = {
-  tts: 'TTS', sfx: 'SFX', fishtoy: 'Fishtoy', poll: 'Poll Votes',
+  tts: 'TTS', sfx: 'SFX', fishtoy: 'Fishtoy', poll: 'Poll Votes', superchat: 'Superchat',
 }
 
 function tokensToUSD(t) { return `$${(t * 0.10).toFixed(2)}` }
@@ -144,7 +144,7 @@ export default function ChartsTab({ stocks }) {
 
   const [spendRange, setSpendRange] = useState('24h')
   const [spendData, setSpendData] = useState({ granularity: 'hourly', data: [] })
-  const [spendToggles, setSpendToggles] = useState({ tts: true, sfx: true, fishtoy: true, poll: true })
+  const [spendToggles, setSpendToggles] = useState({ tts: true, sfx: true, fishtoy: true, poll: true, superchat: true })
   const [spendUnit, setSpendUnit] = useState('tokens')
   const [spendLoading, setSpendLoading] = useState(false)
 
@@ -310,7 +310,7 @@ export default function ChartsTab({ stocks }) {
             ))}
           </div>
           <div className="flex gap-1">
-            {['tts', 'sfx', 'fishtoy', 'poll'].map(type => (
+            {['tts', 'sfx', 'fishtoy', 'poll', 'superchat'].map(type => (
               <ToggleButton key={type} active={spendToggles[type]} color={SPEND_COLORS[type]}
                 label={SPEND_LABELS[type]} onClick={() => setSpendToggles(prev => ({ ...prev, [type]: !prev[type] }))} />
             ))}
@@ -329,7 +329,7 @@ export default function ChartsTab({ stocks }) {
                   <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={50} domain={[0, 'auto']}
                     tickFormatter={v => spendUnit === 'usd' ? `$${(v * 0.10).toFixed(0)}` : v.toLocaleString()} />
                   <Tooltip content={<DarkTooltip range={spendRange} unit={spendUnit} labelMap={SPEND_LABELS} />} />
-                  {['tts', 'sfx', 'fishtoy', 'poll'].map(type => {
+                  {['tts', 'sfx', 'fishtoy', 'poll', 'superchat'].map(type => {
                     if (!spendToggles[type]) return null
                     return <Bar key={type} dataKey={type} stackId="spend" fill={SPEND_COLORS[type]} fillOpacity={0.75} isAnimationActive={false} />
                   })}
@@ -346,7 +346,7 @@ export default function ChartsTab({ stocks }) {
                   <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={50} domain={['auto', 'auto']}
                     tickFormatter={v => spendUnit === 'usd' ? `$${(v * 0.10).toFixed(0)}` : v.toLocaleString()} />
                   <Tooltip content={<DarkTooltip range={spendRange} unit={spendUnit} labelMap={SPEND_LABELS} />} />
-                  {['tts', 'sfx', 'fishtoy', 'poll'].map(type => {
+                  {['tts', 'sfx', 'fishtoy', 'poll', 'superchat'].map(type => {
                     if (!spendToggles[type]) return null
                     return <Line key={type} type="monotone" dataKey={type} stroke={SPEND_COLORS[type]}
                       strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />

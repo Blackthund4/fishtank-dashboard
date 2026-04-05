@@ -646,6 +646,21 @@ def _range_to_since_and_granularity(range_str, config):
     return since, granularity
 
 
+def _apply_bucket(ts_str, granularity):
+    """Apply time bucketing to an ISO timestamp string (Python-side equivalent of _time_bucket_expr)."""
+    # ts_str like "2026-04-05T08:05:19.924729+00:00" or "2026-04-05 08:05:19..."
+    ts = ts_str.replace('T', ' ')[:19]  # "2026-04-05 08:05:19"
+    if granularity == '5min':
+        m = int(ts[14:16])
+        return ts[:14] + f"{(m // 5) * 5:02d}:00"
+    if granularity == '15min':
+        m = int(ts[14:16])
+        return ts[:14] + f"{(m // 15) * 15:02d}:00"
+    if granularity == 'hourly':
+        return ts[:13] + ":00:00"
+    return ts[:10]  # daily
+
+
 def _time_bucket_expr(granularity, col='timestamp_local'):
     """Return SQL expression for time bucketing."""
     if granularity == '5min':
@@ -785,7 +800,7 @@ def get_spend_trends(range_str='24h'):
         SELECT {bucket} AS ts, event_type,
             COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
         FROM events
-        WHERE event_type IN ('tts:update', 'sfx:update', 'fishtoy:used')
+        WHERE event_type IN ('tts:update', 'sfx:update', 'fishtoy:used', 'super-chat:new')
         {since_clause}
         GROUP BY ts, event_type ORDER BY ts ASC
     """, params).fetchall()
@@ -794,35 +809,59 @@ def get_spend_trends(range_str='24h'):
     for row in rows:
         ts = row['ts']
         if ts not in buckets:
-            buckets[ts] = {'ts': ts, 'tts': 0, 'sfx': 0, 'fishtoy': 0, 'poll': 0}
+            buckets[ts] = {'ts': ts, 'tts': 0, 'sfx': 0, 'fishtoy': 0, 'poll': 0, 'superchat': 0}
         et = row['event_type']
-        key = 'tts' if et == 'tts:update' else 'sfx' if et == 'sfx:update' else 'fishtoy'
+        key = 'tts' if et == 'tts:update' else 'sfx' if et == 'sfx:update' else 'superchat' if et == 'super-chat:new' else 'fishtoy'
         buckets[ts][key] = row['spend']
 
-    # Poll tokens from poll:stop events
-    poll_rows = conn.execute(f"""
-        WITH final_poll_votes AS (
-            SELECT pe.timestamp_local,
-                   (SELECT COALESCE(SUM(json_extract(v.value, '$.score')), 0)
-                    FROM json_each(
-                        COALESCE(
-                            (SELECT data FROM events WHERE event_type = 'poll:vote' AND id < pe.id ORDER BY id DESC LIMIT 1),
-                            '[]'
-                        )
-                    ) v
-                   ) AS total_tokens
-            FROM events pe WHERE pe.event_type = 'poll:stop'
-            {since_clause}
-        )
-        SELECT {bucket} AS ts, COALESCE(SUM(total_tokens), 0) AS poll_spend
-        FROM final_poll_votes
-        GROUP BY ts ORDER BY ts ASC
+    # Poll tokens: bucket vote deltas from poll:vote events
+    # Each poll:vote contains cumulative scores; we need the delta between consecutive votes
+    # Group by poll (bounded by poll:start events) and bucket the final total per completed poll,
+    # or the incremental growth for active polls.
+    #
+    # Strategy: fetch all poll:vote rows in range, compute running deltas, bucket them.
+    poll_vote_rows = conn.execute(f"""
+        SELECT id, timestamp_local, data FROM events
+        WHERE event_type = 'poll:vote'
+        {since_clause}
+        ORDER BY id ASC
     """, params).fetchall()
-    for row in poll_rows:
-        ts = row['ts']
-        if ts not in buckets:
-            buckets[ts] = {'ts': ts, 'tts': 0, 'sfx': 0, 'fishtoy': 0, 'poll': 0}
-        buckets[ts]['poll'] = row['poll_spend']
+
+    prev_total = 0
+    # If we have a since filter, get the baseline (last vote before the window)
+    if since:
+        baseline = conn.execute("""
+            SELECT data FROM events
+            WHERE event_type = 'poll:vote' AND timestamp_local < ?
+            ORDER BY id DESC LIMIT 1
+        """, [since]).fetchone()
+        if baseline:
+            prev_total = sum(v.get("score", 0) for v in json.loads(baseline["data"]))
+
+    # Also reset prev_total at each poll:start boundary
+    poll_starts = conn.execute(f"""
+        SELECT id FROM events WHERE event_type = 'poll:start'
+        {since_clause}
+        ORDER BY id ASC
+    """, params).fetchall()
+    start_ids = {row["id"] for row in poll_starts}
+
+    start_idx = 0
+    start_id_list = sorted(start_ids)
+    for row in poll_vote_rows:
+        vote_data = json.loads(row["data"])
+        current_total = sum(v.get("score", 0) for v in vote_data)
+        # Reset baseline if a poll:start occurred before this vote
+        while start_idx < len(start_id_list) and start_id_list[start_idx] < row["id"]:
+            prev_total = 0
+            start_idx += 1
+        delta = max(0, current_total - prev_total)
+        prev_total = current_total
+        if delta > 0:
+            ts = _apply_bucket(row["timestamp_local"], granularity)
+            if ts not in buckets:
+                buckets[ts] = {'ts': ts, 'tts': 0, 'sfx': 0, 'fishtoy': 0, 'poll': 0, 'superchat': 0}
+            buckets[ts]['poll'] += delta
 
     return {'granularity': granularity, 'data': sorted(buckets.values(), key=lambda x: x['ts'])}
 
