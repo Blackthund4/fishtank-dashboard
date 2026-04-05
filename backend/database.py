@@ -190,6 +190,28 @@ def backfill_extracted_columns(batch_size=1000):
     return total
 
 
+def backfill_poll_vote_costs():
+    """One-time backfill: set cost = sum(scores) for poll:vote events missing cost."""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT id, data FROM events
+        WHERE event_type = 'poll:vote' AND cost IS NULL
+    """).fetchall()
+    if not rows:
+        return 0
+    for row in rows:
+        try:
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(data, list):
+            total = sum(v.get("score", 0) for v in data if isinstance(v, dict))
+            conn.execute("UPDATE events SET cost = ? WHERE id = ?", (total, row["id"]))
+    conn.commit()
+    print(f"[OK] Backfilled cost for {len(rows)} poll:vote events")
+    return len(rows)
+
+
 _EXTRACTED_COLS = ("sentiment", "cost", "display_name", "target", "room", "metadata", "item_id", "feature")
 _EXTRACTED_NONE = {k: None for k in _EXTRACTED_COLS}
 _INSERT_SQL = (
@@ -216,9 +238,15 @@ def _extract_columns(event_type, data):
     item_id_val = data.get("itemId")
     if item_id_val is not None:
         item_id_val = str(item_id_val)
+    # For poll:vote events, cost = total vote score (sum of all option scores)
+    # This enables SUM(cost) in spend queries without json_extract at query time
+    cost = int(cost_raw) if cost_raw is not None else None
+    if event_type == "poll:vote" and isinstance(data, list):
+        cost = sum(v.get("score", 0) for v in data if isinstance(v, dict))
+
     return {
         "sentiment": data.get("sentiment"),
-        "cost": int(cost_raw) if cost_raw is not None else None,
+        "cost": cost,
         "display_name": display_name,
         "target": data.get("target"),
         "room": data.get("room"),
@@ -335,16 +363,13 @@ def get_stats(since=None):
         ).fetchone()
         all_spend_total += row["total"]
 
-    # Poll token spend: sum final vote scores for each completed poll
+    # Poll token spend: for each completed poll, get the last poll:vote's cost (= total scores)
+    # Uses the extracted cost column on poll:vote events (backfilled by backfill_poll_vote_costs)
     poll_tokens_rows = conn.execute("""
         SELECT
-            (SELECT COALESCE(SUM(json_extract(v.value, '$.score')), 0)
-             FROM json_each(
-                 COALESCE(
-                     (SELECT data FROM events WHERE event_type = 'poll:vote' AND id < pe.id ORDER BY id DESC LIMIT 1),
-                     '[]'
-                 )
-             ) v
+            (SELECT COALESCE(cost, 0)
+             FROM events WHERE event_type = 'poll:vote' AND id < pe.id
+             ORDER BY id DESC LIMIT 1
             ) AS poll_total
         FROM events pe WHERE event_type = 'poll:stop'
     """ + since_clause, since_params).fetchall()
@@ -360,20 +385,20 @@ def get_stats(since=None):
     """).fetchone()
     if active_start:
         current_vote = conn.execute("""
-            SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ?
+            SELECT cost FROM events WHERE event_type = 'poll:vote' AND id > ?
             ORDER BY id DESC LIMIT 1
         """, (active_start["id"],)).fetchone()
-        if current_vote:
-            current_total = sum(v.get("score", 0) for v in json.loads(current_vote["data"]))
+        if current_vote and current_vote["cost"]:
+            current_total = current_vote["cost"]
             baseline_total = 0
             if since:
                 baseline_vote = conn.execute("""
-                    SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ?
+                    SELECT cost FROM events WHERE event_type = 'poll:vote' AND id > ?
                     AND timestamp_local < ?
                     ORDER BY id DESC LIMIT 1
                 """, (active_start["id"], since)).fetchone()
-                if baseline_vote:
-                    baseline_total = sum(v.get("score", 0) for v in json.loads(baseline_vote["data"]))
+                if baseline_vote and baseline_vote["cost"]:
+                    baseline_total = baseline_vote["cost"]
             poll_tokens += current_total - baseline_total
 
     # Superchat token spend
@@ -856,14 +881,11 @@ def get_spend_trends(range_str='24h'):
         buckets[ts][key] = row['spend']
 
     # Poll tokens: bucket vote deltas from poll:vote events
-    # Each poll:vote contains cumulative scores; we need the delta between consecutive votes
-    # Group by poll (bounded by poll:start events) and bucket the final total per completed poll,
-    # or the incremental growth for active polls.
-    #
-    # Strategy: fetch all poll:vote rows in range, compute running deltas, bucket them.
+    # Each poll:vote has cost = cumulative total scores (extracted at insert time).
+    # We compute deltas between consecutive votes, reset at poll:start boundaries.
     poll_vote_rows = conn.execute(f"""
-        SELECT id, timestamp_local, data FROM events
-        WHERE event_type = 'poll:vote'
+        SELECT id, timestamp_local, cost FROM events
+        WHERE event_type = 'poll:vote' AND cost IS NOT NULL
         {since_clause}
         ORDER BY id ASC
     """, params).fetchall()
@@ -872,12 +894,12 @@ def get_spend_trends(range_str='24h'):
     # If we have a since filter, get the baseline (last vote before the window)
     if since:
         baseline = conn.execute("""
-            SELECT data FROM events
-            WHERE event_type = 'poll:vote' AND timestamp_local < ?
+            SELECT cost FROM events
+            WHERE event_type = 'poll:vote' AND cost IS NOT NULL AND timestamp_local < ?
             ORDER BY id DESC LIMIT 1
         """, [since]).fetchone()
         if baseline:
-            prev_total = sum(v.get("score", 0) for v in json.loads(baseline["data"]))
+            prev_total = baseline["cost"]
 
     # Also reset prev_total at each poll:start boundary
     poll_starts = conn.execute(f"""
@@ -885,13 +907,11 @@ def get_spend_trends(range_str='24h'):
         {since_clause}
         ORDER BY id ASC
     """, params).fetchall()
-    start_ids = {row["id"] for row in poll_starts}
+    start_id_list = sorted(row["id"] for row in poll_starts)
 
     start_idx = 0
-    start_id_list = sorted(start_ids)
     for row in poll_vote_rows:
-        vote_data = json.loads(row["data"])
-        current_total = sum(v.get("score", 0) for v in vote_data)
+        current_total = row["cost"]
         # Reset baseline if a poll:start occurred before this vote
         while start_idx < len(start_id_list) and start_id_list[start_idx] < row["id"]:
             prev_total = 0

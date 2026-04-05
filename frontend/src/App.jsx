@@ -278,17 +278,18 @@ export default function App() {
         const cost = msg.data?.cost || 0
         setStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
         setSessionStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
-        // Incrementally update allTargets
+        // Incrementally update allTargets — use Map for O(1) lookup
         const target = msg.data?.target
         if (target) {
           setAllTargets(prev => {
-            const idx = prev.findIndex(t => t.target === target)
-            if (idx >= 0) {
-              const updated = [...prev]
-              updated[idx] = { ...updated[idx], count: updated[idx].count + 1, spend: updated[idx].spend + cost }
-              return updated.sort((a, b) => b.count - a.count)
+            const map = new Map(prev.map(t => [t.target, t]))
+            const existing = map.get(target)
+            if (existing) {
+              map.set(target, { ...existing, count: existing.count + 1, spend: existing.spend + cost })
+            } else {
+              map.set(target, { target, count: 1, spend: cost })
             }
-            return [{ target, count: 1, spend: cost }, ...prev]
+            return [...map.values()].sort((a, b) => b.count - a.count)
           })
         }
       } else if (CHAT_TYPES.has(msg.event_type)) {
@@ -297,13 +298,11 @@ export default function App() {
         setSessionStats(s => ({ ...s, chats: s.chats + 1 }))
       } else if (ACTIVITY_TYPES.has(msg.event_type)) {
         setActivity(prev => [item, ...prev])
-        if (msg.event_type.startsWith('tts')) {
-          const cost = msg.data?.cost || 0
+        const cost = msg.data?.cost || 0
+        if (msg.event_type === 'tts:update') {
           setStats(s => ({ ...s, tts: s.tts + 1, total_spend: s.total_spend + cost }))
           setSessionStats(s => ({ ...s, tts: s.tts + 1, total_spend: s.total_spend + cost }))
-        }
-        if (msg.event_type.startsWith('sfx')) {
-          const cost = msg.data?.cost || 0
+        } else if (msg.event_type === 'sfx:update') {
           setStats(s => ({ ...s, sfx: s.sfx + 1, total_spend: s.total_spend + cost }))
           setSessionStats(s => ({ ...s, sfx: s.sfx + 1, total_spend: s.total_spend + cost }))
         }
