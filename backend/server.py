@@ -1306,6 +1306,14 @@ def api_stock_deltas(range: str = Query('3h')):
     return _cached_query(f"stock-delta:{range}", database.get_stock_deltas, range)
 
 
+@app.get("/api/stocks/sparklines")
+def api_stock_sparklines(range: str = Query('today')):
+    """Return price arrays per ticker for sparkline rendering."""
+    if range not in {'1h', '3h', '12h', 'today', '3d', '1w', 'ipo'}:
+        range = 'today'
+    return _cached_query(f"stock-sparklines:{range}", database.get_stock_sparklines, range)
+
+
 @app.get("/api/charts/stocks")
 def api_charts_stocks(range: str = Query('24h')):
     if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:

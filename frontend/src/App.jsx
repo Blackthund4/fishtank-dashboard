@@ -108,6 +108,21 @@ function tokensToUSD(tokens) {
   return (tokens * 0.10).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 }
 
+function Sparkline({ data, color, width = 64, height = 20 }) {
+  if (!data || data.length < 2) return null
+  const min = Math.min(...data)
+  const max = Math.max(...data)
+  const range = max - min || 1
+  const points = data.map((v, i) =>
+    `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * height}`
+  ).join(' ')
+  return (
+    <svg width={width} height={height} className="shrink-0">
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 export default function App() {
   const { isConnected, addListener } = useWebSocket()
   const [serverVersion, setServerVersion] = useState(null)
@@ -139,6 +154,7 @@ export default function App() {
   const [searchText, setSearchText] = useState('')
   const [stoxRange, setStoxRange] = useState('today')
   const [stoxDeltas, setStoxDeltas] = useState({})
+  const [stoxSparklines, setStoxSparklines] = useState({})
   const [activeTab, setActiveTab] = useState('dashboard')
 
   // Polls and notifications
@@ -240,12 +256,14 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  // Fetch custom delta base prices when stoxRange is a computed range
+  // Fetch custom delta base prices and sparkline data when stoxRange changes
   useEffect(() => {
     if (['3h', '12h', '3d'].includes(stoxRange)) {
       fetch(`/api/stocks/delta?range=${stoxRange}`)
         .then(r => r.json()).then(setStoxDeltas).catch(() => {})
     }
+    fetch(`/api/stocks/sparklines?range=${stoxRange}`)
+      .then(r => r.json()).then(setStoxSparklines).catch(() => {})
   }, [stoxRange])
 
   // Live events
@@ -977,6 +995,7 @@ export default function App() {
                     >
                       <span className="text-[11px] font-bold text-tank-bright">{s.tickerSymbol}</span>
                       <span className="text-sm font-mono text-tank-bright">{s.currentPrice}</span>
+                      <Sparkline data={stoxSparklines[s.tickerSymbol]} color={isUp ? '#4ade80' : isDown ? '#f87171' : '#555566'} />
                       <span className={`text-[10px] font-mono ${isUp ? 'text-green-400' : isDown ? 'text-red-400' : 'text-tank-muted'}`}>
                         {isUp ? '+' : ''}{change} ({isUp ? '+' : ''}{changePct}%)
                       </span>

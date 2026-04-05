@@ -710,6 +710,44 @@ def get_stock_deltas(range_str):
     return {row['ticker']: row['price'] for row in rows}
 
 
+def get_stock_sparklines(range_str='today'):
+    """Get price arrays per ticker for sparkline rendering. Returns {ticker: [price, ...]}."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc)
+    config = {
+        '1h':  (now - timedelta(hours=1),  'raw'),
+        '3h':  (now - timedelta(hours=3),  '5min'),
+        '12h': (now - timedelta(hours=12), '15min'),
+        'today': (now - timedelta(hours=24), '15min'),
+        '3d':  (now - timedelta(days=3),   'hourly'),
+        '1w':  (now - timedelta(days=7),   'hourly'),
+        'ipo': (None,                       'daily'),
+    }
+    since_dt, granularity = config.get(range_str, config['today'])
+    since = since_dt.isoformat() if since_dt else None
+    where = "WHERE timestamp >= ?" if since else ""
+    params = [since] if since else []
+
+    if granularity == 'raw':
+        sql = f"SELECT ticker, price FROM stock_history {where} ORDER BY timestamp ASC"
+    else:
+        bucket = _time_bucket_expr(granularity, 'timestamp')
+        sql = f"""
+            SELECT ticker, CAST(ROUND(AVG(price)) AS INTEGER) AS price
+            FROM stock_history {where}
+            GROUP BY ticker, {bucket} ORDER BY {bucket} ASC
+        """
+
+    rows = conn.execute(sql, params).fetchall()
+    result = {}
+    for row in rows:
+        t = row['ticker']
+        if t not in result:
+            result[t] = []
+        result[t].append(row['price'])
+    return result
+
+
 def get_spend_trends(range_str='24h'):
     """Token spend over time bucketed by event type, using extracted cost column."""
     conn = _get_conn()
