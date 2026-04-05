@@ -69,9 +69,9 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
   const [stockCount, setStockCount] = useState(0)
   const [peakHours, setPeakHours] = useState(null)
 
-  // Per-section time filters
-  const [ttsPeriod, setTtsPeriod] = useState(null)
-  const [chatPeriod, setChatPeriod] = useState(null)
+  // Per-section time filters (default to 24h to avoid full-table scans on 600k+ rows)
+  const [ttsPeriod, setTtsPeriod] = useState('24h')
+  const [chatPeriod, setChatPeriod] = useState('24h')
   const [stockPeriod, setStockPeriod] = useState(null)
   const [chatSentiment, setChatSentiment] = useState(null)
   const [ttsSentiment, setTtsSentiment] = useState(null)
