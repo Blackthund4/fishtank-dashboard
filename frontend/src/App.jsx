@@ -946,68 +946,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Fishtoy Availability pills */}
-          {fishtoyStatus.length > 0 && (
-            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5 shrink-0">
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-2">
-                  <Package className="w-4 h-4 text-tank-muted" />
-                  <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Fishtoy Availability</h3>
-                  <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
-                    {fishtoyStatus.filter(f => f.enabled).length}/{fishtoyStatus.length}
-                  </span>
-                </div>
-                <div className="flex gap-1">
-                  {['enabled', 'all', 'disabled'].map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setFishtoyFilter(f)}
-                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-                        fishtoyFilter === f
-                          ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
-                          : 'text-tank-muted hover:text-tank-text'
-                      }`}
-                    >
-                      {f.charAt(0).toUpperCase() + f.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {featureToggles.fishtoys && !featureToggles.fishtoys.enabled && (
-                <div className="text-[10px] text-red-400 font-mono mb-1.5 p-1.5 bg-red-500/5 border border-red-500/20 rounded">
-                  Fishtoys globally disabled by production
-                </div>
-              )}
-              <div className="flex flex-wrap gap-1">
-                {[...fishtoyStatus]
-                  .filter(item => fishtoyFilter === 'all' || (fishtoyFilter === 'enabled' ? item.enabled : !item.enabled))
-                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-                  .map(item => {
-                    const isActive = filterItemId === String(item.id)
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => setFilterItemId(isActive ? null : String(item.id))}
-                        className={`text-[10px] font-medium px-2 py-1 rounded border transition-colors ${
-                          isActive
-                            ? 'border-tank-accent bg-tank-accent/10 text-tank-accent'
-                            : item.enabled
-                              ? 'border-green-500/30 hover:border-green-400/60 text-tank-text'
-                              : 'border-red-500/30 hover:border-red-400/40 text-tank-muted'
-                        }`}
-                      >
-                        {item.name}
-                        <span className="text-[9px] text-tank-warn ml-1">{item.cost}t</span>
-                        {item.type === 'BIGTOY' && (
-                          <Star className={`w-2.5 h-2.5 inline ml-0.5 ${isActive ? 'text-tank-accent' : 'text-purple-400'}`} />
-                        )}
-                      </button>
-                    )
-                  })}
-              </div>
-            </div>
-          )}
-
           {/* Info grid: Director Messages, Poll History, System Events */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
             {/* Director Messages */}
@@ -1204,6 +1142,68 @@ export default function App() {
             </div>
           </div>
 
+          {/* Fishtoy Availability pills */}
+          {fishtoyStatus.length > 0 && (
+            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5 shrink-0">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-tank-muted" />
+                  <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Fishtoy Availability</h3>
+                  <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
+                    {fishtoyStatus.filter(f => f.enabled).length}/{fishtoyStatus.length}
+                  </span>
+                </div>
+                <div className="flex gap-1">
+                  {['enabled', 'all', 'disabled'].map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setFishtoyFilter(f)}
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                        fishtoyFilter === f
+                          ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                          : 'text-tank-muted hover:text-tank-text'
+                      }`}
+                    >
+                      {f.charAt(0).toUpperCase() + f.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {featureToggles.fishtoys && !featureToggles.fishtoys.enabled && (
+                <div className="text-[10px] text-red-400 font-mono mb-1.5 p-1.5 bg-red-500/5 border border-red-500/20 rounded">
+                  Fishtoys globally disabled by production
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1">
+                {[...fishtoyStatus]
+                  .filter(item => fishtoyFilter === 'all' || (fishtoyFilter === 'enabled' ? item.enabled : !item.enabled))
+                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                  .map(item => {
+                    const isActive = filterItemId === String(item.id)
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setFilterItemId(isActive ? null : String(item.id))}
+                        className={`text-[10px] font-medium px-2 py-1 rounded border transition-colors ${
+                          isActive
+                            ? 'border-tank-accent bg-tank-accent/10 text-tank-accent'
+                            : item.enabled
+                              ? 'border-green-500/30 hover:border-green-400/60 text-tank-text'
+                              : 'border-red-500/30 hover:border-red-400/40 text-tank-muted'
+                        }`}
+                      >
+                        {item.name}
+                        <span className="text-[9px] text-tank-warn ml-1">{item.cost}t</span>
+                        {item.type === 'BIGTOY' && (
+                          <Star className={`w-2.5 h-2.5 inline ml-0.5 ${isActive ? 'text-tank-accent' : 'text-purple-400'}`} />
+                        )}
+                      </button>
+                    )
+                  })}
+              </div>
+            </div>
+          )}
+
           {/* Bottom: Chat + Activity side by side */}
           <div className="flex-1 flex flex-col md:flex-row gap-2 min-h-0">
             <Panel
@@ -1268,7 +1268,7 @@ export default function App() {
               title="Activity"
               icon={Radio}
               count={stats.tts + stats.sfx}
-              className="w-full md:w-[340px] md:shrink-0"
+              className="w-full md:w-[420px] md:shrink-0"
               virtualized
               extra={
                 <div className="flex items-center gap-2">
