@@ -158,26 +158,42 @@ def _prune_rate_limits():
 # ============================================================
 
 BACKUP_INTERVAL = 21600  # 6 hours
+WAL_CHECKPOINT_INTERVAL = 3600  # 1 hour
 _last_backup = None
 
 
 def db_backup_poller():
-    """Periodically back up the SQLite database using SQLite's online backup API."""
+    """Periodically back up the SQLite database and checkpoint the WAL."""
     global _last_backup
     import sqlite3
 
     # First backup after 5 minutes (don't wait 6 hours)
     _poller_stop.wait(300)
 
-    while not _poller_stop.is_set():
-        try:
-            db_path = database.DB_PATH
-            if str(db_path) == ":memory:" or not Path(db_path).exists():
-                _poller_stop.wait(BACKUP_INTERVAL)
-                continue
+    last_checkpoint = _time.time()
 
+    while not _poller_stop.is_set():
+        db_path = database.DB_PATH
+        if str(db_path) == ":memory:" or not Path(db_path).exists():
+            _poller_stop.wait(WAL_CHECKPOINT_INTERVAL)
+            continue
+
+        # WAL checkpoint every hour -- prevents WAL from ballooning under
+        # continuous write load with many concurrent readers
+        now = _time.time()
+        if now - last_checkpoint >= WAL_CHECKPOINT_INTERVAL:
+            try:
+                conn = sqlite3.connect(str(db_path))
+                busy, log, checkpointed = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                conn.close()
+                if log > 0:
+                    print(f"[OK] WAL checkpoint (PASSIVE): {checkpointed}/{log} pages checkpointed")
+                last_checkpoint = now
+            except Exception as e:
+                print(f"[!] WAL checkpoint failed: {e}")
+
+        try:
             backup_path = str(db_path) + ".backup"
-            # Use SQLite online backup API for a consistent copy
             src = sqlite3.connect(str(db_path))
             dst = sqlite3.connect(backup_path)
             src.backup(dst)
