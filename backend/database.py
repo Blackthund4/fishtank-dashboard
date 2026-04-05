@@ -221,12 +221,14 @@ def get_stats(since=None):
 
     top_targets = conn.execute("""
         SELECT json_extract(data, '$.target') as target, COUNT(*) as count
-        FROM events WHERE event_type LIKE 'fishtoy%%' AND target IS NOT NULL
+        FROM events WHERE event_type LIKE 'fishtoy%%'
+            AND json_extract(data, '$.target') IS NOT NULL
     """ + since_clause + " GROUP BY target ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
     top_senders = conn.execute("""
         SELECT json_extract(data, '$.displayName') as sender, COUNT(*) as count
-        FROM events WHERE event_type LIKE 'fishtoy%%' AND sender IS NOT NULL
+        FROM events WHERE event_type LIKE 'fishtoy%%'
+            AND json_extract(data, '$.displayName') IS NOT NULL
     """ + since_clause + " GROUP BY sender ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
     return {
@@ -607,7 +609,7 @@ def search_user(username, limit=500):
         SELECT id, timestamp_local, data FROM events
         WHERE event_type = 'tts:update'
         AND json_extract(data, '$.displayName') = ? COLLATE NOCASE
-        Order BY id DESC LIMIT ?
+        ORDER BY id DESC LIMIT ?
     """, (username, limit)).fetchall()
     results["tts"] = [{"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])} for r in rows]
 

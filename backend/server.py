@@ -925,6 +925,10 @@ def api_events(
 
 @app.get("/api/stats")
 def api_stats(since: str = Query(None, description="ISO timestamp to filter from")):
+    # Truncate to minute precision so clients with slightly different since values
+    # share the same cache entry instead of each triggering a full DB scan.
+    if since and len(since) > 16:
+        since = since[:16] + ":00"
     return _cached_query(f"stats:{since}", database.get_stats, since)
 
 
