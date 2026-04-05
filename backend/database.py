@@ -225,62 +225,78 @@ def get_stats(since=None):
             AND json_extract(data, '$.target') IS NOT NULL
     """ + since_clause + " GROUP BY target ORDER BY count DESC LIMIT 10", since_params).fetchall()
 
-    # Top senders: UNION ALL across fishtoy, TTS, SFX (cost-bearing types)
-    top_senders = conn.execute("""
-        SELECT sender, SUM(total_spend) as spend, SUM(total_count) as count FROM (
-            SELECT json_extract(data, '$.displayName') as sender,
-                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total_spend,
-                COUNT(*) as total_count
-            FROM events WHERE event_type LIKE 'fishtoy%%'
-                AND json_extract(data, '$.displayName') IS NOT NULL
-                AND (? IS NULL OR timestamp_local >= ?)
-            GROUP BY sender
-            UNION ALL
-            SELECT json_extract(data, '$.displayName') as sender,
-                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total_spend,
-                COUNT(*) as total_count
+    # Per-type leaderboards and UNION ALL top_senders are expensive (json_extract
+    # GROUP BY across 600k+ rows). Only compute when `since` is set (24h sidebar).
+    # All-time stats call uses the cheap fishtoy-only top_senders below.
+    if since:
+        top_senders = conn.execute("""
+            SELECT sender, SUM(total_spend) as spend, SUM(total_count) as count FROM (
+                SELECT json_extract(data, '$.displayName') as sender,
+                    COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total_spend,
+                    COUNT(*) as total_count
+                FROM events WHERE event_type LIKE 'fishtoy%%'
+                    AND json_extract(data, '$.displayName') IS NOT NULL
+                    AND timestamp_local >= ?
+                GROUP BY sender
+                UNION ALL
+                SELECT json_extract(data, '$.displayName') as sender,
+                    COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total_spend,
+                    COUNT(*) as total_count
+                FROM events WHERE event_type = 'tts:update'
+                    AND json_extract(data, '$.displayName') IS NOT NULL
+                    AND timestamp_local >= ?
+                GROUP BY sender
+                UNION ALL
+                SELECT json_extract(data, '$.displayName') as sender,
+                    COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total_spend,
+                    COUNT(*) as total_count
+                FROM events WHERE event_type = 'sfx:update'
+                    AND json_extract(data, '$.displayName') IS NOT NULL
+                    AND timestamp_local >= ?
+                GROUP BY sender
+            ) GROUP BY sender ORDER BY spend DESC LIMIT 5
+        """, (since, since, since)).fetchall()
+
+        top_tts_senders = conn.execute("""
+            SELECT json_extract(data, '$.displayName') as name, COUNT(*) as count,
+                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
             FROM events WHERE event_type = 'tts:update'
                 AND json_extract(data, '$.displayName') IS NOT NULL
-                AND (? IS NULL OR timestamp_local >= ?)
-            GROUP BY sender
-            UNION ALL
-            SELECT json_extract(data, '$.displayName') as sender,
-                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as total_spend,
-                COUNT(*) as total_count
+        """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", since_params).fetchall()
+
+        top_sfx_senders = conn.execute("""
+            SELECT json_extract(data, '$.displayName') as name, COUNT(*) as count,
+                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
             FROM events WHERE event_type = 'sfx:update'
                 AND json_extract(data, '$.displayName') IS NOT NULL
-                AND (? IS NULL OR timestamp_local >= ?)
-            GROUP BY sender
-        ) GROUP BY sender ORDER BY spend DESC LIMIT 5
-    """, (since, since, since, since, since, since)).fetchall()
+        """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", since_params).fetchall()
 
-    # Per-type leaderboards
-    top_tts_senders = conn.execute("""
-        SELECT json_extract(data, '$.displayName') as name, COUNT(*) as count,
-            COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
-        FROM events WHERE event_type = 'tts:update'
-            AND json_extract(data, '$.displayName') IS NOT NULL
-    """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", since_params).fetchall()
+        top_chat_senders = conn.execute("""
+            SELECT json_extract(data, '$.user.displayName') as name, COUNT(*) as count
+            FROM events WHERE event_type = 'chat:message'
+                AND json_extract(data, '$.user.displayName') IS NOT NULL
+        """ + since_clause + " GROUP BY name ORDER BY count DESC LIMIT 5", since_params).fetchall()
 
-    top_sfx_senders = conn.execute("""
-        SELECT json_extract(data, '$.displayName') as name, COUNT(*) as count,
-            COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
-        FROM events WHERE event_type = 'sfx:update'
-            AND json_extract(data, '$.displayName') IS NOT NULL
-    """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", since_params).fetchall()
-
-    top_chat_senders = conn.execute("""
-        SELECT json_extract(data, '$.user.displayName') as name, COUNT(*) as count
-        FROM events WHERE event_type = 'chat:message'
-            AND json_extract(data, '$.user.displayName') IS NOT NULL
-    """ + since_clause + " GROUP BY name ORDER BY count DESC LIMIT 5", since_params).fetchall()
-
-    top_fishtoy_senders = conn.execute("""
-        SELECT json_extract(data, '$.displayName') as name, COUNT(*) as count,
-            COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
-        FROM events WHERE event_type LIKE 'fishtoy%%'
-            AND json_extract(data, '$.displayName') IS NOT NULL
-    """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", since_params).fetchall()
+        top_fishtoy_senders = conn.execute("""
+            SELECT json_extract(data, '$.displayName') as name, COUNT(*) as count,
+                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
+            FROM events WHERE event_type LIKE 'fishtoy%%'
+                AND json_extract(data, '$.displayName') IS NOT NULL
+        """ + since_clause + " GROUP BY name ORDER BY spend DESC LIMIT 5", since_params).fetchall()
+    else:
+        # Cheap fallback for all-time: fishtoy-only top senders (was the original query)
+        top_senders_rows = conn.execute("""
+            SELECT json_extract(data, '$.displayName') as sender, COUNT(*) as count,
+                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS INTEGER)), 0) as spend
+            FROM events WHERE event_type LIKE 'fishtoy%%'
+                AND json_extract(data, '$.displayName') IS NOT NULL
+            GROUP BY sender ORDER BY count DESC LIMIT 10
+        """).fetchall()
+        top_senders = top_senders_rows
+        top_tts_senders = []
+        top_sfx_senders = []
+        top_chat_senders = []
+        top_fishtoy_senders = []
 
     return {
         "total_events": total,
