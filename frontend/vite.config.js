@@ -1,8 +1,18 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(({ mode }) => ({
+  plugins: [
+    react(),
+    mode === 'development' && {
+      name: 'dev-html-transform',
+      transformIndexHtml(html) {
+        return html
+          .replace('<title>Fishtank Dashboard</title>', '<title>Fishtank Dashboard [DEV]</title>')
+          .replace('href="/favicon.svg"', 'href="/dev-favicon.svg"')
+      },
+    },
+  ].filter(Boolean),
   build: {
     rollupOptions: {
       output: {
@@ -19,4 +29,4 @@ export default defineConfig({
       "/ws": { target: "ws://localhost:8000", ws: true },
     },
   },
-});
+}));
