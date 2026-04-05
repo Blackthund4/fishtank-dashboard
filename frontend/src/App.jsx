@@ -1172,16 +1172,18 @@ export default function App() {
                     const isActivePoll = p.event_type === 'poll:start' && activePoll && !activePoll.ended && pid && pid === activePoll.pid
                     const votes = isActivePoll ? pollVotes : (d.votes || d.scores || [])
                     const total = votes.reduce((s, v) => s + (v.score || 0), 0) || 1
+                    const sortedVotes = [...votes].sort((a, b) => (b.score || 0) - (a.score || 0))
+                    const topScore = sortedVotes[0]?.score || 0
                     return (
-                      <div key={p.id} className={`p-1.5 rounded border ${
+                      <div key={p.id} className={`p-2 rounded-lg border ${
                         p.event_type === 'poll:stop'
                           ? 'border-purple-500/30 bg-purple-500/5'
                           : isActivePoll
                             ? 'border-purple-400/50 bg-purple-500/10'
                             : 'border-tank-border bg-tank-bg'
                       }`}>
-                        <div className="flex items-center justify-between mb-0.5">
-                          <span className={`text-[9px] font-mono px-1 py-0.5 rounded ${
+                        <div className="flex items-center justify-between mb-1">
+                          <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
                             p.event_type === 'poll:stop'
                               ? 'bg-purple-500/10 text-purple-400'
                               : isActivePoll
@@ -1199,28 +1201,46 @@ export default function App() {
                             <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
                           </div>
                         </div>
-                        {question && <p className="text-[11px] text-tank-bright mb-0.5">{question}</p>}
-                        {votes.length > 0 && (
-                          <div className="space-y-0.5">
-                            {[...votes].sort((a, b) => (b.score || 0) - (a.score || 0)).map((v, i) => (
-                              <div key={v.value} className="flex items-center gap-1">
-                                <span className="text-[9px] w-3 shrink-0">{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`}</span>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center justify-between text-[9px]">
-                                    <span className="text-tank-bright truncate">{v.value}</span>
-                                    <span className="text-purple-400 font-mono ml-1">{v.score?.toLocaleString()}t ({Math.round(v.score / total * 100)}%)</span>
+                        {question && <p className="text-[11px] text-tank-bright mb-1">{question}</p>}
+                        {sortedVotes.length > 0 && (
+                          <div className="space-y-1">
+                            {sortedVotes.map((v, i) => {
+                              const score = v.score || 0
+                              const pct = Math.round(score / total * 100)
+                              const isWinner = score === topScore && topScore > 0
+                              const color = POLL_COLORS[i % POLL_COLORS.length]
+                              return (
+                                <div key={v.value}>
+                                  <div className="flex items-center justify-between text-[9px] mb-0.5">
+                                    <span className="flex items-center gap-1">
+                                      {isWinner && <Crown className="w-2.5 h-2.5 text-yellow-400" />}
+                                      <span className={`truncate ${isWinner ? 'text-white font-medium' : 'text-tank-bright'}`}>{v.value}</span>
+                                    </span>
+                                    <span className={`font-mono ml-1 ${isWinner ? 'text-purple-300' : 'text-purple-400/60'}`}>
+                                      {score.toLocaleString()}t ({pct}%)
+                                    </span>
                                   </div>
-                                  <div className="h-1 bg-tank-bg rounded-full overflow-hidden">
-                                    <div className="h-full rounded-full bg-purple-400/70 transition-all" style={{ width: `${Math.round(v.score / total * 100)}%` }} />
+                                  <div className="h-2 bg-purple-900/30 rounded overflow-hidden">
+                                    <div
+                                      className={`h-full rounded transition-all duration-500 ${isWinner ? 'shadow-[0_0_6px_rgba(192,132,252,0.3)]' : ''}`}
+                                      style={{
+                                        width: `${Math.max(pct, 1)}%`,
+                                        background: isWinner
+                                          ? `linear-gradient(90deg, ${color}, ${color}cc)`
+                                          : `${color}44`,
+                                      }}
+                                    />
                                   </div>
                                 </div>
-                              </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         )}
                         {d.winner && (
-                          <div className="text-[10px] mt-0.5">
-                            Winner: <span className="font-semibold text-purple-400">{d.winner}</span>
+                          <div className="text-[10px] mt-1 flex items-center gap-1">
+                            <Crown className="w-3 h-3 text-yellow-400" />
+                            <span className="text-tank-muted">Winner:</span>
+                            <span className="font-semibold text-purple-400">{d.winner}</span>
                             {votes.length > 0 && <span className="text-tank-muted ml-1">({total.toLocaleString()} tokens)</span>}
                           </div>
                         )}
