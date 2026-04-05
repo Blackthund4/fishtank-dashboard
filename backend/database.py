@@ -300,13 +300,51 @@ def store_stock_snapshot(stocks):
 
 
 def prune_stock_history(retention_days=30):
-    """Delete stock history rows older than retention_days. Returns count of deleted rows."""
+    """Downsample stock history older than retention_days to one row per ticker per day.
+
+    Keeps daily averages for long-term charts (all/ipo ranges use daily bucketing).
+    Deletes per-minute granularity beyond the retention window.
+    Returns count of deleted rows.
+    """
     conn = _get_conn()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
-    result = conn.execute("DELETE FROM stock_history WHERE timestamp < ?", (cutoff,))
-    deleted = result.rowcount
-    if deleted > 0:
-        conn.commit()
+
+    # Check if there's anything to prune (avoid unnecessary work)
+    old_count = conn.execute(
+        "SELECT COUNT(*) FROM stock_history WHERE timestamp < ?", (cutoff,)
+    ).fetchone()[0]
+    if old_count == 0:
+        return 0
+
+    # For each ticker+day with multiple rows, keep only one row with averaged values.
+    # Strategy: delete all old rows, then insert daily summaries.
+    # Compute daily summaries first, then replace.
+    summaries = conn.execute("""
+        SELECT
+            strftime('%Y-%m-%dT12:00:00+00:00', timestamp) AS day_ts,
+            ticker,
+            CAST(ROUND(AVG(price)) AS INTEGER) AS price,
+            CAST(ROUND(AVG(today_open)) AS INTEGER) AS today_open,
+            CAST(ROUND(AVG(last_hour)) AS INTEGER) AS last_hour,
+            CAST(ROUND(AVG(last_week)) AS INTEGER) AS last_week,
+            CAST(ROUND(AVG(average_price)) AS INTEGER) AS average_price
+        FROM stock_history
+        WHERE timestamp < ?
+        GROUP BY ticker, strftime('%Y-%m-%d', timestamp)
+    """, (cutoff,)).fetchall()
+
+    # Delete all old per-minute rows
+    conn.execute("DELETE FROM stock_history WHERE timestamp < ?", (cutoff,))
+
+    # Insert daily summaries
+    for s in summaries:
+        conn.execute(
+            "INSERT INTO stock_history (timestamp, ticker, price, today_open, last_hour, last_week, average_price) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (s["day_ts"], s["ticker"], s["price"], s["today_open"], s["last_hour"], s["last_week"], s["average_price"]),
+        )
+
+    conn.commit()
+    deleted = old_count - len(summaries)
     return deleted
 
 
