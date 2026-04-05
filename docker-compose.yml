@@ -17,8 +17,8 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://fish-dash.com,https://www.fish-dash.com}
       - SSL_CERTFILE=/app/certs/origin.crt
       - SSL_KEYFILE=/app/certs/origin.key
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 1.5g
+    memswap_limit: 1.5g
     cpus: 1.5
     healthcheck:
       test: ["CMD", "curl", "-sf", "--insecure", "https://localhost:8000/api/health"]

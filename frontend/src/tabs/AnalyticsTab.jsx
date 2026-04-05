@@ -79,62 +79,50 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
 
-  // Fetch data that doesn't depend on time filters
+  // Staggered analytics fetches — heavy DB queries must not all fire at once
+  // (concurrent json_extract aggregations on 600k+ rows OOM the 1GB container)
   useEffect(() => {
-    function fetchStatic() {
-      if (document.hidden) return  // Skip if tab not visible
+    let cancelled = false
+    async function fetchAll() {
+      if (document.hidden) return
+      // Batch 1: lightweight catalog queries
       fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
       fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
       fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
       fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
+
+      // Batch 2: stock history (after a pause)
+      await new Promise(r => setTimeout(r, 500))
+      if (cancelled) return
+      const stockSince = getSinceISO(stockPeriod)
+      const stockParams = new URLSearchParams({ limit: '2000' })
+      if (stockSince) stockParams.set('since', stockSince)
+      await fetch(`/api/stocks/history?${stockParams}`).then(r => r.json()).then(setStockHistory).catch(() => {})
+
+      // Batch 3: TTS/SFX analytics (sequential, not parallel)
+      if (cancelled) return
+      const ttsSince = getSinceISO(ttsPeriod)
+      const ttsParam = ttsSince ? `?since=${encodeURIComponent(ttsSince)}` : ''
+      await fetch(`/api/analytics/tts-sfx${ttsParam}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
+      if (cancelled) return
+      await fetch(`/api/analytics/tts-sentiment${ttsParam}`).then(r => r.json()).then(setTtsSentiment).catch(() => {})
+
+      // Batch 4: Chat analytics
+      if (cancelled) return
+      const chatSince = getSinceISO(chatPeriod)
+      const chatParam = chatSince ? `?since=${encodeURIComponent(chatSince)}` : ''
+      await fetch(`/api/analytics/chat${chatParam}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
+      if (cancelled) return
+      await fetch(`/api/analytics/chat-sentiment${chatParam}`).then(r => r.json()).then(setChatSentiment).catch(() => {})
+
+      // Batch 5: peak hours (heaviest)
+      if (cancelled) return
       fetch('/api/analytics/peak-hours').then(r => r.json()).then(setPeakHours).catch(() => {})
     }
-    fetchStatic()
-    const interval = setInterval(fetchStatic, 120000)
-    return () => clearInterval(interval)
-  }, [])
-
-  // Stock history with its own time filter
-  useEffect(() => {
-    function fetchStockHistory() {
-      if (document.hidden) return
-      const since = getSinceISO(stockPeriod)
-      const params = new URLSearchParams({ limit: '2000' })
-      if (since) params.set('since', since)
-      fetch(`/api/stocks/history?${params}`).then(r => r.json()).then(setStockHistory).catch(() => {})
-    }
-    fetchStockHistory()
-    const interval = setInterval(fetchStockHistory, 120000)
-    return () => clearInterval(interval)
-  }, [stockPeriod])
-
-  // TTS/SFX analytics with its own time filter
-  useEffect(() => {
-    function fetchTts() {
-      if (document.hidden) return
-      const since = getSinceISO(ttsPeriod)
-      const param = since ? `?since=${encodeURIComponent(since)}` : ''
-      fetch(`/api/analytics/tts-sfx${param}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
-      fetch(`/api/analytics/tts-sentiment${param}`).then(r => r.json()).then(setTtsSentiment).catch(() => {})
-    }
-    fetchTts()
-    const interval = setInterval(fetchTts, 120000)
-    return () => clearInterval(interval)
-  }, [ttsPeriod])
-
-  // Chat analytics with its own time filter
-  useEffect(() => {
-    function fetchChat() {
-      if (document.hidden) return
-      const since = getSinceISO(chatPeriod)
-      const param = since ? `?since=${encodeURIComponent(since)}` : ''
-      fetch(`/api/analytics/chat${param}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
-      fetch(`/api/analytics/chat-sentiment${param}`).then(r => r.json()).then(setChatSentiment).catch(() => {})
-    }
-    fetchChat()
-    const interval = setInterval(fetchChat, 120000)
-    return () => clearInterval(interval)
-  }, [chatPeriod])
+    fetchAll()
+    const interval = setInterval(fetchAll, 120000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [stockPeriod, ttsPeriod, chatPeriod])
 
   // Build per-ticker reference prices from filtered stock history
   const stockRefPrices = (() => {
