@@ -15,7 +15,6 @@ backend/token_cache.json
 # Node
 node_modules/
 frontend/dist/
-package-lock.json
 
 # Python
 __pycache__/
