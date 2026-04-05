@@ -11,7 +11,6 @@ function getSinceISO(period) {
 }
 
 const TIME_OPTIONS = [
-  { id: null, label: 'All' },
   { id: '7d', label: '7d' },
   { id: '3d', label: '3d' },
   { id: '24h', label: '24h' },
