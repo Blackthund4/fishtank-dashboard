@@ -127,10 +127,12 @@ def backfill_extracted_columns(batch_size=1000):
     """
     conn = _get_conn()
     # Check if backfill is needed: look for events with NULL extracted columns
+    # First check catches initial backfill (cost never populated),
+    # second catches re-backfill after adding new columns (room never populated on TTS)
     sample = conn.execute("""
         SELECT id FROM events
         WHERE (event_type = 'tts:update' AND cost IS NULL)
-           OR (event_type = 'feature-toggles:update' AND feature IS NULL)
+           OR (event_type = 'tts:update' AND room IS NULL)
         LIMIT 1
     """).fetchone()
     if not sample:
