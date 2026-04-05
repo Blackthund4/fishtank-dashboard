@@ -7,7 +7,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 DB_PATH = Path(os.environ.get("FISHTANK_DB_PATH", Path(__file__).parent / "fishtank.db"))
@@ -297,6 +297,17 @@ def store_stock_snapshot(stocks):
              s.get("lastHour"), s.get("lastWeek"), s.get("averagePrice")),
         )
     conn.commit()
+
+
+def prune_stock_history(retention_days=30):
+    """Delete stock history rows older than retention_days. Returns count of deleted rows."""
+    conn = _get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    result = conn.execute("DELETE FROM stock_history WHERE timestamp < ?", (cutoff,))
+    deleted = result.rowcount
+    if deleted > 0:
+        conn.commit()
+    return deleted
 
 
 def get_stock_history(ticker=None, limit=500, since=None):

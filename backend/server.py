@@ -213,6 +213,14 @@ def db_backup_poller():
         except Exception as e:
             print(f"[!] Database backup failed: {e}")
 
+        # Prune old stock history to prevent unbounded disk growth
+        try:
+            deleted = database.prune_stock_history(retention_days=30)
+            if deleted > 0:
+                print(f"[OK] Stock history pruned: {deleted} rows older than 30 days removed")
+        except Exception as e:
+            print(f"[!] Stock history prune failed: {e}")
+
         _poller_stop.wait(BACKUP_INTERVAL)
 
 # ============================================================
