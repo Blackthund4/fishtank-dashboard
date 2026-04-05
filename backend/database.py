@@ -119,6 +119,8 @@ def init_db():
             WHERE feature IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_events_display_name_nocase
             ON events(display_name COLLATE NOCASE) WHERE display_name IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_sc_delete
+            ON events(event_type, event_id) WHERE event_type = 'super-chat:delete';
     """)
     conn.commit()
 

@@ -4,8 +4,8 @@ FROM node:20.18-slim AS frontend-build
 ARG GIT_COMMIT=unknown
 
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 

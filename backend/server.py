@@ -956,7 +956,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _allowed_origins],
     allow_methods=["GET", "HEAD"],
-    allow_headers=["*"],
+    allow_headers=["content-type"],
+    max_age=3600,
 )
 
 
@@ -1355,15 +1356,25 @@ FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
+    # Cache hashed assets for 1 year; they're content-addressed so safe to cache forever
+    @app.middleware("http")
+    async def cache_static_assets(request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):
         file_path = (FRONTEND_DIST / full_path).resolve()
         # Prevent path traversal outside dist directory
         if not str(file_path).startswith(str(FRONTEND_DIST.resolve())):
-            return FileResponse(FRONTEND_DIST / "index.html")
+            return FileResponse(FRONTEND_DIST / "index.html",
+                                headers={"Cache-Control": "no-cache"})
         if file_path.is_file():
             return FileResponse(file_path)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return FileResponse(FRONTEND_DIST / "index.html",
+                            headers={"Cache-Control": "no-cache"})
 
 
 # ============================================================
