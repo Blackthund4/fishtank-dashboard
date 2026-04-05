@@ -153,6 +153,7 @@ export default function App() {
   const [scCountdowns, setScCountdowns] = useState({})
   const [activityFilter, setActivityFilter] = useState('all')
   const [systemFilter, setSystemFilter] = useState('all')
+  const [directorTimeRange, setDirectorTimeRange] = useState('all')
   const [activityTimeRange, setActivityTimeRange] = useState('all')
   const [activityHasMore, setActivityHasMore] = useState(true)
   const [activityLoading, setActivityLoading] = useState(false)
@@ -170,7 +171,7 @@ export default function App() {
     fetch('/api/targets').then(r => r.json()).then(setAllTargets).catch(() => {})
     fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
     fetch('/api/polls').then(r => r.json()).then(setPolls).catch(() => {})
-    fetch('/api/notifications').then(r => r.json()).then(data => {
+    fetch('/api/notifications?limit=500').then(r => r.json()).then(data => {
       setNotifications(data.map(n => ({
         id: n.id,
         type: n.event_type,
@@ -205,9 +206,9 @@ export default function App() {
 
     // Fetch system events separately so one type doesn't crowd out others
     Promise.all([
-      fetch('/api/events?type=tts:price,sfx:price&limit=50').then(r => r.json()).catch(() => []),
-      fetch('/api/events?type=stock:update,stock:new,stock:remove,stock:split&limit=50').then(r => r.json()).catch(() => []),
-      fetch('/api/events?type=feature-toggles:update&limit=50').then(r => r.json()).catch(() => []),
+      fetch('/api/events?type=tts:price,sfx:price&limit=200').then(r => r.json()).catch(() => []),
+      fetch('/api/events?type=stock:update,stock:new,stock:remove,stock:split&limit=200').then(r => r.json()).catch(() => []),
+      fetch('/api/events?type=feature-toggles:update&limit=200').then(r => r.json()).catch(() => []),
     ]).then(([prices, stocks, toggles]) => {
       const all = [...prices, ...stocks, ...toggles]
         .map(e => ({ event: e.event_type, data: e.data, dbId: e.id, timestamp: e.timestamp_local }))
@@ -659,35 +660,47 @@ export default function App() {
 
       {/* Live poll bar */}
       {activePoll && !activePoll.ended && (
-        <div className="bg-purple-500/10 border-b border-purple-500/30 px-3 py-1.5 shrink-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
+        <div className="bg-purple-950/80 border-b border-purple-500/40 px-3 py-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
             <Vote className="w-4 h-4 text-purple-400 shrink-0" />
             <span className="text-xs font-semibold text-purple-400 uppercase shrink-0">Live Poll</span>
             {pollElapsed !== null && (
               <span className="text-[10px] font-mono text-purple-300/70 shrink-0">
-                {Math.floor(pollElapsed / 60)}:{String(pollElapsed % 60).padStart(2, '0')}
+                {Math.floor(pollElapsed / 3600)}:{String(Math.floor((pollElapsed % 3600) / 60)).padStart(2, '0')}:{String(pollElapsed % 60).padStart(2, '0')}
               </span>
             )}
-            <span className="text-sm text-tank-bright">{activePoll.question || 'Poll'}</span>
+            <span className="text-sm font-medium text-white">{activePoll.question || 'Poll'}</span>
+            {pollVotes.length > 0 && (
+              <span className="text-[10px] font-mono text-purple-300/60 shrink-0 ml-auto">
+                {pollVotes.reduce((s, v) => s + (v.score || 0), 0).toLocaleString()}t total
+              </span>
+            )}
           </div>
           {pollVotes.length > 0 && (
             <div className="flex gap-2">
               {(() => {
                 const total = pollVotes.reduce((s, v) => s + (v.score || 0), 0) || 1
-                return pollVotes.map((v, i) => (
-                  <div key={v.value} className="flex-1">
-                    <div className="flex items-center justify-between text-[10px] mb-0.5">
-                      <span className="text-tank-bright font-medium truncate">{v.value}</span>
-                      <span className="text-purple-400 font-mono ml-1">{Math.round(v.score / total * 100)}%</span>
+                const maxScore = Math.max(...pollVotes.map(v => v.score || 0))
+                return pollVotes.map((v, i) => {
+                  const pct = Math.round((v.score || 0) / total * 100)
+                  const isLeading = (v.score || 0) === maxScore && maxScore > 0
+                  return (
+                    <div key={v.value} className="flex-1">
+                      <div className="flex items-center justify-between text-[10px] mb-0.5">
+                        <span className={`font-medium truncate ${isLeading ? 'text-white' : 'text-purple-200/70'}`}>{v.value}</span>
+                        <span className={`font-mono ml-1 ${isLeading ? 'text-purple-300' : 'text-purple-400/60'}`}>
+                          {(v.score || 0).toLocaleString()}t ({pct}%)
+                        </span>
+                      </div>
+                      <div className="h-2 bg-purple-900/50 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${isLeading ? 'bg-purple-400' : 'bg-purple-500/50'}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-1.5 bg-tank-bg rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-purple-400 transition-all"
-                        style={{ width: `${Math.round(v.score / total * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                ))
+                  )
+                })
               })()}
             </div>
           )}
@@ -1018,24 +1031,61 @@ export default function App() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
             {/* Director Messages */}
             <div ref={directorRef} className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Bell className="w-3.5 h-3.5 text-yellow-400" />
-                <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Director Messages</h3>
-              </div>
-              {notifications.length > 0 ? (
-                <div className="space-y-1 max-h-[150px] overflow-y-auto">
-                  {notifications.map(n => (
-                    <div key={n.id} className="flex items-start gap-1.5 p-1.5 bg-yellow-500/5 border border-yellow-500/20 rounded">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs text-tank-bright break-words">{n.message}</p>
-                        <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
-                      </div>
-                    </div>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-3.5 h-3.5 text-yellow-400" />
+                  <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Director Messages</h3>
+                  <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
+                    {notifications.length}
+                  </span>
+                </div>
+                <div className="flex gap-0.5">
+                  {[
+                    { id: '1h', label: '1h' },
+                    { id: '6h', label: '6h' },
+                    { id: '24h', label: '24h' },
+                    { id: 'all', label: '\u221E' },
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setDirectorTimeRange(t.id)}
+                      className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                        directorTimeRange === t.id
+                          ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40'
+                          : 'text-tank-muted hover:text-tank-text'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
                   ))}
                 </div>
-              ) : (
-                <div className="text-[10px] text-tank-muted font-mono">No director messages yet</div>
-              )}
+              </div>
+              {(() => {
+                let filtered = notifications
+                if (directorTimeRange !== 'all') {
+                  const hours = { '1h': 1, '6h': 6, '24h': 24 }[directorTimeRange]
+                  if (hours) {
+                    const cutoff = Date.now() - hours * 3600000
+                    filtered = filtered.filter(n => Date.parse(n.timestamp) >= cutoff)
+                  }
+                }
+                return filtered.length > 0 ? (
+                  <div className="space-y-1 max-h-[150px] overflow-y-auto">
+                    {filtered.map(n => (
+                      <div key={n.id} className="flex items-start gap-1.5 p-1.5 bg-yellow-500/5 border border-yellow-500/20 rounded">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs text-tank-bright break-words">{n.message}</p>
+                          <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-tank-muted font-mono">
+                    {directorTimeRange !== 'all' ? `No messages in last ${directorTimeRange}` : 'No director messages yet'}
+                  </div>
+                )
+              })()}
             </div>
 
             {/* Poll History */}
@@ -1048,24 +1098,39 @@ export default function App() {
                 <div className="space-y-1.5 max-h-[150px] overflow-y-auto">
                   {polls.map(p => {
                     const d = p.data || {}
-                    const question = d.question || d.poll?.question
-                    const votes = d.votes || d.scores || []
+                    const pollInfo = d.poll || d
+                    const question = pollInfo.question
+                    const pid = pollInfo.pid
+                    // Use live vote tallies for the active poll (#46)
+                    const isActivePoll = p.event_type === 'poll:start' && activePoll && !activePoll.ended && pid && pid === activePoll.pid
+                    const votes = isActivePoll ? pollVotes : (d.votes || d.scores || [])
                     const total = votes.reduce((s, v) => s + (v.score || 0), 0) || 1
                     return (
                       <div key={p.id} className={`p-1.5 rounded border ${
                         p.event_type === 'poll:stop'
                           ? 'border-purple-500/30 bg-purple-500/5'
-                          : 'border-tank-border bg-tank-bg'
+                          : isActivePoll
+                            ? 'border-purple-400/50 bg-purple-500/10'
+                            : 'border-tank-border bg-tank-bg'
                       }`}>
                         <div className="flex items-center justify-between mb-0.5">
                           <span className={`text-[9px] font-mono px-1 py-0.5 rounded ${
                             p.event_type === 'poll:stop'
                               ? 'bg-purple-500/10 text-purple-400'
-                              : 'bg-tank-highlight text-tank-muted'
+                              : isActivePoll
+                                ? 'bg-purple-500/20 text-purple-300'
+                                : 'bg-tank-highlight text-tank-muted'
                           }`}>
-                            {p.event_type === 'poll:stop' ? 'RESULT' : 'STARTED'}
+                            {p.event_type === 'poll:stop' ? 'RESULT' : isActivePoll ? 'LIVE' : 'STARTED'}
                           </span>
-                          <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
+                          <div className="flex items-center gap-1.5">
+                            {isActivePoll && pollElapsed !== null && (
+                              <span className="text-[9px] font-mono text-purple-300/70">
+                                {Math.floor(pollElapsed / 3600)}:{String(Math.floor((pollElapsed % 3600) / 60)).padStart(2, '0')}:{String(pollElapsed % 60).padStart(2, '0')}
+                              </span>
+                            )}
+                            <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
+                          </div>
                         </div>
                         {question && <p className="text-[11px] text-tank-bright mb-0.5">{question}</p>}
                         {votes.length > 0 && (
@@ -1076,10 +1141,10 @@ export default function App() {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center justify-between text-[9px]">
                                     <span className="text-tank-bright truncate">{v.value}</span>
-                                    <span className="text-purple-400 font-mono ml-1">{Math.round(v.score / total * 100)}%</span>
+                                    <span className="text-purple-400 font-mono ml-1">{v.score?.toLocaleString()}t ({Math.round(v.score / total * 100)}%)</span>
                                   </div>
                                   <div className="h-1 bg-tank-bg rounded-full overflow-hidden">
-                                    <div className="h-full rounded-full bg-purple-400/70" style={{ width: `${Math.round(v.score / total * 100)}%` }} />
+                                    <div className="h-full rounded-full bg-purple-400/70 transition-all" style={{ width: `${Math.round(v.score / total * 100)}%` }} />
                                   </div>
                                 </div>
                               </div>
