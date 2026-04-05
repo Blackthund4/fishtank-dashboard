@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star } from 'lucide-react'
+import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star, TrendingUp } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
 import { useWebSocket } from './useWebSocket'
 import { formatDateTime } from './utils/formatTime'
@@ -9,6 +9,7 @@ import FishtoyCard from './components/FishtoyCard'
 import ChatMessage from './components/ChatMessage'
 import ActivityCard from './components/ActivityCard'
 import AnalyticsTab from './tabs/AnalyticsTab'
+import ChartsTab from './tabs/ChartsTab'
 import HiddenContentTab from './tabs/HiddenContentTab'
 import UserSearchTab from './tabs/UserSearchTab'
 
@@ -617,6 +618,7 @@ export default function App() {
         {[
           { id: 'dashboard', label: 'Dashboard', icon: Fish },
           { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+          { id: 'charts', label: 'Charts', icon: TrendingUp },
           { id: 'hidden', label: 'Hidden Content', icon: FileText },
           { id: 'users', label: 'User Search', icon: User },
         ].map(tab => (
@@ -1498,6 +1500,10 @@ export default function App() {
           itemCatalog={itemCatalog}
           featureToggles={featureToggles}
         />
+      )}
+
+      {activeTab === 'charts' && (
+        <ChartsTab stocks={stocks} />
       )}
 
       {activeTab === 'hidden' && (

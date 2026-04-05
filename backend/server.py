@@ -1286,6 +1286,27 @@ def api_poll_latest():
     return database.get_latest_poll_state()
 
 
+@app.get("/api/charts/stocks")
+def api_charts_stocks(range: str = Query('24h')):
+    if range not in {'1h', '6h', '12h', '24h', '3d', '7d', 'all'}:
+        range = '24h'
+    return _cached_query(f"charts-stocks:{range}", database.get_stock_history_chart, range)
+
+
+@app.get("/api/charts/spend")
+def api_charts_spend(range: str = Query('24h')):
+    if range not in {'1h', '6h', '12h', '24h', '3d', '7d', 'all'}:
+        range = '24h'
+    return _cached_query(f"charts-spend:{range}", database.get_spend_trends, range)
+
+
+@app.get("/api/charts/chatters")
+def api_charts_chatters(range: str = Query('24h')):
+    if range not in {'1h', '6h', '12h', '24h', '3d', '7d', 'all'}:
+        range = '24h'
+    return _cached_query(f"charts-chatters:{range}", database.get_chat_chart, range)
+
+
 # --- Serve frontend static files ---
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"

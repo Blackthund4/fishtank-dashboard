@@ -585,6 +585,175 @@ def get_stock_history(ticker=None, limit=500, since=None):
 
 
 # ============================================================
+# CHART DATA
+# ============================================================
+
+
+def _range_to_since_and_granularity(range_str, config):
+    """Convert a range string to (since_iso, granularity) using a config map."""
+    since_dt, granularity = config.get(range_str, config.get('24h'))
+    since = since_dt.isoformat() if since_dt else None
+    return since, granularity
+
+
+def _time_bucket_expr(granularity, col='timestamp_local'):
+    """Return SQL expression for time bucketing."""
+    if granularity == '5min':
+        return (
+            f"strftime('%Y-%m-%d %H:', {col}) || "
+            f"printf('%02d', (CAST(strftime('%M', {col}) AS INTEGER) / 5) * 5) || ':00'"
+        )
+    if granularity == '15min':
+        return (
+            f"strftime('%Y-%m-%d %H:', {col}) || "
+            f"printf('%02d', (CAST(strftime('%M', {col}) AS INTEGER) / 15) * 15) || ':00'"
+        )
+    if granularity == 'hourly':
+        return f"strftime('%Y-%m-%d %H:00:00', {col})"
+    return f"strftime('%Y-%m-%d', {col})"
+
+
+def get_stock_history_chart(range_str='24h'):
+    """Stock price history with automatic downsampling for chart display."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc)
+    config = {
+        '1h':  (now - timedelta(hours=1),  'raw'),
+        '6h':  (now - timedelta(hours=6),  '5min'),
+        '12h': (now - timedelta(hours=12), '15min'),
+        '24h': (now - timedelta(hours=24), '15min'),
+        '3d':  (now - timedelta(days=3),   'hourly'),
+        '7d':  (now - timedelta(days=7),   'hourly'),
+        'all': (None,                       'daily'),
+    }
+    since, granularity = _range_to_since_and_granularity(range_str, config)
+    where = "WHERE timestamp >= ?" if since else ""
+    params = [since] if since else []
+
+    if granularity == 'raw':
+        sql = f"SELECT ticker, timestamp AS ts, price FROM stock_history {where} ORDER BY timestamp ASC"
+    else:
+        bucket = _time_bucket_expr(granularity, 'timestamp')
+        sql = f"""
+            SELECT ticker, {bucket} AS ts, CAST(ROUND(AVG(price)) AS INTEGER) AS price
+            FROM stock_history {where}
+            GROUP BY ticker, ts ORDER BY ts ASC
+        """
+
+    rows = conn.execute(sql, params).fetchall()
+    result = {}
+    for row in rows:
+        t = row['ticker']
+        if t not in result:
+            result[t] = []
+        result[t].append({'ts': row['ts'], 'price': row['price']})
+    return result
+
+
+def get_spend_trends(range_str='24h'):
+    """Token spend over time bucketed by event type, using extracted cost column."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc)
+    config = {
+        '1h':  (now - timedelta(hours=1),  '5min'),
+        '6h':  (now - timedelta(hours=6),  'hourly'),
+        '12h': (now - timedelta(hours=12), 'hourly'),
+        '24h': (now - timedelta(hours=24), 'hourly'),
+        '3d':  (now - timedelta(days=3),   'hourly'),
+        '7d':  (now - timedelta(days=7),   'daily'),
+        'all': (None,                       'daily'),
+    }
+    since, granularity = _range_to_since_and_granularity(range_str, config)
+    since_clause = "AND timestamp_local >= ?" if since else ""
+    params = [since] if since else []
+    bucket = _time_bucket_expr(granularity)
+
+    rows = conn.execute(f"""
+        SELECT {bucket} AS ts, event_type,
+            COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
+        FROM events
+        WHERE event_type IN ('tts:update', 'sfx:update', 'fishtoy:used')
+        {since_clause}
+        GROUP BY ts, event_type ORDER BY ts ASC
+    """, params).fetchall()
+
+    buckets = {}
+    for row in rows:
+        ts = row['ts']
+        if ts not in buckets:
+            buckets[ts] = {'ts': ts, 'tts': 0, 'sfx': 0, 'fishtoy': 0, 'poll': 0}
+        et = row['event_type']
+        key = 'tts' if et == 'tts:update' else 'sfx' if et == 'sfx:update' else 'fishtoy'
+        buckets[ts][key] = row['spend']
+
+    # Poll tokens from poll:stop events
+    poll_rows = conn.execute(f"""
+        WITH final_poll_votes AS (
+            SELECT pe.timestamp_local,
+                   (SELECT COALESCE(SUM(json_extract(v.value, '$.score')), 0)
+                    FROM json_each(
+                        COALESCE(
+                            (SELECT data FROM events WHERE event_type = 'poll:vote' AND id < pe.id ORDER BY id DESC LIMIT 1),
+                            '[]'
+                        )
+                    ) v
+                   ) AS total_tokens
+            FROM events pe WHERE pe.event_type = 'poll:stop'
+            {since_clause}
+        )
+        SELECT {bucket} AS ts, COALESCE(SUM(total_tokens), 0) AS poll_spend
+        FROM final_poll_votes
+        GROUP BY ts ORDER BY ts ASC
+    """, params).fetchall()
+    for row in poll_rows:
+        ts = row['ts']
+        if ts not in buckets:
+            buckets[ts] = {'ts': ts, 'tts': 0, 'sfx': 0, 'fishtoy': 0, 'poll': 0}
+        buckets[ts]['poll'] = row['poll_spend']
+
+    return {'granularity': granularity, 'data': sorted(buckets.values(), key=lambda x: x['ts'])}
+
+
+def get_chat_chart(range_str='24h'):
+    """Chat message volume over time + top chatters, using extracted display_name column."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc)
+    config = {
+        '1h':  (now - timedelta(hours=1),  '5min'),
+        '6h':  (now - timedelta(hours=6),  'hourly'),
+        '12h': (now - timedelta(hours=12), 'hourly'),
+        '24h': (now - timedelta(hours=24), 'hourly'),
+        '3d':  (now - timedelta(days=3),   'hourly'),
+        '7d':  (now - timedelta(days=7),   'daily'),
+        'all': (None,                       'daily'),
+    }
+    since, granularity = _range_to_since_and_granularity(range_str, config)
+    since_clause = "AND timestamp_local >= ?" if since else ""
+    params = [since] if since else []
+    bucket = _time_bucket_expr(granularity)
+
+    volume_rows = conn.execute(f"""
+        SELECT {bucket} AS ts, COUNT(*) AS count
+        FROM events WHERE event_type = 'chat:message' {since_clause}
+        GROUP BY ts ORDER BY ts ASC
+    """, params).fetchall()
+
+    top_rows = conn.execute(f"""
+        SELECT display_name AS name, COUNT(*) AS count
+        FROM events
+        WHERE event_type = 'chat:message' AND display_name IS NOT NULL
+        {since_clause}
+        GROUP BY display_name ORDER BY count DESC LIMIT 10
+    """, params).fetchall()
+
+    return {
+        'granularity': granularity,
+        'data': [{'ts': r['ts'], 'count': r['count']} for r in volume_rows],
+        'top_chatters': [{'name': r['name'], 'count': r['count']} for r in top_rows],
+    }
+
+
+# ============================================================
 # TTS / SFX ANALYTICS
 # ============================================================
 
