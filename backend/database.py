@@ -156,10 +156,7 @@ def backfill_extracted_columns(batch_size=1000):
             except (json.JSONDecodeError, TypeError):
                 data = {}
             ext = _extract_columns(row["event_type"], data)
-            conn.execute(
-                "UPDATE events SET " + ", ".join(f"{c} = ?" for c in _EXTRACTED_COLS) + " WHERE id = ?",
-                tuple(ext[c] for c in _EXTRACTED_COLS) + (row["id"],)
-            )
+            conn.execute(_UPDATE_SQL, tuple(ext[c] for c in _EXTRACTED_COLS) + (row["id"],))
 
         conn.commit()
         total += len(rows)
@@ -171,6 +168,12 @@ def backfill_extracted_columns(batch_size=1000):
 
 _EXTRACTED_COLS = ("sentiment", "cost", "display_name", "target", "room", "metadata", "item_id", "feature")
 _EXTRACTED_NONE = {k: None for k in _EXTRACTED_COLS}
+_INSERT_SQL = (
+    "INSERT INTO events (event_type, event_id, timestamp_server, timestamp_local, data, "
+    + ", ".join(_EXTRACTED_COLS)
+    + ") VALUES (" + ", ".join("?" for _ in range(5 + len(_EXTRACTED_COLS))) + ")"
+)
+_UPDATE_SQL = "UPDATE events SET " + ", ".join(f"{c} = ?" for c in _EXTRACTED_COLS) + " WHERE id = ?"
 
 
 def _extract_columns(event_type, data):
@@ -215,9 +218,7 @@ def store_event(event_type: str, data):
     ext = _extract_columns(event_type, data)
 
     cursor = conn.execute(
-        "INSERT INTO events (event_type, event_id, timestamp_server, timestamp_local, data, "
-        + ", ".join(_EXTRACTED_COLS)
-        + ") VALUES (?, ?, ?, ?, ?, " + ", ".join("?" for _ in _EXTRACTED_COLS) + ")",
+        _INSERT_SQL,
         (event_type, str(event_id) if event_id else None, timestamp_server, now, data_json,
          *(ext[c] for c in _EXTRACTED_COLS)),
     )
