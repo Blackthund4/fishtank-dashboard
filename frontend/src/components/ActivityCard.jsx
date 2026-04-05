@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { Volume2, Music, Zap, Info, Star } from 'lucide-react'
 import { formatTime } from '../utils/formatTime'
 
@@ -10,7 +11,7 @@ const EVENT_CONFIG = {
   'super-chat:new': { icon: Star, color: 'text-amber-400', bg: 'bg-amber-500/10', label: 'SC' },
 }
 
-export default function ActivityCard({ data, eventType, roomMap = {} }) {
+export default memo(function ActivityCard({ data, eventType, roomMap = {} }) {
   if (!data || typeof data !== 'object') return null
 
   const config = EVENT_CONFIG[eventType] || {
@@ -65,4 +66,4 @@ export default function ActivityCard({ data, eventType, roomMap = {} }) {
       </div>
     </div>
   )
-}
+})

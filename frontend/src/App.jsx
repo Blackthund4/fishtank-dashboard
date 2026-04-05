@@ -628,6 +628,10 @@ export default function App() {
       </div>
     )
   }, [pollVotes])
+  const handleTargetClick = useCallback((target) => {
+    setFilterTarget(target)
+    setActivityFilter('fishtoys')
+  }, [])
   const filteredFishtoyStatus = useMemo(() =>
     [...fishtoyStatus]
       .filter(item => fishtoyFilter === 'all' || (fishtoyFilter === 'enabled' ? item.enabled : !item.enabled))
@@ -886,10 +890,7 @@ export default function App() {
                         data={item.data}
                         eventType={item.event}
                         itemCatalog={itemCatalog}
-                        onTargetClick={(target) => {
-                          setFilterTarget(target)
-                          setActivityFilter('fishtoys')
-                        }}
+                        onTargetClick={handleTargetClick}
                       />
                     ) : (
                       <ActivityCard data={item.data} eventType={item.event} roomMap={roomMap} />

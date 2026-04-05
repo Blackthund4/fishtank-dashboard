@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import { Fish, ArrowRight, FileText, ChevronDown } from 'lucide-react'
 import { formatTime } from '../utils/formatTime'
 
-export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTargetClick }) {
+export default memo(function FishtoyCard({ data, eventType, itemCatalog = {}, onTargetClick }) {
   if (!data || typeof data !== 'object') return null
   const [expanded, setExpanded] = useState(false)
 
@@ -95,7 +95,7 @@ export default function FishtoyCard({ data, eventType, itemCatalog = {}, onTarge
       )}
     </div>
   )
-}
+})
 
 function Detail({ label, value, color = 'text-tank-bright', mono = false }) {
   if (!value) return null

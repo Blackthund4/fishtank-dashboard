@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { Search, MessageSquare, Volume2, Music, Fish, User } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
 
@@ -61,7 +61,10 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
   ]
 
   // Build unified timeline
-  const timeline = results ? buildTimeline(results, activeFilter, itemCatalog, roomMap) : []
+  const timeline = useMemo(() =>
+    results ? buildTimeline(results, activeFilter, itemCatalog, roomMap) : [],
+    [results, activeFilter, itemCatalog, roomMap]
+  )
 
   return (
     <div className="flex-1 flex flex-col p-3 min-h-0">

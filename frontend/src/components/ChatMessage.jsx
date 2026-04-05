@@ -1,6 +1,7 @@
+import { memo } from 'react'
 import { formatTime } from '../utils/formatTime'
 
-export default function ChatMessage({ data }) {
+export default memo(function ChatMessage({ data }) {
   if (!data || typeof data !== 'object') return null
 
   const user = data.user || {}
@@ -32,4 +33,4 @@ export default function ChatMessage({ data }) {
       </div>
     </div>
   )
-}
+})
