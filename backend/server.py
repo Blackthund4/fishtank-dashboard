@@ -138,10 +138,12 @@ _rate_limit_lock = Lock()
 _rate_limits: dict = defaultdict(deque)  # ip -> deque of timestamps
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 120    # max requests per window per IP
+_rate_limit_check_count = 0  # amortized prune counter
 
 
 def _check_rate_limit(ip: str) -> bool:
     """Return True if the request should be rejected."""
+    global _rate_limit_check_count
     now = _time.time()
     cutoff = now - RATE_LIMIT_WINDOW
     with _rate_limit_lock:
@@ -152,6 +154,7 @@ def _check_rate_limit(ip: str) -> bool:
         if len(dq) >= RATE_LIMIT_MAX:
             return True
         dq.append(now)
+        _rate_limit_check_count += 1
         return False
 
 
@@ -333,6 +336,7 @@ def reconnect_loop():
 
 _profile_cache = {}  # user_id -> (timestamp, result)
 _PROFILE_CACHE_TTL = 3600  # 1 hour
+_PROFILE_CACHE_MAX = 500   # max cached profiles (~100 KB); evict oldest when full
 
 def _fetch_user_profile(user_id):
     """Fetch displayName and color for a user from fishtank API (cached 1h)."""
@@ -353,6 +357,11 @@ def _fetch_user_profile(user_id):
                 result["displayName"] = dn
             if profile.get("color"):
                 result["color"] = profile["color"]
+            # Evict oldest entries if cache is full
+            if len(_profile_cache) >= _PROFILE_CACHE_MAX:
+                oldest = sorted(_profile_cache, key=lambda k: _profile_cache[k][0])
+                for k in oldest[:len(_profile_cache) - _PROFILE_CACHE_MAX + 1]:
+                    del _profile_cache[k]
             _profile_cache[user_id] = (now, result)
             return result
     except Exception as e:
@@ -1043,8 +1052,9 @@ async def rate_limit_middleware(request: Request, call_next):
             content={"detail": "Too many requests. Try again later."},
         )
 
-    # Periodic cleanup
-    if len(_rate_limits) > 1000:
+    # Amortized cleanup every 100 requests or when IP count exceeds 200
+    if _rate_limit_check_count >= 100 or len(_rate_limits) > 200:
+        _rate_limit_check_count = 0
         _prune_rate_limits()
 
     return await call_next(request)
