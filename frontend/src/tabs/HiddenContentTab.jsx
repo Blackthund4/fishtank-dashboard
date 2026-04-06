@@ -107,6 +107,7 @@ export default function HiddenContentTab({ itemCatalog }) {
               data={items}
               endReached={loadMore}
               overscan={100}
+              defaultItemHeight={120}
               itemContent={(index, e) => {
                 const d = e.data || {}
                 const iid = String(d.itemId || '')
