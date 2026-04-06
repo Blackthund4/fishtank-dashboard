@@ -1363,7 +1363,7 @@ def api_polls(limit: int = Query(50, le=500)):
 @app.get("/api/notifications")
 def api_notifications(limit: int = Query(100, le=500)):
     """Get director messages and announcements."""
-    return _cached_query("notifications", database.get_notifications, limit)
+    return _cached_query(f"notifications:{limit}", database.get_notifications, limit)
 
 
 @app.get("/api/price-changes")
