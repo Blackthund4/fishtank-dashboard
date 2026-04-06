@@ -5,7 +5,7 @@ import { formatDateTime } from '../utils/formatTime'
 function getSinceISO(period) {
   if (!period) return null
   const now = new Date()
-  const minutes = period === '1m' ? 1 : period === '1h' ? 60 : period === '6h' ? 360 : period === '24h' ? 1440 : period === '1d' ? 1440 : period === '3d' ? 4320 : period === '7d' ? 10080 : 0
+  const minutes = period === '1m' ? 1 : period === '1h' ? 60 : period === '3h' ? 180 : period === '6h' ? 360 : period === '12h' ? 720 : period === '24h' ? 1440 : period === '1d' ? 1440 : period === '3d' ? 4320 : period === '7d' ? 10080 : 0
   if (!minutes) return null
   return new Date(now.getTime() - minutes * 60000).toISOString()
 }
@@ -14,6 +14,8 @@ const TIME_OPTIONS = [
   { id: '7d', label: '7d' },
   { id: '3d', label: '3d' },
   { id: '24h', label: '24h' },
+  { id: '12h', label: '12hr' },
+  { id: '3h', label: '3hr' },
   { id: '1h', label: '1hr' },
 ]
 
@@ -36,6 +38,14 @@ function getMoodLabel(score) {
   if (score >= -0.08) return { label: 'Neutral', bgColor: 'bg-gray-500/60',  textColor: 'text-gray-100' }
   if (score >= -0.3)  return { label: 'Grumpy',  bgColor: 'bg-orange-500',   textColor: 'text-white' }
   return                { label: 'Hostile', bgColor: 'bg-red-600',      textColor: 'text-white' }
+}
+
+function getChatMoodLabel(score) {
+  if (score >= 0.15)   return { label: 'Excited', bgColor: 'bg-green-500',    textColor: 'text-white' }
+  if (score >= 0.03)   return { label: 'Happy',   bgColor: 'bg-lime-400',     textColor: 'text-gray-900' }
+  if (score >= -0.03)  return { label: 'Neutral', bgColor: 'bg-gray-500/60',  textColor: 'text-gray-100' }
+  if (score >= -0.15)  return { label: 'Grumpy',  bgColor: 'bg-orange-500',   textColor: 'text-white' }
+  return                 { label: 'Hostile', bgColor: 'bg-red-600',      textColor: 'text-white' }
 }
 
 function TimeFilter({ value, onChange }) {
@@ -174,7 +184,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
 
   const chatMoodBadge = useMemo(() => {
     if (!chatSentiment) return null
-    const { label, bgColor, textColor } = getMoodLabel(chatSentiment.overall.avg)
+    const { label, bgColor, textColor } = getChatMoodLabel(chatSentiment.overall.avg)
     return <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded ${bgColor} ${textColor}`}>{label}</span>
   }, [chatSentiment?.overall?.avg])
 

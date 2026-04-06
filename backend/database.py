@@ -1628,7 +1628,16 @@ def _mood_label(avg):
     return "Hostile"
 
 
-def _sentiment_base(conn, type_clause, since=None):
+def _chat_mood_label(avg):
+    """Map compound score to a mood label (tighter ranges for chat)."""
+    if avg >= 0.15: return "Excited"
+    if avg >= 0.03: return "Happy"
+    if avg >= -0.03: return "Neutral"
+    if avg >= -0.15: return "Grumpy"
+    return "Hostile"
+
+
+def _sentiment_base(conn, type_clause, since=None, label_fn=None):
     """Shared sentiment query logic for a given event type filter.
     Single query computes both hourly breakdown and overall stats."""
     since_clause = ""
@@ -1677,14 +1686,14 @@ def _sentiment_base(conn, type_clause, since=None):
     return {
         "hourly": [{"hour": r["hour"], "ts": r["ts"], "avg_sentiment": round(r["avg_sentiment"], 4), "message_count": r["message_count"]} for r in rows],
         "overall": overall,
-        "label": _mood_label(avg),
+        "label": (label_fn or _mood_label)(avg),
     }
 
 
 def get_chat_sentiment(since=None):
     """Sentiment analytics for chat messages."""
     conn = _get_conn()
-    return _sentiment_base(conn, "event_type = 'chat:message'", since)
+    return _sentiment_base(conn, "event_type = 'chat:message'", since, label_fn=_chat_mood_label)
 
 
 def get_tts_sentiment(since=None):
