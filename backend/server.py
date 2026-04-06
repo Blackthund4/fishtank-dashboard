@@ -488,6 +488,51 @@ def _score_sentiment(text):
     return _sentiment_analyzer.polarity_scores(text)["compound"]
 
 
+# In-memory poll vote accumulator: always holds the full list of {value, score} dicts
+# for the current poll. Initialized from poll:start scores, updated by poll:vote dicts.
+_poll_vote_state = []
+
+
+def _seed_poll_vote_state():
+    """Seed _poll_vote_state from DB on startup so mid-poll restarts don't lose votes."""
+    global _poll_vote_state
+    state = database.get_latest_poll_state()
+    if state and state.get("active") and isinstance(state.get("votes"), list):
+        _poll_vote_state = state["votes"]
+        print(f"[OK] Seeded poll vote state: {len(_poll_vote_state)} options")
+    elif state and state.get("active") and state.get("answers"):
+        # No votes yet, seed from answer list with zero scores
+        _poll_vote_state = [{"value": a, "score": 0} for a in state["answers"]]
+        print(f"[OK] Seeded poll vote state from answers: {len(_poll_vote_state)} options")
+
+
+def _normalize_poll_vote(data):
+    """Normalize poll:vote data to always be a full list of all options.
+
+    Old API format: list of all options (pass through, update tracked state).
+    New API format: single dict per option (merge into tracked state, return full list).
+    The list unwrap code would otherwise split list payloads into individual dicts,
+    so this runs first to keep poll:vote data as a complete snapshot.
+    """
+    global _poll_vote_state
+    if isinstance(data, list):
+        # Old format or list-wrapped: full snapshot — adopt as current state
+        _poll_vote_state = [v for v in data if isinstance(v, dict) and "value" in v]
+        return list(_poll_vote_state)
+    if isinstance(data, dict) and "value" in data:
+        # New format: single option update — merge into tracked state
+        merged = False
+        for i, v in enumerate(_poll_vote_state):
+            if v.get("value") == data["value"]:
+                _poll_vote_state[i] = data
+                merged = True
+                break
+        if not merged:
+            _poll_vote_state.append(data)
+        return list(_poll_vote_state)
+    return data
+
+
 def make_event_handler(evt):
     """Create an event handler for a specific socket event type."""
     def handler(data):
@@ -509,9 +554,20 @@ def make_event_handler(evt):
                 )
             return
 
+        # Normalize poll:vote to full list BEFORE the list unwrap splits it
+        if evt == "poll:vote":
+            data = _normalize_poll_vote(data)
+
+        # Initialize poll vote state from poll:start scores
+        if evt == "poll:start" and isinstance(data, dict):
+            scores = (data.get("poll") or data).get("scores", [])
+            global _poll_vote_state
+            _poll_vote_state = [v for v in scores if isinstance(v, dict) and "value" in v]
+
         # Unwrap list-wrapped payloads (fishtank sometimes sends [{...}, ...] instead of {...})
         # Multi-element lists are batched messages — process each individually then return.
-        if isinstance(data, list):
+        # poll:vote is already normalized above so its lists are intentional snapshots.
+        if isinstance(data, list) and evt != "poll:vote":
             items = [d for d in data if isinstance(d, dict)]
             if len(items) == 1:
                 data = items[0]
@@ -987,6 +1043,7 @@ async def lifespan(app: FastAPI):
             print(f"[OK] Backfilled extracted columns for {backfilled} events")
         database.backfill_poll_vote_costs()
         _backfill_empty_sc_names()
+        _seed_poll_vote_state()
     Thread(target=_run_backfill, daemon=True).start()
 
     # Load item catalog and contestants from fishtank API

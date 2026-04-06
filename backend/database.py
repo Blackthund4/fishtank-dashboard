@@ -1332,7 +1332,7 @@ def get_polls(limit=50):
         if row["event_type"] == "poll:stop":
             if pid:
                 stop_pids.add(pid)
-            # Attach final vote tallies from the last poll:vote before this poll:stop
+            # Attach final vote tallies from poll:vote events before this poll:stop
             vote_row = conn.execute(
                 "SELECT data FROM events WHERE event_type = 'poll:vote' AND id < ? ORDER BY id DESC LIMIT 1",
                 (row["id"],),
@@ -1341,6 +1341,30 @@ def get_polls(limit=50):
                 vote_data = json.loads(vote_row["data"])
                 if isinstance(vote_data, list):
                     evt["data"]["votes"] = vote_data
+                elif isinstance(vote_data, dict) and "value" in vote_data:
+                    # New format: individual vote events — collect latest per option
+                    answers = (data.get("poll") or data).get("answers", [])
+                    # Find the poll:start preceding this stop
+                    start_row = conn.execute(
+                        "SELECT id FROM events WHERE event_type = 'poll:start' AND id < ? ORDER BY id DESC LIMIT 1",
+                        (row["id"],),
+                    ).fetchone()
+                    start_id = start_row["id"] if start_row else 0
+                    vote_rows = conn.execute(
+                        "SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ? AND id < ? ORDER BY id DESC",
+                        (start_id, row["id"]),
+                    ).fetchall()
+                    latest_by_option = {}
+                    for vr in vote_rows:
+                        vd = json.loads(vr["data"])
+                        if isinstance(vd, dict) and "value" in vd:
+                            opt = vd["value"]
+                            if opt not in latest_by_option:
+                                latest_by_option[opt] = vd
+                    if latest_by_option:
+                        evt["data"]["votes"] = [
+                            latest_by_option.get(a, {"value": a, "score": 0}) for a in answers
+                        ]
             results.append(evt)
         else:
             # poll:start — only include if no matching poll:stop exists
@@ -1510,7 +1534,7 @@ def get_latest_poll_state():
     start_data = json.loads(start["data"])
     poll_info = start_data.get("poll", start_data)
 
-    # Fetch stop + last vote in one query
+    # Fetch stop event and vote events after this poll:start
     rows = conn.execute("""
         SELECT event_type, timestamp_local, data FROM events
         WHERE event_type IN ('poll:stop', 'poll:vote') AND id > ?
@@ -1518,14 +1542,12 @@ def get_latest_poll_state():
     """, (start["id"],)).fetchall()
 
     stop = None
-    last_vote = None
+    vote_rows = []
     for row in rows:
         if row["event_type"] == "poll:stop" and not stop:
             stop = row
-        elif row["event_type"] == "poll:vote" and not last_vote:
-            last_vote = row
-        if stop and last_vote:
-            break
+        elif row["event_type"] == "poll:vote":
+            vote_rows.append(row)
 
     result = {
         "question": poll_info.get("question"),
@@ -1535,8 +1557,27 @@ def get_latest_poll_state():
         "active": stop is None,
     }
 
-    if last_vote:
-        result["votes"] = json.loads(last_vote["data"])
+    # Reconstruct votes: handle both old format (list of all options) and
+    # new format (individual dict per option, one event per changed option)
+    if vote_rows:
+        last_data = json.loads(vote_rows[0]["data"])
+        if isinstance(last_data, list):
+            # Old format: single event with all options
+            result["votes"] = last_data
+        elif isinstance(last_data, dict) and "value" in last_data:
+            # New format: individual vote events per option — collect latest per option
+            latest_by_option = {}
+            for vr in vote_rows:  # already DESC by id
+                vd = json.loads(vr["data"])
+                if isinstance(vd, dict) and "value" in vd:
+                    opt = vd["value"]
+                    if opt not in latest_by_option:
+                        latest_by_option[opt] = vd
+            # Preserve answer order from poll:start
+            answers = poll_info.get("answers", [])
+            result["votes"] = [
+                latest_by_option.get(a, {"value": a, "score": 0}) for a in answers
+            ]
 
     if stop:
         stop_data = json.loads(stop["data"])

@@ -257,7 +257,7 @@ export default function App() {
             winner: poll.winner || null,
             startedAt: poll.started_at ? Date.parse(poll.started_at) : null,
           })
-          if (poll.votes) {
+          if (Array.isArray(poll.votes)) {
             setPollVotes(poll.votes)
           }
         }
@@ -686,7 +686,7 @@ export default function App() {
   }, [systemEvents, systemFilter])
   const POLL_COLORS = ['#c084fc', '#a78bfa', '#818cf8', '#7dd3fc', '#67e8f9', '#6ee7b7', '#fcd34d', '#fca5a5']
   const pollVoteBars = useMemo(() => {
-    if (pollVotes.length === 0) return null
+    if (!Array.isArray(pollVotes) || pollVotes.length === 0) return null
     const total = pollVotes.reduce((s, v) => s + (v.score || 0), 0) || 1
     const sorted = [...pollVotes].sort((a, b) => (b.score || 0) - (a.score || 0))
     const maxScore = sorted[0]?.score || 0
