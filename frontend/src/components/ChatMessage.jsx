@@ -14,17 +14,17 @@ export default memo(function ChatMessage({ data }) {
   const nameColor = user.customUsernameColor || '#c8cdd4'
 
   const badges = []
-  if (meta.isAdmin) badges.push({ label: 'ADMIN', color: 'bg-red-500/20 text-red-400' })
-  if (meta.isMod) badges.push({ label: 'MOD', color: 'bg-purple-500/20 text-purple-400' })
-  if (meta.isFish) badges.push({ label: 'FISH', color: 'bg-tank-accent/20 text-tank-accent' })
-  if (meta.isGrandMarshall) badges.push({ label: 'GM', color: 'bg-yellow-500/20 text-yellow-400' })
-  if (meta.isEpic) badges.push({ label: 'EPIC', color: 'bg-orange-500/20 text-orange-400' })
+  if (meta.isAdmin) badges.push({ label: 'ADMIN', color: 'bg-green-500/20 text-green-400' })
+  if (meta.isMod) badges.push({ label: 'MOD', color: 'bg-sky-500/20 text-sky-400' })
+  if (meta.isFish) badges.push({ label: 'FISH', color: 'bg-pink-500/20 text-pink-400' })
+  if (meta.isGrandMarshall) badges.push({ label: 'GM', color: 'bg-red-500/20 text-red-400' })
+  if (meta.isEpic) badges.push({ label: 'EPIC', color: 'bg-amber-500/20 text-amber-400' })
 
   const rowColor = meta.isAdmin ? 'bg-green-500/10 border-l-2 border-green-500/40'
-    : meta.isFish ? 'bg-sky-500/10 border-l-2 border-sky-500/40'
-    : meta.isEpic ? 'bg-amber-400/10 border-l-2 border-amber-400/40'
-    : meta.isMod ? 'bg-purple-500/10 border-l-2 border-purple-500/40'
-    : meta.isGrandMarshall ? 'bg-yellow-500/10 border-l-2 border-yellow-500/40'
+    : meta.isGrandMarshall ? 'bg-red-500/10 border-l-2 border-red-500/40'
+    : meta.isEpic ? 'bg-amber-500/10 border-l-2 border-amber-500/40'
+    : meta.isMod ? 'bg-sky-500/10 border-l-2 border-sky-500/40'
+    : meta.isFish ? 'bg-pink-500/10 border-l-2 border-pink-500/40'
     : ''
 
   return (

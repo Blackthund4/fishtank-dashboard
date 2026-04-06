@@ -20,12 +20,12 @@ const FISHTOY_TYPES = new Set(['fishtoy:used'])
 const CHAT_TYPES = new Set(['chat:message'])
 const CHAT_FILTER_KEYS = { admin: 'isAdmin', mod: 'isMod', fish: 'isFish', gm: 'isGrandMarshall', epic: 'isEpic' }
 const CHAT_FILTERS = [
-  { id: 'all', label: 'All', color: 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40' },
-  { id: 'admin', label: 'Admin', color: 'bg-red-500/20 text-red-400 border border-red-500/40' },
-  { id: 'mod', label: 'Mod', color: 'bg-purple-500/20 text-purple-400 border border-purple-500/40' },
-  { id: 'fish', label: 'Fish', color: 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40' },
-  { id: 'gm', label: 'GM', color: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40' },
-  { id: 'epic', label: 'Epic', color: 'bg-orange-500/20 text-orange-400 border border-orange-500/40' },
+  { id: 'all', label: 'All', color: 'bg-gray-500/20 text-gray-400 border border-gray-500/40' },
+  { id: 'admin', label: 'Admin', color: 'bg-green-500/20 text-green-400 border border-green-500/40' },
+  { id: 'mod', label: 'Mod', color: 'bg-sky-500/20 text-sky-400 border border-sky-500/40' },
+  { id: 'fish', label: 'Fish', color: 'bg-pink-500/20 text-pink-400 border border-pink-500/40' },
+  { id: 'gm', label: 'GM', color: 'bg-red-500/20 text-red-400 border border-red-500/40' },
+  { id: 'epic', label: 'Epic', color: 'bg-amber-500/20 text-amber-400 border border-amber-500/40' },
 ]
 const ACTIVITY_TYPES = new Set([
   'tts:update', 'sfx:update',
