@@ -512,10 +512,13 @@ export default function App() {
   // Fetch role-filtered chats from server when a role filter is active
   useEffect(() => {
     if (chatFilter === 'all') { setRoleChats(null); return }
-    fetch(`/api/events?type=chat:message&limit=500&role=${chatFilter}`)
+    const ac = new AbortController()
+    setRoleChats([])  // clear immediately so stale results don't linger
+    fetch(`/api/events?type=chat:message&limit=500&role=${chatFilter}`, { signal: ac.signal })
       .then(okJson)
       .then(events => setRoleChats(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))))
       .catch(() => {})
+    return () => ac.abort()
   }, [chatFilter])
 
   // Chat array is already newest-first (server ORDER BY id DESC + WS prepend)

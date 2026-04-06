@@ -329,17 +329,20 @@ def get_events(event_type=None, limit=200, since_id=None, before_id=None,
         params.extend([f"%{search}%", f"%{search}%"])
 
     if role:
+        # Uses the extracted metadata column (small JSON string) instead of
+        # json_extract on the full data blob — avoids parsing ~500 byte payloads
+        # per row. LIKE on a short string is faster than json_extract.
         role_map = {
-            "admin": "$.metadata.isAdmin",
-            "mod": "$.metadata.isMod",
-            "fish": "$.metadata.isFish",
-            "gm": "$.metadata.isGrandMarshall",
-            "epic": "$.metadata.isEpic",
+            "admin": '"isAdmin": true',
+            "mod": '"isMod": true',
+            "fish": '"isFish": true',
+            "gm": '"isGrandMarshall": true',
+            "epic": '"isEpic": true',
         }
-        json_path = role_map.get(role)
-        if json_path:
-            conditions.append(f"json_extract(data, ?) = 1")
-            params.append(json_path)
+        pattern = role_map.get(role)
+        if pattern:
+            conditions.append("metadata LIKE ?")
+            params.append(f"%{pattern}%")
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
