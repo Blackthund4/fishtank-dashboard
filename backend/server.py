@@ -1100,6 +1100,13 @@ def api_events(
     around_ts: str = Query(None, description="Jump to events around this ISO timestamp"),
     role: str = Query(None, description="Filter chat by role: admin, mod, fish, gm, epic"),
 ):
+    # Cache role-filtered chat queries (initial load only, not paginated)
+    if role and not since_id and not before_id and not search and not around_ts:
+        return _cached_query(
+            f"events-role:{type}:{role}:{limit}",
+            database.get_events,
+            type, limit, None, None, target, item_id, None, None, role,
+        )
     return database.get_events(event_type=type, limit=limit, since_id=since_id, before_id=before_id,
                                target=target, item_id=item_id, search=search, around_ts=around_ts, role=role)
 
