@@ -1093,9 +1093,10 @@ def api_events(
     target: str = Query(None, description="Filter by contestant target name"),
     item_id: str = Query(None, description="Filter by item ID"),
     search: str = Query(None, description="Search metadata and sender name"),
+    around_ts: str = Query(None, description="Jump to events around this ISO timestamp"),
 ):
     return database.get_events(event_type=type, limit=limit, since_id=since_id, before_id=before_id,
-                               target=target, item_id=item_id, search=search)
+                               target=target, item_id=item_id, search=search, around_ts=around_ts)
 
 
 @app.get("/api/stats")

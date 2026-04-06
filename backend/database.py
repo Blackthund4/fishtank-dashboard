@@ -279,7 +279,7 @@ def store_event(event_type: str, data):
 
 
 def get_events(event_type=None, limit=200, since_id=None, before_id=None,
-               target=None, item_id=None, search=None):
+               target=None, item_id=None, search=None, around_ts=None):
     conn = _get_conn()
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
     conditions = []
@@ -290,6 +290,23 @@ def get_events(event_type=None, limit=200, since_id=None, before_id=None,
         placeholders = ",".join("?" for _ in types)
         conditions.append(f"event_type IN ({placeholders})")
         params.extend(types)
+
+    # Anchor to a point in time (find nearest event id for the given timestamp)
+    if around_ts is not None and before_id is None and since_id is None:
+        anchor_query = "SELECT id FROM events"
+        anchor_conditions = []
+        anchor_params = []
+        if event_type:
+            anchor_conditions.append(f"event_type IN ({placeholders})")
+            anchor_params.extend(types)
+        anchor_conditions.append("timestamp_local <= ?")
+        anchor_params.append(around_ts)
+        anchor_query += " WHERE " + " AND ".join(anchor_conditions)
+        anchor_query += " ORDER BY timestamp_local DESC LIMIT 1"
+        anchor_row = conn.execute(anchor_query, anchor_params).fetchone()
+        if anchor_row:
+            conditions.append("id <= ?")
+            params.append(anchor_row["id"])
 
     if since_id is not None:
         conditions.append("id > ?")

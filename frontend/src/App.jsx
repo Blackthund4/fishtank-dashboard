@@ -181,9 +181,12 @@ export default function App() {
   const [chatRoom, setChatRoom] = useState('')
   const [systemFilter, setSystemFilter] = useState('all')
   const [directorTimeRange, setDirectorTimeRange] = useState('all')
-  const [activityTimeRange, setActivityTimeRange] = useState('all')
+  const [activityAnchor, setActivityAnchor] = useState(null)        // null = live, or ISO string
+  const [activityAnchorLabel, setActivityAnchorLabel] = useState('now')
   const [activityHasMore, setActivityHasMore] = useState(true)
+  const [activityHasNewer, setActivityHasNewer] = useState(false)
   const [activityLoading, setActivityLoading] = useState(false)
+  const activityAnchorRef = useRef(null)
   const directorRef = useRef(null)
   // Load catalog + historical data on mount
   useEffect(() => {
@@ -268,6 +271,9 @@ export default function App() {
       .then(r => r.json()).then(setStoxSparklines).catch(() => {})
   }, [stoxRange])
 
+  // Sync anchor ref for WS listener (avoids re-registering listener on anchor change)
+  useEffect(() => { activityAnchorRef.current = activityAnchor }, [activityAnchor])
+
   // Live events
   useEffect(() => {
     const remove = addListener((msg) => {
@@ -291,7 +297,7 @@ export default function App() {
       const item = { event: msg.event_type, data: msg.data, dbId: msg.db_id }
 
       if (FISHTOY_TYPES.has(msg.event_type)) {
-        setActivity(prev => [item, ...prev])
+        if (!activityAnchorRef.current) setActivity(prev => [item, ...prev])
         const cost = msg.data?.cost || 0
         setStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
         setSessionStats(s => ({ ...s, fishtoys: s.fishtoys + 1, total_spend: s.total_spend + cost }))
@@ -314,7 +320,7 @@ export default function App() {
         setStats(s => ({ ...s, chats: s.chats + 1 }))
         setSessionStats(s => ({ ...s, chats: s.chats + 1 }))
       } else if (ACTIVITY_TYPES.has(msg.event_type)) {
-        setActivity(prev => [item, ...prev])
+        if (!activityAnchorRef.current) setActivity(prev => [item, ...prev])
         const cost = msg.data?.cost || 0
         if (msg.event_type === 'tts:update') {
           setStats(s => ({ ...s, tts: s.tts + 1, total_spend: s.total_spend + cost }))
@@ -328,7 +334,7 @@ export default function App() {
         setSessionStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
         setStats(s => ({ ...s, total_spend: s.total_spend + cost, superchat_tokens: s.superchat_tokens + cost }))
         // Add to activity feed
-        setActivity(prev => [item, ...prev])
+        if (!activityAnchorRef.current) setActivity(prev => [item, ...prev])
         // Add to pinned superchats (dedup by id)
         const scId = String(msg.data?.id || msg.db_id)
         setActiveSuperchats(prev => {
@@ -473,12 +479,15 @@ export default function App() {
     if (filterTarget) p.set('target', filterTarget)
     if (filterItemId) p.set('item_id', filterItemId)
     if (debouncedSearch) p.set('search', debouncedSearch)
+    if (activityAnchor) p.set('around_ts', activityAnchor)
     return p.toString()
-  }, [activityFilter, filterTarget, filterItemId, debouncedSearch])
+  }, [activityFilter, filterTarget, filterItemId, debouncedSearch, activityAnchor])
 
   // Re-fetch unified feed when filters change
   useEffect(() => {
     setActivityHasMore(true)
+    setActivityHasNewer(!!activityAnchor)
+    setFirstActivityIndex(10000)
     fetch(`/api/events?${feedApiParams}`)
       .then(r => r.json())
       .then(events => {
@@ -495,8 +504,6 @@ export default function App() {
     return chats.filter(c => c.data?.metadata?.[key])
   }, [chats, chatFilter])
   const sortedActivity = useMemo(() => {
-    const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 }[activityTimeRange]
-    const cutoff = hours ? Date.now() - hours * 3600000 : 0
     const q = searchText.trim().toLowerCase()
 
     const filtered = activity.filter(a => {
@@ -505,8 +512,6 @@ export default function App() {
       if (activityFilter === 'tts' && a.event !== 'tts:update') return false
       if (activityFilter === 'sfx' && a.event !== 'sfx:update') return false
       if (activityFilter === 'sc' && a.event !== 'super-chat:new') return false
-      // Time range filter
-      if (cutoff && getEventTimestamp(a) < cutoff) return false
       // Fishtoy-specific filters
       if (a.event === 'fishtoy:used') {
         if (filterCategory) {
@@ -515,17 +520,21 @@ export default function App() {
         }
         if (filterTarget && a.data?.target !== filterTarget) return false
         if (filterItemId && String(a.data?.itemId) !== String(filterItemId)) return false
-        if (q) {
-          const meta = a.data?.metadata
-          const name = a.data?.displayName
-          if (!(meta && String(meta).toLowerCase().includes(q)) &&
-              !(name && name.toLowerCase().includes(q))) return false
-        }
+      }
+      // Search filter (applies to all event types)
+      if (q) {
+        const d = a.data || {}
+        const name = d.displayName || ''
+        const meta = d.metadata ? String(d.metadata) : ''
+        const message = d.message || ''
+        if (!name.toLowerCase().includes(q) &&
+            !meta.toLowerCase().includes(q) &&
+            !message.toLowerCase().includes(q)) return false
       }
       return true
     })
     return filtered  // Already newest-first (server ORDER BY id DESC + WS prepend)
-  }, [activity, activityFilter, activityTimeRange, filterCategory, filterTarget, filterItemId, searchText, itemCatalog])
+  }, [activity, activityFilter, filterCategory, filterTarget, filterItemId, searchText, itemCatalog])
 
   const loadMoreActivity = useCallback(() => {
     if (activityLoading || !activityHasMore) return
@@ -553,6 +562,39 @@ export default function App() {
       .catch(() => {})
       .finally(() => setActivityLoading(false))
   }, [activity, activityLoading, activityHasMore, feedApiParams])
+
+  // Load newer events (scroll up in historical mode)
+  const [firstActivityIndex, setFirstActivityIndex] = useState(10000)
+  const loadNewerActivity = useCallback(() => {
+    if (activityLoading || !activityHasNewer) return
+    const maxId = activity.reduce((max, a) => {
+      const id = a.dbId
+      return id && (max === null || id > max) ? id : max
+    }, null)
+    if (maxId === null) return
+    setActivityLoading(true)
+    // Strip around_ts from params for newer pagination (we want events after maxId)
+    const p = new URLSearchParams(feedApiParams)
+    p.delete('around_ts')
+    fetch(`/api/events?${p.toString()}&since_id=${maxId}`)
+      .then(r => r.json())
+      .then(events => {
+        if (events.length === 0) {
+          setActivityHasNewer(false)
+        } else {
+          const newItems = events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))
+          setActivity(prev => {
+            const existingIds = new Set(prev.map(a => a.dbId).filter(Boolean))
+            const unique = newItems.filter(a => !existingIds.has(a.dbId))
+            setFirstActivityIndex(i => i - unique.length)
+            return [...unique, ...prev]
+          })
+          if (events.length < 500) setActivityHasNewer(false)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setActivityLoading(false))
+  }, [activity, activityLoading, activityHasNewer, feedApiParams])
 
   // Unique item types seen in fishtoys for filter dropdown
   const seenItemTypes = useMemo(() => {
@@ -598,6 +640,8 @@ export default function App() {
     setFilterItemId(null)
     setSearchText('')
     setActivityFilter('all')
+    setActivityAnchor(null)
+    setActivityAnchorLabel('now')
   }
 
   // Memoized computed values for render
@@ -807,43 +851,55 @@ export default function App() {
                   { id: 'tts', label: 'TTS' },
                   { id: 'sfx', label: 'SFX' },
                   { id: 'sc', label: 'SC' },
-                ].map(f => {
-                  const disabled = hasActiveFilters && f.id !== 'all' && f.id !== 'fishtoys'
-                  return (
+                ].map(f => (
                   <button
                     key={f.id}
-                    onClick={() => !disabled && setActivityFilter(f.id)}
+                    onClick={() => {
+                      if (filterTarget && f.id !== 'all' && f.id !== 'fishtoys') {
+                        setFilterTarget(null)
+                        setFilterCategory(null)
+                        setFilterItemId(null)
+                        setSearchText('')
+                      }
+                      setActivityFilter(f.id)
+                    }}
                     className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-                      disabled
-                        ? 'text-tank-muted/30 cursor-not-allowed'
-                        : activityFilter === f.id
-                          ? f.id === 'sc'
-                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                            : f.id === 'fishtoys'
-                              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
-                              : 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
-                          : 'text-tank-muted hover:text-tank-text'
+                      activityFilter === f.id
+                        ? f.id === 'sc'
+                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                          : f.id === 'fishtoys'
+                            ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
+                            : 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
+                        : 'text-tank-muted hover:text-tank-text'
                     }`}
                   >
                     {f.label}
                   </button>
-                  )
-                })}
+                ))}
               </div>
               <div className="w-px h-3 bg-tank-border" />
               <div className="flex gap-0.5">
                 {[
-                  { id: '1h', label: '1h' },
-                  { id: '6h', label: '6h' },
-                  { id: '24h', label: '24h' },
-                  { id: '7d', label: '7d' },
-                  { id: 'all', label: '\u221E' },
+                  { id: '30d', label: '30d', days: 30 },
+                  { id: '10d', label: '10d', days: 10 },
+                  { id: '7d', label: '7d', days: 7 },
+                  { id: '3d', label: '3d', days: 3 },
+                  { id: '1d', label: '1d', days: 1 },
+                  { id: 'now', label: 'Now', days: null },
                 ].map(t => (
                   <button
                     key={t.id}
-                    onClick={() => setActivityTimeRange(t.id)}
+                    onClick={() => {
+                      if (t.days === null) {
+                        setActivityAnchor(null)
+                        setActivityAnchorLabel('now')
+                      } else {
+                        setActivityAnchor(new Date(Date.now() - t.days * 86400000).toISOString())
+                        setActivityAnchorLabel(t.id)
+                      }
+                    }}
                     className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
-                      activityTimeRange === t.id
+                      activityAnchorLabel === t.id
                         ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
                         : 'text-tank-muted hover:text-tank-text'
                     }`}
@@ -919,6 +975,9 @@ export default function App() {
               <Virtuoso
                 style={{ height: '100%' }}
                 data={sortedActivity}
+                firstItemIndex={firstActivityIndex}
+                initialTopMostItemIndex={0}
+                startReached={activityAnchor ? loadNewerActivity : undefined}
                 endReached={loadMoreActivity}
                 overscan={200}
                 itemContent={(index, item) => (
