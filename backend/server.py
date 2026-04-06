@@ -925,6 +925,7 @@ async def lifespan(app: FastAPI):
         if backfilled:
             print(f"[OK] Backfilled extracted columns for {backfilled} events")
         database.backfill_poll_vote_costs()
+        database.backfill_superchat_displaynames()
     Thread(target=_run_backfill, daemon=True).start()
 
     # Load item catalog and contestants from fishtank API

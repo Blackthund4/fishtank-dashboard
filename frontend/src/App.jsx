@@ -1397,7 +1397,7 @@ export default function App() {
                             <div key={key} className="p-2 rounded border border-amber-500/30 bg-amber-500/5">
                               <div className="flex items-center gap-1.5 mb-0.5">
                                 <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-500/10 text-amber-400">SC</span>
-                                <span className="text-xs font-medium text-amber-300">{d.displayName || d.user?.displayName || d.username || d.userId || '?'}</span>
+                                <span className="text-xs font-medium text-amber-300">{d.user?.displayName || d.displayName || d.username || d.userId || '?'}</span>
                                 {d.cost > 0 && (
                                   <span className="text-[10px] font-mono text-tank-warn">{d.cost}t</span>
                                 )}

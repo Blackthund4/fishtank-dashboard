@@ -19,7 +19,7 @@ export default memo(function ActivityCard({ data, eventType, roomMap = {} }) {
   }
   const Icon = config.icon
 
-  const name = data.displayName || data.user?.displayName || ''
+  const name = data.user?.displayName || data.displayName || ''
   const message = data.message || data.text || ''
   const ts = data.timestamp || data.createdAt || data.updatedAt
   const roomCode = data.room || ''
