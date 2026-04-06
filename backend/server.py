@@ -335,8 +335,9 @@ def _fetch_user_profile(user_id):
             data = resp.json()
             profile = data.get("profile", data)
             result = {}
-            if profile.get("displayName"):
-                result["displayName"] = profile["displayName"]
+            dn = profile.get("displayName") or profile.get("username") or ""
+            if dn:
+                result["displayName"] = dn
             if profile.get("color"):
                 result["color"] = profile["color"]
             _profile_cache[user_id] = (now, result)
@@ -498,8 +499,6 @@ def make_event_handler(evt):
         # Enrich superchat with displayName — prefer user.displayName over top-level
         if evt == "super-chat:new" and isinstance(data, dict):
             user = data.get("user") or {}
-            # user.displayName is the canonical display name; top-level displayName
-            # may be the login handle (username) on some payloads
             data["displayName"] = (
                 user.get("displayName")
                 or data.get("displayName")
@@ -513,6 +512,8 @@ def make_event_handler(evt):
                     profile = _fetch_user_profile(user_id)
                     if profile:
                         data.update(profile)
+                        if not data.get("displayName"):
+                            data["displayName"] = profile.get("username", "")
 
         # Score sentiment for chat and TTS messages
         if isinstance(data, dict):
@@ -675,6 +676,45 @@ def load_catalog():
         session.close()
 
 
+def _backfill_empty_sc_names():
+    """Backfill empty superchat displayNames using the profile API."""
+    if not auth.is_configured:
+        return
+    conn = database._get_conn()
+    rows = conn.execute("""
+        SELECT id, data FROM events
+        WHERE event_type = 'super-chat:new' AND (display_name IS NULL OR display_name = '')
+    """).fetchall()
+    if not rows:
+        return
+    fixed = 0
+    for row in rows:
+        try:
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        user_id = data.get("userId")
+        if not user_id:
+            continue
+        profile = _fetch_user_profile(user_id)
+        dn = profile.get("displayName") or profile.get("username") or ""
+        if not dn:
+            continue
+        data["displayName"] = dn
+        if profile.get("color"):
+            data["color"] = profile["color"]
+        conn.execute(
+            "UPDATE events SET data = ?, display_name = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False, default=str), dn, row["id"])
+        )
+        fixed += 1
+    if fixed:
+        conn.commit()
+        print(f"[OK] Backfilled displayName for {fixed} superchats via profile API")
+
+
 def seed_superchats_from_rest():
     """Fetch active superchats from REST API and store any we haven't seen via Socket.IO."""
     if not auth.is_configured:
@@ -708,6 +748,8 @@ def seed_superchats_from_rest():
                 profile = _fetch_user_profile(sc["userId"])
                 if profile:
                     sc.update(profile)
+                    if not sc.get("displayName"):
+                        sc["displayName"] = profile.get("username", "")
             database.store_event("super-chat:new", sc)
             new_count += 1
         if new_count:
@@ -926,6 +968,7 @@ async def lifespan(app: FastAPI):
             print(f"[OK] Backfilled extracted columns for {backfilled} events")
         database.backfill_poll_vote_costs()
         database.backfill_superchat_displaynames()
+        _backfill_empty_sc_names()
     Thread(target=_run_backfill, daemon=True).start()
 
     # Load item catalog and contestants from fishtank API
