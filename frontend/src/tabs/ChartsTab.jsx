@@ -1,5 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { TrendingUp, DollarSign, MessageSquare } from 'lucide-react'
+import AnchorRow, { RANGE_MS } from '../components/AnchorRow'
+import { okJson } from '../utils/fetchUtils'
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -63,6 +65,7 @@ function RangeButtons({ value, onChange }) {
     </div>
   )
 }
+
 
 function ToggleButton({ active, color, label, onClick }) {
   return (
@@ -133,6 +136,19 @@ function StockTooltip({ active, payload, label, range, tickerColors }) {
   )
 }
 
+function ChatVolumeTooltip({ active, payload, label, range }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="bg-[#111115] border border-[#1e1e24] rounded px-3 py-2 text-xs font-mono shadow-xl">
+      <div className="text-[#555566] mb-1">{formatTsLabel(label, range)}</div>
+      <div className="flex items-center gap-2">
+        <span style={{ color: '#60a5fa' }}>messages:</span>
+        <span className="text-[#c8c8d0]">{payload[0].value?.toLocaleString()}</span>
+      </div>
+    </div>
+  )
+}
+
 const axisStyle = { fill: '#555566', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }
 
 export default function ChartsTab({ stocks }) {
@@ -152,6 +168,73 @@ export default function ChartsTab({ stocks }) {
   const [chatData, setChatData] = useState({ data: [], top_chatters: [] })
   const [chatLoading, setChatLoading] = useState(false)
 
+  const [stockAnchor, setStockAnchor] = useState(null)
+  const [stockAnchorLabel, setStockAnchorLabel] = useState('now')
+  const [spendAnchor, setSpendAnchor] = useState(null)
+  const [spendAnchorLabel, setSpendAnchorLabel] = useState('now')
+  const [chatAnchor, setChatAnchor] = useState(null)
+  const [chatAnchorLabel, setChatAnchorLabel] = useState('now')
+
+  const handleStockAnchor = useCallback((a, label) => {
+    setStockAnchor(a); if (label) setStockAnchorLabel(label)
+    else setStockAnchorLabel(a ? 'custom' : 'now')
+  }, [])
+  const handleSpendAnchor = useCallback((a, label) => {
+    setSpendAnchor(a); if (label) setSpendAnchorLabel(label)
+    else setSpendAnchorLabel(a ? 'custom' : 'now')
+  }, [])
+  const handleChatAnchor = useCallback((a, label) => {
+    setChatAnchor(a); if (label) setChatAnchorLabel(label)
+    else setChatAnchorLabel(a ? 'custom' : 'now')
+  }, [])
+
+  // Drag-to-pan state
+  const dragRef = useRef(null)
+
+  const handleDragStart = useCallback((e, chartId, anchor, range) => {
+    dragRef.current = { startX: e.clientX, chartId, anchor, range, width: e.currentTarget.offsetWidth }
+  }, [])
+
+  const handleDragEnd = useCallback((e) => {
+    if (!dragRef.current) return
+    const { startX, chartId, anchor, range, width } = dragRef.current
+    dragRef.current = null
+    const dx = startX - e.clientX
+    if (Math.abs(dx) < 5) return
+    e.preventDefault()
+    const rangeMs = RANGE_MS[range] || RANGE_MS['24h']
+    const timeDelta = (dx / width) * rangeMs
+    const ref = anchor ? new Date(anchor).getTime() : Date.now()
+    const next = new Date(ref + timeDelta)
+    const handler = chartId === 'stock' ? handleStockAnchor : chartId === 'spend' ? handleSpendAnchor : handleChatAnchor
+    if (next >= new Date()) handler(null, 'now')
+    else handler(next.toISOString(), null)
+  }, [handleStockAnchor, handleSpendAnchor, handleChatAnchor])
+
+  // Keyboard pan — arrows pan all charts together
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      const dir = e.key === 'ArrowLeft' ? -1 : 1
+      ;[
+        [stockAnchor, stockRange, handleStockAnchor],
+        [spendAnchor, spendRange, handleSpendAnchor],
+        [chatAnchor, chatRange, handleChatAnchor],
+      ].forEach(([anchor, range, handler]) => {
+        const step = RANGE_MS[range] || RANGE_MS['24h']
+        const ref = anchor ? new Date(anchor).getTime() : Date.now()
+        const next = new Date(ref + dir * step)
+        if (next >= new Date()) handler(null, 'now')
+        else handler(next.toISOString(), null)
+      })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [stockAnchor, stockRange, spendAnchor, spendRange, chatAnchor, chatRange,
+      handleStockAnchor, handleSpendAnchor, handleChatAnchor])
+
   const activeTickers = useMemo(
     () => new Set(stocks.map(s => s.tickerSymbol).filter(Boolean)),
     [stocks]
@@ -163,14 +246,18 @@ export default function ChartsTab({ stocks }) {
     function fetchStocks() {
       if (document.hidden) return
       setStockLoading(true)
-      fetch(`/api/charts/stocks?range=${stockRange}`)
-        .then(r => r.json()).then(setStockData).catch(() => {})
+      const params = new URLSearchParams({ range: stockRange })
+      if (stockAnchor) params.set('anchor', stockAnchor)
+      fetch(`/api/charts/stocks?${params}`)
+        .then(okJson).then(setStockData).catch(() => {})
         .finally(() => setStockLoading(false))
     }
     fetchStocks()
-    const id = setInterval(fetchStocks, 5 * 60 * 1000)
-    return () => clearInterval(id)
-  }, [stockRange])
+    if (!stockAnchor) {
+      const id = setInterval(fetchStocks, 5 * 60 * 1000)
+      return () => clearInterval(id)
+    }
+  }, [stockRange, stockAnchor])
 
   useEffect(() => {
     const incoming = Object.keys(stockData)
@@ -194,27 +281,35 @@ export default function ChartsTab({ stocks }) {
     function fetchSpend() {
       if (document.hidden) return
       setSpendLoading(true)
-      fetch(`/api/charts/spend?range=${spendRange}`)
-        .then(r => r.json()).then(setSpendData).catch(() => {})
+      const params = new URLSearchParams({ range: spendRange })
+      if (spendAnchor) params.set('anchor', spendAnchor)
+      fetch(`/api/charts/spend?${params}`)
+        .then(okJson).then(setSpendData).catch(() => {})
         .finally(() => setSpendLoading(false))
     }
     fetchSpend()
-    const id = setInterval(fetchSpend, 5 * 60 * 1000)
-    return () => clearInterval(id)
-  }, [spendRange])
+    if (!spendAnchor) {
+      const id = setInterval(fetchSpend, 5 * 60 * 1000)
+      return () => clearInterval(id)
+    }
+  }, [spendRange, spendAnchor])
 
   useEffect(() => {
     function fetchChat() {
       if (document.hidden) return
       setChatLoading(true)
-      fetch(`/api/charts/chatters?range=${chatRange}`)
-        .then(r => r.json()).then(setChatData).catch(() => {})
+      const params = new URLSearchParams({ range: chatRange })
+      if (chatAnchor) params.set('anchor', chatAnchor)
+      fetch(`/api/charts/chatters?${params}`)
+        .then(okJson).then(setChatData).catch(() => {})
         .finally(() => setChatLoading(false))
     }
     fetchChat()
-    const id = setInterval(fetchChat, 5 * 60 * 1000)
-    return () => clearInterval(id)
-  }, [chatRange])
+    if (!chatAnchor) {
+      const id = setInterval(fetchChat, 5 * 60 * 1000)
+      return () => clearInterval(id)
+    }
+  }, [chatRange, chatAnchor])
 
   const tickerColors = useMemo(() => {
     const map = {}
@@ -261,13 +356,16 @@ export default function ChartsTab({ stocks }) {
 
       {/* STO-X Price History */}
       <ChartPanel title="STO-X Price History" icon={TrendingUp} controls={
-        <div className="flex flex-wrap items-center gap-2">
-          <RangeButtons value={stockRange} onChange={setStockRange} />
-          {eliminatedTickers.length > 0 && (
-            <button onClick={toggleEliminated} className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
-              showEliminated ? 'border-amber-400 text-amber-400 bg-amber-400/10' : 'border-tank-border text-tank-muted hover:text-tank-text'
-            }`}>{showEliminated ? 'Hide Eliminated' : 'Show Eliminated'}</button>
-          )}
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <RangeButtons value={stockRange} onChange={setStockRange} />
+            {eliminatedTickers.length > 0 && (
+              <button onClick={toggleEliminated} className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
+                showEliminated ? 'border-amber-400 text-amber-400 bg-amber-400/10' : 'border-tank-border text-tank-muted hover:text-tank-text'
+              }`}>{showEliminated ? 'Hide Eliminated' : 'Show Eliminated'}</button>
+            )}
+          </div>
+          <AnchorRow anchor={stockAnchor} anchorLabel={stockAnchorLabel} onAnchorChange={handleStockAnchor} range={stockRange} />
         </div>
       }>
         {Object.keys(stockData).length > 0 && (
@@ -284,45 +382,52 @@ export default function ChartsTab({ stocks }) {
           </div>
         )}
         {stockLoading ? <EmptyChart text="Loading..." /> : stockChartData.length === 0 ? <EmptyChart text="No stock price history collected yet." /> : (
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={stockChartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-              <CartesianGrid stroke="#1e1e24" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="ts" tick={axisStyle} tickLine={false} axisLine={{ stroke: '#1e1e24' }}
-                interval={tickInterval(stockChartData.length)} tickFormatter={ts => formatTsLabel(ts, stockRange)} />
-              <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={40} domain={['auto', 'auto']}
-                tickFormatter={v => v.toLocaleString()} />
-              <Tooltip content={<StockTooltip range={stockRange} tickerColors={tickerColors} />} />
-              {Object.keys(stockData).sort().map(ticker => {
-                if (!visibleTickers.has(ticker)) return null
-                return <Line key={ticker} type="monotone" dataKey={ticker} stroke={tickerColors[ticker]}
-                  strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
-              })}
-            </LineChart>
-          </ResponsiveContainer>
+          <div style={{ cursor: 'grab' }} onMouseDown={e => handleDragStart(e, 'stock', stockAnchor, stockRange)}
+            onMouseUp={handleDragEnd} onMouseLeave={handleDragEnd}>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={stockChartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                <CartesianGrid stroke="#1e1e24" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="ts" tick={axisStyle} tickLine={false} axisLine={{ stroke: '#1e1e24' }}
+                  interval={tickInterval(stockChartData.length)} tickFormatter={ts => formatTsLabel(ts, stockRange)} />
+                <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={40} domain={['auto', 'auto']}
+                  tickFormatter={v => v.toLocaleString()} />
+                <Tooltip content={<StockTooltip range={stockRange} tickerColors={tickerColors} />} />
+                {Object.keys(stockData).sort().map(ticker => {
+                  if (!visibleTickers.has(ticker)) return null
+                  return <Line key={ticker} type="monotone" dataKey={ticker} stroke={tickerColors[ticker]}
+                    strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </ChartPanel>
 
       {/* Token Spend Trends */}
       <ChartPanel title="Token Spend Trends" icon={DollarSign} controls={
-        <div className="flex flex-wrap items-center gap-2">
-          <RangeButtons value={spendRange} onChange={setSpendRange} />
-          <div className="flex gap-1">
-            {['tokens', 'usd'].map(u => (
-              <button key={u} onClick={() => setSpendUnit(u)} className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
-                spendUnit === u ? 'border-tank-accent text-tank-accent bg-tank-accent/10' : 'border-tank-border text-tank-muted hover:text-tank-text'
-              }`}>{u === 'usd' ? 'USD' : 'Tokens'}</button>
-            ))}
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <RangeButtons value={spendRange} onChange={setSpendRange} />
+            <div className="flex gap-1">
+              {['tokens', 'usd'].map(u => (
+                <button key={u} onClick={() => setSpendUnit(u)} className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
+                  spendUnit === u ? 'border-tank-accent text-tank-accent bg-tank-accent/10' : 'border-tank-border text-tank-muted hover:text-tank-text'
+                }`}>{u === 'usd' ? 'USD' : 'Tokens'}</button>
+              ))}
+            </div>
+            <div className="flex gap-1">
+              {['tts', 'sfx', 'fishtoy', 'poll', 'superchat'].map(type => (
+                <ToggleButton key={type} active={spendToggles[type]} color={SPEND_COLORS[type]}
+                  label={SPEND_LABELS[type]} onClick={() => setSpendToggles(prev => ({ ...prev, [type]: !prev[type] }))} />
+              ))}
+            </div>
           </div>
-          <div className="flex gap-1">
-            {['tts', 'sfx', 'fishtoy', 'poll', 'superchat'].map(type => (
-              <ToggleButton key={type} active={spendToggles[type]} color={SPEND_COLORS[type]}
-                label={SPEND_LABELS[type]} onClick={() => setSpendToggles(prev => ({ ...prev, [type]: !prev[type] }))} />
-            ))}
-          </div>
+          <AnchorRow anchor={spendAnchor} anchorLabel={spendAnchorLabel} onAnchorChange={handleSpendAnchor} range={spendRange} />
         </div>
       }>
         {spendLoading ? <EmptyChart text="Loading..." /> : spendData.data.length === 0 ? <EmptyChart text="No spend data for this range." /> : (
-          <>
+          <div style={{ cursor: 'grab' }} onMouseDown={e => handleDragStart(e, 'spend', spendAnchor, spendRange)}
+            onMouseUp={handleDragEnd} onMouseLeave={handleDragEnd}>
             <div>
               <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2 border-l-2 border-tank-accent/30 pl-1.5">Spend by Period</h3>
               <ResponsiveContainer width="100%" height={200}>
@@ -358,36 +463,33 @@ export default function ChartsTab({ stocks }) {
                 </LineChart>
               </ResponsiveContainer>
             </div>
-          </>
+          </div>
         )}
       </ChartPanel>
 
       {/* Chat Volume */}
-      <ChartPanel title="Chat Volume" icon={MessageSquare} controls={<RangeButtons value={chatRange} onChange={setChatRange} />}>
+      <ChartPanel title="Chat Volume" icon={MessageSquare} controls={
+        <div className="flex flex-col items-end gap-1">
+          <RangeButtons value={chatRange} onChange={setChatRange} />
+          <AnchorRow anchor={chatAnchor} anchorLabel={chatAnchorLabel} onAnchorChange={handleChatAnchor} range={chatRange} />
+        </div>
+      }>
         {chatLoading ? <EmptyChart text="Loading..." /> : chatData.data.length === 0 ? <EmptyChart text="No chat data for this range." /> : (
           <div className="space-y-4">
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={chatData.data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-                <CartesianGrid stroke="#1e1e24" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="ts" tick={axisStyle} tickLine={false} axisLine={{ stroke: '#1e1e24' }}
-                  interval={tickInterval(chatData.data.length)} tickFormatter={ts => formatTsLabel(ts, chatRange)} />
-                <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={55} domain={[0, 'auto']}
-                  tickFormatter={v => v.toLocaleString()} />
-                <Tooltip content={({ active, payload, label }) => {
-                  if (!active || !payload?.length) return null
-                  return (
-                    <div className="bg-[#111115] border border-[#1e1e24] rounded px-3 py-2 text-xs font-mono shadow-xl">
-                      <div className="text-[#555566] mb-1">{formatTsLabel(label, chatRange)}</div>
-                      <div className="flex items-center gap-2">
-                        <span style={{ color: '#60a5fa' }}>messages:</span>
-                        <span className="text-[#c8c8d0]">{payload[0].value?.toLocaleString()}</span>
-                      </div>
-                    </div>
-                  )
-                }} />
-                <Bar dataKey="count" fill="#60a5fa" fillOpacity={0.75} isAnimationActive={false} />
-              </BarChart>
-            </ResponsiveContainer>
+            <div style={{ cursor: 'grab' }} onMouseDown={e => handleDragStart(e, 'chat', chatAnchor, chatRange)}
+              onMouseUp={handleDragEnd} onMouseLeave={handleDragEnd}>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={chatData.data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                  <CartesianGrid stroke="#1e1e24" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="ts" tick={axisStyle} tickLine={false} axisLine={{ stroke: '#1e1e24' }}
+                    interval={tickInterval(chatData.data.length)} tickFormatter={ts => formatTsLabel(ts, chatRange)} />
+                  <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={55} domain={[0, 'auto']}
+                    tickFormatter={v => v.toLocaleString()} />
+                  <Tooltip content={<ChatVolumeTooltip range={chatRange} />} />
+                  <Bar dataKey="count" fill="#60a5fa" fillOpacity={0.75} isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
 
             {chatData.top_chatters.length > 0 && (
               <div>

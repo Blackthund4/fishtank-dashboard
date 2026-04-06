@@ -1238,31 +1238,35 @@ def _normalize_since(since):
 
 
 @app.get("/api/analytics/tts-sfx")
-def api_tts_sfx_analytics(since: str = Query(None)):
+def api_tts_sfx_analytics(since: str = Query(None), until: str = Query(None)):
     """TTS and SFX analytics: top rooms, top senders, hourly activity."""
     since = _normalize_since(since)
-    return _cached_query(f"tts-sfx:{since}", database.get_tts_sfx_analytics, since)
+    until = _normalize_since(until)
+    return _cached_query(f"tts-sfx:{since}:{until}", database.get_tts_sfx_analytics, since, until)
 
 
 @app.get("/api/analytics/chat")
-def api_chat_analytics(since: str = Query(None)):
+def api_chat_analytics(since: str = Query(None), until: str = Query(None)):
     """Chat analytics: top chatters, hourly volume."""
     since = _normalize_since(since)
-    return _cached_query(f"chat:{since}", database.get_chat_analytics, since, ttl=CACHE_TTL_CHAT)
+    until = _normalize_since(until)
+    return _cached_query(f"chat:{since}:{until}", database.get_chat_analytics, since, until, ttl=CACHE_TTL_CHAT)
 
 
 @app.get("/api/analytics/chat-sentiment")
-def api_chat_sentiment(since: str = Query(None)):
+def api_chat_sentiment(since: str = Query(None), until: str = Query(None)):
     """Chat sentiment analytics: overall mood, hourly breakdown."""
     since = _normalize_since(since)
-    return _cached_query(f"chat-sentiment:{since}", database.get_chat_sentiment, since, ttl=CACHE_TTL_CHAT)
+    until = _normalize_since(until)
+    return _cached_query(f"chat-sentiment:{since}:{until}", database.get_chat_sentiment, since, until, ttl=CACHE_TTL_CHAT)
 
 
 @app.get("/api/analytics/tts-sentiment")
-def api_tts_sentiment(since: str = Query(None)):
+def api_tts_sentiment(since: str = Query(None), until: str = Query(None)):
     """TTS sentiment analytics: overall mood, hourly breakdown, mood by contestant."""
     since = _normalize_since(since)
-    return _cached_query(f"tts-sentiment:{since}", database.get_tts_sentiment, since)
+    until = _normalize_since(until)
+    return _cached_query(f"tts-sentiment:{since}:{until}", database.get_tts_sentiment, since, until)
 
 
 @app.get("/api/analytics/peak-hours")
@@ -1407,24 +1411,27 @@ def api_stock_sparklines(range: str = Query('today')):
 
 
 @app.get("/api/charts/stocks")
-def api_charts_stocks(range: str = Query('24h')):
+def api_charts_stocks(range: str = Query('24h'), anchor: str = Query(None)):
     if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:
         range = '24h'
-    return _cached_query(f"charts-stocks:{range}", database.get_stock_history_chart, range)
+    anchor = _normalize_since(anchor)
+    return _cached_query(f"charts-stocks:{range}:{anchor}", database.get_stock_history_chart, range, anchor)
 
 
 @app.get("/api/charts/spend")
-def api_charts_spend(range: str = Query('24h')):
+def api_charts_spend(range: str = Query('24h'), anchor: str = Query(None)):
     if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:
         range = '24h'
-    return _cached_query(f"charts-spend:{range}", database.get_spend_trends, range)
+    anchor = _normalize_since(anchor)
+    return _cached_query(f"charts-spend:{range}:{anchor}", database.get_spend_trends, range, anchor)
 
 
 @app.get("/api/charts/chatters")
-def api_charts_chatters(range: str = Query('24h')):
+def api_charts_chatters(range: str = Query('24h'), anchor: str = Query(None)):
     if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:
         range = '24h'
-    return _cached_query(f"charts-chatters:{range}", database.get_chat_chart, range, ttl=CACHE_TTL_CHAT)
+    anchor = _normalize_since(anchor)
+    return _cached_query(f"charts-chatters:{range}:{anchor}", database.get_chat_chart, range, anchor, ttl=CACHE_TTL_CHAT)
 
 
 # --- Serve frontend static files ---

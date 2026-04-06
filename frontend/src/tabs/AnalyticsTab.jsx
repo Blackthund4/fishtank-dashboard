@@ -1,13 +1,14 @@
-import { useState, useEffect, useMemo, memo } from 'react'
+import { useState, useEffect, useMemo, useCallback, memo } from 'react'
 import { TrendingUp, Volume2, MessageSquare, Users, Zap, Fish } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
+import { okJson } from '../utils/fetchUtils'
+import AnchorRow, { RANGE_MS } from '../components/AnchorRow'
 
-function getSinceISO(period) {
-  if (!period) return null
-  const now = new Date()
+function getSinceISO(period, anchor) {
   const minutes = period === '1m' ? 1 : period === '1h' ? 60 : period === '3h' ? 180 : period === '6h' ? 360 : period === '12h' ? 720 : period === '24h' ? 1440 : period === '1d' ? 1440 : period === '3d' ? 4320 : period === '7d' ? 10080 : 0
   if (!minutes) return null
-  return new Date(now.getTime() - minutes * 60000).toISOString()
+  const ref = anchor ? new Date(anchor) : new Date()
+  return new Date(ref.getTime() - minutes * 60000).toISOString()
 }
 
 const TIME_OPTIONS = [
@@ -85,53 +86,90 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
   const [chatSentiment, setChatSentiment] = useState(null)
   const [ttsSentiment, setTtsSentiment] = useState(null)
 
+  // Anchor state for time-travel navigation
+  const [ttsAnchor, setTtsAnchor] = useState(null)
+  const [ttsAnchorLabel, setTtsAnchorLabel] = useState('now')
+  const [chatAnchor, setChatAnchor] = useState(null)
+  const [chatAnchorLabel, setChatAnchorLabel] = useState('now')
+
+  const handleTtsAnchor = useCallback((a, label) => {
+    setTtsAnchor(a); if (label) setTtsAnchorLabel(label)
+    else setTtsAnchorLabel(a ? 'custom' : 'now')
+  }, [])
+  const handleChatAnchor = useCallback((a, label) => {
+    setChatAnchor(a); if (label) setChatAnchorLabel(label)
+    else setChatAnchorLabel(a ? 'custom' : 'now')
+  }, [])
+
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
 
-  // Staggered analytics fetches — heavy DB queries must not all fire at once
-  // (concurrent json_extract aggregations on 600k+ rows OOM the 1GB container)
+  // --- Catalog + stock queries (only depend on stockPeriod) ---
   useEffect(() => {
     let cancelled = false
-    async function fetchAll() {
+    async function fetchCatalog() {
       if (document.hidden) return
-      // Batch 1: lightweight catalog queries
-      fetch('/api/stocks').then(r => r.json()).then(setStocks).catch(() => {})
-      fetch('/api/stocks/count').then(r => r.json()).then(d => setStockCount(d.count || 0)).catch(() => {})
-      fetch('/api/fishtoy-availability').then(r => r.json()).then(setFishtoyStatus).catch(() => {})
-      fetch('/api/price-changes').then(r => r.json()).then(setPriceChanges).catch(() => {})
-
-      // Batch 2: stock history (after a pause)
-      await new Promise(r => setTimeout(r, 500))
+      fetch('/api/stocks').then(okJson).then(d => { if (!cancelled) setStocks(d) }).catch(() => {})
+      fetch('/api/stocks/count').then(okJson).then(d => { if (!cancelled) setStockCount(d.count || 0) }).catch(() => {})
+      fetch('/api/fishtoy-availability').then(okJson).then(d => { if (!cancelled) setFishtoyStatus(d) }).catch(() => {})
+      fetch('/api/price-changes').then(okJson).then(d => { if (!cancelled) setPriceChanges(d) }).catch(() => {})
+      await new Promise(r => setTimeout(r, 300))
       if (cancelled) return
       const stockSince = getSinceISO(stockPeriod)
       const stockParams = new URLSearchParams({ limit: '2000' })
       if (stockSince) stockParams.set('since', stockSince)
-      await fetch(`/api/stocks/history?${stockParams}`).then(r => r.json()).then(setStockHistory).catch(() => {})
-
-      // Batch 3: TTS/SFX analytics (sequential, not parallel)
+      await fetch(`/api/stocks/history?${stockParams}`).then(okJson).then(d => { if (!cancelled) setStockHistory(d) }).catch(() => {})
       if (cancelled) return
-      const ttsSince = getSinceISO(ttsPeriod)
-      const ttsParam = ttsSince ? `?since=${encodeURIComponent(ttsSince)}` : ''
-      await fetch(`/api/analytics/tts-sfx${ttsParam}`).then(r => r.json()).then(setTtsAnalytics).catch(() => {})
-      if (cancelled) return
-      await fetch(`/api/analytics/tts-sentiment${ttsParam}`).then(r => r.json()).then(setTtsSentiment).catch(() => {})
-
-      // Batch 4: Chat analytics
-      if (cancelled) return
-      const chatSince = getSinceISO(chatPeriod)
-      const chatParam = chatSince ? `?since=${encodeURIComponent(chatSince)}` : ''
-      await fetch(`/api/analytics/chat${chatParam}`).then(r => r.json()).then(setChatAnalytics).catch(() => {})
-      if (cancelled) return
-      await fetch(`/api/analytics/chat-sentiment${chatParam}`).then(r => r.json()).then(setChatSentiment).catch(() => {})
-
-      // Batch 5: peak hours (heaviest)
-      if (cancelled) return
-      fetch('/api/analytics/peak-hours').then(r => r.json()).then(setPeakHours).catch(() => {})
+      fetch('/api/analytics/peak-hours').then(okJson).then(d => { if (!cancelled && d.hourly) setPeakHours(d) }).catch(() => {})
     }
-    fetchAll()
-    const interval = setInterval(fetchAll, 120000)
+    fetchCatalog()
+    const interval = setInterval(fetchCatalog, 120000)
     return () => { cancelled = true; clearInterval(interval) }
-  }, [stockPeriod, ttsPeriod, chatPeriod])
+  }, [stockPeriod])
+
+  // --- TTS/SFX analytics (only depend on ttsPeriod + ttsAnchor) ---
+  useEffect(() => {
+    let cancelled = false
+    async function fetchTts() {
+      if (document.hidden) return
+      const ttsSince = getSinceISO(ttsPeriod, ttsAnchor)
+      const ttsParams = new URLSearchParams()
+      if (ttsSince) ttsParams.set('since', ttsSince)
+      if (ttsAnchor) ttsParams.set('until', ttsAnchor)
+      const ttsParam = ttsParams.toString() ? `?${ttsParams}` : ''
+      await fetch(`/api/analytics/tts-sfx${ttsParam}`).then(okJson).then(d => { if (!cancelled && d.top_rooms) setTtsAnalytics(d) }).catch(() => {})
+      if (cancelled) return
+      await fetch(`/api/analytics/tts-sentiment${ttsParam}`).then(okJson).then(d => { if (!cancelled && d.hourly) setTtsSentiment(d) }).catch(() => {})
+    }
+    fetchTts()
+    if (!ttsAnchor) {
+      const interval = setInterval(fetchTts, 120000)
+      return () => { cancelled = true; clearInterval(interval) }
+    }
+    return () => { cancelled = true }
+  }, [ttsPeriod, ttsAnchor])
+
+  // --- Chat analytics (only depend on chatPeriod + chatAnchor) ---
+  useEffect(() => {
+    let cancelled = false
+    async function fetchChat() {
+      if (document.hidden) return
+      const chatSince = getSinceISO(chatPeriod, chatAnchor)
+      const chatParams = new URLSearchParams()
+      if (chatSince) chatParams.set('since', chatSince)
+      if (chatAnchor) chatParams.set('until', chatAnchor)
+      const chatParam = chatParams.toString() ? `?${chatParams}` : ''
+      await fetch(`/api/analytics/chat${chatParam}`).then(okJson).then(d => { if (!cancelled && d.total != null) setChatAnalytics(d) }).catch(() => {})
+      if (cancelled) return
+      await fetch(`/api/analytics/chat-sentiment${chatParam}`).then(okJson).then(d => { if (!cancelled && d.hourly) setChatSentiment(d) }).catch(() => {})
+    }
+    fetchChat()
+    if (!chatAnchor) {
+      const interval = setInterval(fetchChat, 120000)
+      return () => { cancelled = true; clearInterval(interval) }
+    }
+    return () => { cancelled = true }
+  }, [chatPeriod, chatAnchor])
 
   // Build per-ticker reference prices from filtered stock history
   const stockRefPrices = useMemo(() => {
@@ -322,7 +360,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       </Section>
 
       {/* Peak Hours */}
-      {peakHours && peakHours.hourly.length > 0 && (
+      {peakHours && peakHours.hourly?.length > 0 && (
         <Section title="Peak Activity Hours" icon={Zap}>
           <div className="flex gap-4 mb-3">
             <div>
@@ -355,21 +393,24 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
         <Section title="TTS / SFX Analytics" icon={Volume2}
           badge={ttsMoodBadge}
           extra={
-          <div className="flex items-center gap-2">
-            {ttsToggle !== undefined && (
-              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ttsToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
-                TTS: {ttsToggle?.enabled ? 'ON' : 'OFF'}{ttsToggle?.metadata ? ` (${ttsToggle.metadata}t)` : ''}
-              </span>
-            )}
-            {sfxToggle !== undefined && (
-              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${sfxToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
-                SFX: {sfxToggle?.enabled ? 'ON' : 'OFF'}{sfxToggle?.metadata ? ` (${sfxToggle.metadata}t)` : ''}
-              </span>
-            )}
-            <TimeFilter value={ttsPeriod} onChange={setTtsPeriod} />
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2">
+              {ttsToggle !== undefined && (
+                <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ttsToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                  TTS: {ttsToggle?.enabled ? 'ON' : 'OFF'}{ttsToggle?.metadata ? ` (${ttsToggle.metadata}t)` : ''}
+                </span>
+              )}
+              {sfxToggle !== undefined && (
+                <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${sfxToggle?.enabled ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                  SFX: {sfxToggle?.enabled ? 'ON' : 'OFF'}{sfxToggle?.metadata ? ` (${sfxToggle.metadata}t)` : ''}
+                </span>
+              )}
+              <TimeFilter value={ttsPeriod} onChange={setTtsPeriod} />
+            </div>
+            <AnchorRow anchor={ttsAnchor} anchorLabel={ttsAnchorLabel} onAnchorChange={handleTtsAnchor} range={ttsPeriod} compact />
           </div>
         }>
-          {ttsAnalytics ? (
+          {ttsAnalytics && ttsAnalytics.top_rooms ? (
             <div className="space-y-3">
               {ttsAnalytics.top_rooms.length > 0 && (
                 <div>
@@ -384,7 +425,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
                   </div>
                 </div>
               )}
-              {ttsAnalytics.top_tts_senders.length > 0 && (
+              {ttsAnalytics.top_tts_senders?.length > 0 && (
                 <div>
                   <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Top TTS Spenders</h4>
                   <div className="space-y-1">
@@ -399,7 +440,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
                   </div>
                 </div>
               )}
-              {ttsAnalytics.hourly.length > 0 && (
+              {ttsAnalytics.hourly?.length > 0 && (
                 <div>
                   <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Activity</h4>
                   <HourlyBar data={ttsAnalytics.hourly} color="bg-purple-400" />
@@ -439,16 +480,19 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
         <Section title="Chat Analytics" icon={MessageSquare}
           badge={chatMoodBadge}
           extra={
-          <div className="flex items-center gap-2">
-            <TimeFilter value={chatPeriod} onChange={setChatPeriod} />
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2">
+              <TimeFilter value={chatPeriod} onChange={setChatPeriod} />
+            </div>
+            <AnchorRow anchor={chatAnchor} anchorLabel={chatAnchorLabel} onAnchorChange={handleChatAnchor} range={chatPeriod} compact />
           </div>
         }>
-          {chatAnalytics ? (
+          {chatAnalytics && chatAnalytics.total != null ? (
             <div className="space-y-3">
               <div className="text-xs text-tank-muted">
                 Total messages: <span className="text-tank-bright font-mono">{chatAnalytics.total.toLocaleString()}</span>
               </div>
-              {chatAnalytics.top_chatters.length > 0 && (
+              {chatAnalytics.top_chatters?.length > 0 && (
                 <div>
                   <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Top Chatters</h4>
                   <div className="space-y-1">
@@ -461,7 +505,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
                   </div>
                 </div>
               )}
-              {chatAnalytics.hourly.length > 0 && (
+              {chatAnalytics.hourly?.length > 0 && (
                 <div>
                   <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Volume</h4>
                   <HourlyBar data={chatAnalytics.hourly} color="bg-blue-400" />

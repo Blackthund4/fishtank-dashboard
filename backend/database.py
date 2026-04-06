@@ -762,11 +762,22 @@ def get_stock_history(ticker=None, limit=500, since=None):
 # ============================================================
 
 
-def _range_to_since_and_granularity(range_str, config):
-    """Convert a range string to (since_iso, granularity) using a config map."""
-    since_dt, granularity = config.get(range_str, config.get('24h'))
-    since = since_dt.isoformat() if since_dt else None
-    return since, granularity
+def _range_to_since_and_granularity(range_str, config, anchor=None):
+    """Convert a range string to (since_iso, until_iso, granularity) using a config map.
+    When anchor is provided, the window ends at anchor instead of now."""
+    delta, granularity = config.get(range_str, config.get('24h'))
+    if anchor:
+        ref = datetime.fromisoformat(anchor)
+        if delta:
+            since = (ref - delta).isoformat()
+        else:
+            # 'all' with anchor: 30-day window ending at anchor
+            since = (ref - timedelta(days=30)).isoformat()
+        return since, anchor, granularity
+    else:
+        now = datetime.now(timezone.utc)
+        since = (now - delta).isoformat() if delta else None
+        return since, None, granularity
 
 
 def _apply_bucket(ts_str, granularity):
@@ -801,24 +812,30 @@ def _time_bucket_expr(granularity, col='timestamp_local'):
     return f"strftime('%Y-%m-%d', {col})"
 
 
-def get_stock_history_chart(range_str='24h'):
+def get_stock_history_chart(range_str='24h', anchor=None):
     """Stock price history with automatic downsampling for chart display."""
     conn = _get_conn()
-    now = datetime.now(timezone.utc)
     config = {
-        '30m': (now - timedelta(minutes=30), 'raw'),
-        '1h':  (now - timedelta(hours=1),  'raw'),
-        '2h':  (now - timedelta(hours=2),  '5min'),
-        '6h':  (now - timedelta(hours=6),  '5min'),
-        '12h': (now - timedelta(hours=12), '15min'),
-        '24h': (now - timedelta(hours=24), '15min'),
-        '3d':  (now - timedelta(days=3),   'hourly'),
-        '7d':  (now - timedelta(days=7),   'hourly'),
-        'all': (None,                       'daily'),
+        '30m': (timedelta(minutes=30), 'raw'),
+        '1h':  (timedelta(hours=1),  'raw'),
+        '2h':  (timedelta(hours=2),  '5min'),
+        '6h':  (timedelta(hours=6),  '5min'),
+        '12h': (timedelta(hours=12), '15min'),
+        '24h': (timedelta(hours=24), '15min'),
+        '3d':  (timedelta(days=3),   'hourly'),
+        '7d':  (timedelta(days=7),   'hourly'),
+        'all': (None,                 'daily'),
     }
-    since, granularity = _range_to_since_and_granularity(range_str, config)
-    where = "WHERE timestamp >= ?" if since else ""
-    params = [since] if since else []
+    since, until, granularity = _range_to_since_and_granularity(range_str, config, anchor)
+    clauses = []
+    params = []
+    if since:
+        clauses.append("timestamp >= ?")
+        params.append(since)
+    if until:
+        clauses.append("timestamp < ?")
+        params.append(until)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
     if granularity == 'raw':
         sql = f"SELECT ticker, timestamp AS ts, price FROM stock_history {where} ORDER BY timestamp ASC"
@@ -899,49 +916,52 @@ def get_stock_sparklines(range_str='today'):
     return result
 
 
-def get_spend_trends(range_str='24h'):
+def get_spend_trends(range_str='24h', anchor=None):
     """Token spend over time bucketed by event type, using extracted cost column."""
     conn = _get_conn()
-    now = datetime.now(timezone.utc)
     config = {
-        '30m': (now - timedelta(minutes=30), '5min'),
-        '1h':  (now - timedelta(hours=1),  '5min'),
-        '2h':  (now - timedelta(hours=2),  '5min'),
-        '6h':  (now - timedelta(hours=6),  'hourly'),
-        '12h': (now - timedelta(hours=12), 'hourly'),
-        '24h': (now - timedelta(hours=24), 'hourly'),
-        '3d':  (now - timedelta(days=3),   'hourly'),
-        '7d':  (now - timedelta(days=7),   'daily'),
-        'all': (None,                       'daily'),
+        '30m': (timedelta(minutes=30), '5min'),
+        '1h':  (timedelta(hours=1),  '5min'),
+        '2h':  (timedelta(hours=2),  '5min'),
+        '6h':  (timedelta(hours=6),  'hourly'),
+        '12h': (timedelta(hours=12), 'hourly'),
+        '24h': (timedelta(hours=24), 'hourly'),
+        '3d':  (timedelta(days=3),   'hourly'),
+        '7d':  (timedelta(days=7),   'daily'),
+        'all': (None,                 'daily'),
     }
-    since, granularity = _range_to_since_and_granularity(range_str, config)
+    since, until, granularity = _range_to_since_and_granularity(range_str, config, anchor)
     since_clause = "AND timestamp_local >= ?" if since else ""
-    params = [since] if since else []
+    until_clause = "AND timestamp_local < ?" if until else ""
+    window_clause = f"{since_clause} {until_clause}"
+    since_params = [since] if since else []
+    until_params = [until] if until else []
+    window_params = since_params + until_params
     bucket = _time_bucket_expr(granularity)
 
     # Per-type queries for proper index usage on idx_events_type_ts_local
     rows = conn.execute(f"""
         SELECT {bucket} AS ts, event_type,
             COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
-        FROM events WHERE event_type = 'tts:update' {since_clause}
+        FROM events WHERE event_type = 'tts:update' {window_clause}
         GROUP BY ts
         UNION ALL
         SELECT {bucket} AS ts, event_type,
             COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
-        FROM events WHERE event_type = 'sfx:update' {since_clause}
+        FROM events WHERE event_type = 'sfx:update' {window_clause}
         GROUP BY ts
         UNION ALL
         SELECT {bucket} AS ts, event_type,
             COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
-        FROM events WHERE event_type = 'fishtoy:used' {since_clause}
+        FROM events WHERE event_type = 'fishtoy:used' {window_clause}
         GROUP BY ts
         UNION ALL
         SELECT {bucket} AS ts, event_type,
             COALESCE(SUM(cost), 0) AS spend, COUNT(*) AS count
-        FROM events WHERE event_type = 'super-chat:new' {since_clause}
+        FROM events WHERE event_type = 'super-chat:new' {window_clause}
         GROUP BY ts
         ORDER BY ts ASC
-    """, params * 4).fetchall()
+    """, window_params * 4).fetchall()
 
     buckets = {}
     for row in rows:
@@ -958,9 +978,9 @@ def get_spend_trends(range_str='24h'):
     poll_vote_rows = conn.execute(f"""
         SELECT id, timestamp_local, cost FROM events
         WHERE event_type = 'poll:vote' AND cost IS NOT NULL
-        {since_clause}
+        {window_clause}
         ORDER BY id ASC
-    """, params).fetchall()
+    """, window_params).fetchall()
 
     prev_total = 0
     # If we have a since filter, get the baseline (last vote before the window)
@@ -976,9 +996,9 @@ def get_spend_trends(range_str='24h'):
     # Also reset prev_total at each poll:start boundary
     poll_starts = conn.execute(f"""
         SELECT id FROM events WHERE event_type = 'poll:start'
-        {since_clause}
+        {window_clause}
         ORDER BY id ASC
-    """, params).fetchall()
+    """, window_params).fetchall()
     start_id_list = sorted(row["id"] for row in poll_starts)
 
     start_idx = 0
@@ -999,29 +1019,32 @@ def get_spend_trends(range_str='24h'):
     return {'granularity': granularity, 'data': sorted(buckets.values(), key=lambda x: x['ts'])}
 
 
-def get_chat_chart(range_str='24h'):
+def get_chat_chart(range_str='24h', anchor=None):
     """Chat message volume over time + top chatters, using extracted display_name column."""
     conn = _get_conn()
-    now = datetime.now(timezone.utc)
     config = {
-        '30m': (now - timedelta(minutes=30), '5min'),
-        '1h':  (now - timedelta(hours=1),  '5min'),
-        '2h':  (now - timedelta(hours=2),  '5min'),
-        '6h':  (now - timedelta(hours=6),  'hourly'),
-        '12h': (now - timedelta(hours=12), 'hourly'),
-        '24h': (now - timedelta(hours=24), 'hourly'),
-        '3d':  (now - timedelta(days=3),   'hourly'),
-        '7d':  (now - timedelta(days=7),   'daily'),
-        'all': (None,                       'daily'),
+        '30m': (timedelta(minutes=30), '5min'),
+        '1h':  (timedelta(hours=1),  '5min'),
+        '2h':  (timedelta(hours=2),  '5min'),
+        '6h':  (timedelta(hours=6),  'hourly'),
+        '12h': (timedelta(hours=12), 'hourly'),
+        '24h': (timedelta(hours=24), 'hourly'),
+        '3d':  (timedelta(days=3),   'hourly'),
+        '7d':  (timedelta(days=7),   'daily'),
+        'all': (None,                 'daily'),
     }
-    since, granularity = _range_to_since_and_granularity(range_str, config)
+    since, until, granularity = _range_to_since_and_granularity(range_str, config, anchor)
     since_clause = "AND timestamp_local >= ?" if since else ""
-    params = [since] if since else []
+    until_clause = "AND timestamp_local < ?" if until else ""
+    window_clause = f"{since_clause} {until_clause}"
+    since_params = [since] if since else []
+    until_params = [until] if until else []
+    params = since_params + until_params
     bucket = _time_bucket_expr(granularity)
 
     volume_rows = conn.execute(f"""
         SELECT {bucket} AS ts, COUNT(*) AS count
-        FROM events WHERE event_type = 'chat:message' {since_clause}
+        FROM events WHERE event_type = 'chat:message' {window_clause}
         GROUP BY ts ORDER BY ts ASC
     """, params).fetchall()
 
@@ -1029,7 +1052,7 @@ def get_chat_chart(range_str='24h'):
         SELECT display_name AS name, COUNT(*) AS count
         FROM events
         WHERE event_type = 'chat:message' AND display_name IS NOT NULL
-        {since_clause}
+        {window_clause}
         GROUP BY display_name ORDER BY count DESC LIMIT 10
     """, params).fetchall()
 
@@ -1045,41 +1068,48 @@ def get_chat_chart(range_str='24h'):
 # ============================================================
 
 
-def get_tts_sfx_analytics(since=None):
+def get_tts_sfx_analytics(since=None, until=None):
     """Aggregate analytics for TTS and SFX events."""
     conn = _get_conn()
     since_clause = ""
+    until_clause = ""
     since_params = []
+    until_params = []
     if since:
         since_clause = " AND timestamp_local >= ?"
         since_params = [since]
+    if until:
+        until_clause = " AND timestamp_local < ?"
+        until_params = [until]
+    window_clause = since_clause + until_clause
+    window_params = since_params + until_params
 
     top_rooms = conn.execute("""
         SELECT room, SUM(count) as count FROM (
             SELECT room, COUNT(*) as count
             FROM events WHERE event_type = 'tts:update' AND room IS NOT NULL
-        """ + since_clause + """ GROUP BY room
+        """ + window_clause + """ GROUP BY room
             UNION ALL
             SELECT room, COUNT(*) as count
             FROM events WHERE event_type = 'sfx:update' AND room IS NOT NULL
-        """ + since_clause + """  GROUP BY room
+        """ + window_clause + """  GROUP BY room
         ) GROUP BY room ORDER BY count DESC LIMIT 10
-    """, since_params + since_params).fetchall()
+    """, window_params + window_params).fetchall()
 
     top_tts_senders = conn.execute("""
         SELECT display_name as sender, COUNT(*) as count,
             COALESCE(SUM(cost), 0) as spend
         FROM events WHERE event_type = 'tts:update' AND display_name IS NOT NULL
-    """ + since_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", since_params).fetchall()
+    """ + window_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", window_params).fetchall()
 
     top_sfx_senders = conn.execute("""
         SELECT display_name as sender, COUNT(*) as count,
             COALESCE(SUM(cost), 0) as spend
         FROM events WHERE event_type = 'sfx:update' AND display_name IS NOT NULL
-    """ + since_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", since_params).fetchall()
+    """ + window_clause + " GROUP BY sender ORDER BY spend DESC LIMIT 10", window_params).fetchall()
 
-    hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
-    hourly_params = since_params if since else []
+    hourly_clause = window_clause if (since or until) else " AND timestamp_local >= datetime('now', '-24 hours')"
+    hourly_params = window_params if (since or until) else []
     hourly_raw = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
@@ -1113,26 +1143,33 @@ def get_tts_sfx_analytics(since=None):
 # ============================================================
 
 
-def get_chat_analytics(since=None):
+def get_chat_analytics(since=None, until=None):
     """Aggregate analytics for chat messages."""
     conn = _get_conn()
     since_clause = ""
+    until_clause = ""
     since_params = []
+    until_params = []
     if since:
         since_clause = " AND timestamp_local >= ?"
         since_params = [since]
+    if until:
+        until_clause = " AND timestamp_local < ?"
+        until_params = [until]
+    window_clause = since_clause + until_clause
+    window_params = since_params + until_params
 
     total = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE event_type = 'chat:message'" + since_clause, since_params
+        "SELECT COUNT(*) FROM events WHERE event_type = 'chat:message'" + window_clause, window_params
     ).fetchone()[0]
 
     top_chatters = conn.execute("""
         SELECT display_name as name, COUNT(*) as count
         FROM events WHERE event_type = 'chat:message' AND display_name IS NOT NULL
-    """ + since_clause + " GROUP BY name ORDER BY count DESC LIMIT 15", since_params).fetchall()
+    """ + window_clause + " GROUP BY name ORDER BY count DESC LIMIT 15", window_params).fetchall()
 
-    hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
-    hourly_params = since_params if since else []
+    hourly_clause = window_clause if (since or until) else " AND timestamp_local >= datetime('now', '-24 hours')"
+    hourly_params = window_params if (since or until) else []
     hourly = conn.execute("""
         SELECT strftime('%H', timestamp_local) as hour,
             strftime('%Y-%m-%dT%H:00:00Z', timestamp_local) as ts,
@@ -1696,19 +1733,23 @@ def _chat_mood_label(avg):
     return "Hostile"
 
 
-def _sentiment_base(conn, type_clause, since=None, label_fn=None):
+def _sentiment_base(conn, type_clause, since=None, until=None, label_fn=None):
     """Shared sentiment query logic for a given event type filter.
     Single query computes both hourly breakdown and overall stats."""
     since_clause = ""
+    until_clause = ""
     params = []
     if since:
         since_clause = " AND timestamp_local >= ?"
         params.append(since)
+    if until:
+        until_clause = " AND timestamp_local < ?"
+        params.append(until)
 
     base_where = f"{type_clause} AND sentiment IS NOT NULL"
 
-    hourly_clause = since_clause if since else " AND timestamp_local >= datetime('now', '-24 hours')"
-    hourly_params = list(params) if since else []
+    hourly_clause = (since_clause + until_clause) if (since or until) else " AND timestamp_local >= datetime('now', '-24 hours')"
+    hourly_params = list(params) if (since or until) else []
 
     # Single query: hourly rows + one overall row via UNION ALL
     rows = conn.execute(f"""
@@ -1749,22 +1790,26 @@ def _sentiment_base(conn, type_clause, since=None, label_fn=None):
     }
 
 
-def get_chat_sentiment(since=None):
+def get_chat_sentiment(since=None, until=None):
     """Sentiment analytics for chat messages."""
     conn = _get_conn()
-    return _sentiment_base(conn, "event_type = 'chat:message'", since, label_fn=_chat_mood_label)
+    return _sentiment_base(conn, "event_type = 'chat:message'", since, until=until, label_fn=_chat_mood_label)
 
 
-def get_tts_sentiment(since=None):
+def get_tts_sentiment(since=None, until=None):
     """Sentiment analytics for TTS messages, including per-target breakdown."""
     conn = _get_conn()
-    result = _sentiment_base(conn, "event_type = 'tts:update'", since)
+    result = _sentiment_base(conn, "event_type = 'tts:update'", since, until=until)
 
     since_clause = ""
+    until_clause = ""
     params = []
     if since:
         since_clause = " AND timestamp_local >= ?"
         params.append(since)
+    if until:
+        until_clause = " AND timestamp_local < ?"
+        params.append(until)
 
     by_target = conn.execute(f"""
         SELECT target,
@@ -1775,6 +1820,7 @@ def get_tts_sentiment(since=None):
             AND sentiment IS NOT NULL
             AND target IS NOT NULL
             {since_clause}
+            {until_clause}
         GROUP BY target ORDER BY avg_sentiment DESC
     """, params).fetchall()
 
