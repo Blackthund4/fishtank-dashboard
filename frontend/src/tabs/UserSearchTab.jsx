@@ -151,7 +151,6 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
                 style={{ height: '100%' }}
                 data={timeline}
                 overscan={100}
-                defaultItemHeight={60}
                 itemContent={(index, item) => (
                   <div className="flex items-start gap-2 p-2 mb-1 bg-tank-surface border border-tank-border rounded hover:border-tank-accent/20 transition-colors">
                     <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 mt-0.5 ${item.iconBg}`}>

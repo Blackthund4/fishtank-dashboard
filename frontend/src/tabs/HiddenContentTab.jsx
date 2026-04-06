@@ -32,7 +32,7 @@ export default function HiddenContentTab({ itemCatalog }) {
     const params = new URLSearchParams({ limit: '200' })
     if (filterTarget) params.set('target', filterTarget)
     if (search.trim()) params.set('search', search.trim())
-    if (beforeId != null) params.set('before_id', beforeId)
+    if (beforeId != null) params.set('offset', beforeId)
 
     fetch(`/api/hidden-content?${params}`)
       .then(okJson)
@@ -50,8 +50,8 @@ export default function HiddenContentTab({ itemCatalog }) {
 
   const loadMore = useCallback(() => {
     if (loading || !hasMore || items.length === 0) return
-    loadPage(items[items.length - 1].id)
-  }, [loading, hasMore, items])
+    loadPage(items.length)
+  }, [loading, hasMore, items.length, filterTarget, search])
 
   function handleSearch(e) {
     e.preventDefault()
@@ -107,7 +107,6 @@ export default function HiddenContentTab({ itemCatalog }) {
               data={items}
               endReached={loadMore}
               overscan={100}
-              defaultItemHeight={120}
               itemContent={(index, e) => {
                 const d = e.data || {}
                 const iid = String(d.itemId || '')

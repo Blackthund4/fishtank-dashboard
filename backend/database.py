@@ -139,14 +139,6 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_fishtoys_target_item
             ON events(event_type, target, item_id)
             WHERE event_type = 'fishtoy:used' AND target IS NOT NULL;
-
-        -- Covering indexes for aggregate queries (avoid table lookups for SUM(cost))
-        CREATE INDEX IF NOT EXISTS idx_events_sender_cost
-            ON events(event_type, display_name, cost)
-            WHERE display_name IS NOT NULL AND cost IS NOT NULL;
-        CREATE INDEX IF NOT EXISTS idx_fishtoys_target_item_cost
-            ON events(event_type, target, item_id, cost)
-            WHERE event_type = 'fishtoy:used' AND target IS NOT NULL;
     """)
     conn.commit()
 
@@ -571,36 +563,18 @@ def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0, be
     ]
 
 
-def get_targets(since=None):
-    """Get all distinct fishtoy targets with total count and spend.
-
-    Args:
-        since: optional ISO timestamp to limit the time window (default: 30 days).
-               Pass 'all' for full history.
-    """
+def get_targets():
+    """Get all distinct fishtoy targets with total count and spend from the full event history."""
     conn = _get_conn()
-    conditions = ["event_type = ?", "target IS NOT NULL"]
-    params = [FISHTOY_TYPE]
-
-    if since != "all":
-        if since:
-            conditions.append("timestamp_local >= ?")
-            params.append(since)
-        else:
-            # Default: 30 days
-            from datetime import datetime, timedelta, timezone
-            default_since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-            conditions.append("timestamp_local >= ?")
-            params.append(default_since)
-
-    rows = conn.execute(f"""
+    rows = conn.execute("""
         SELECT target, COUNT(*) as count,
             COALESCE(SUM(cost), 0) as spend
         FROM events
-        WHERE {" AND ".join(conditions)}
+        WHERE event_type = ?
+            AND target IS NOT NULL
         GROUP BY target
         ORDER BY count DESC
-    """, params).fetchall()
+    """, (FISHTOY_TYPE,)).fetchall()
     return [{"target": r["target"], "count": r["count"], "spend": r["spend"]} for r in rows]
 
 
@@ -1215,21 +1189,14 @@ def get_chat_analytics(since=None, until=None):
 # ============================================================
 
 
-def get_hidden_content(target=None, search=None, limit=200, before_id=None):
-    """Get only fishtoy events that have metadata (hidden content).
-
-    Uses keyset pagination via before_id for constant-time paging.
-    """
+def get_hidden_content(target=None, search=None, limit=200, offset=0):
+    """Get only fishtoy events that have metadata (hidden content)."""
     conn = _get_conn()
     conditions = [
         "event_type = ?",
         "metadata IS NOT NULL",
     ]
     params = [FISHTOY_TYPE]
-
-    if before_id is not None:
-        conditions.append("id < ?")
-        params.append(before_id)
 
     if target:
         conditions.append("target = ?")
@@ -1241,8 +1208,8 @@ def get_hidden_content(target=None, search=None, limit=200, before_id=None):
 
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
     query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = conn.execute(query, params).fetchall()
     return [
@@ -1330,31 +1297,6 @@ def get_polls(limit=50):
         FROM events WHERE event_type IN ('poll:start', 'poll:stop')
         ORDER BY id DESC LIMIT ?
     """, (limit,)).fetchall()
-
-    # Pre-fetch vote data for all poll:stop rows in one query instead of N+1
-    stop_ids = [row["id"] for row in rows if row["event_type"] == "poll:stop"]
-    vote_lookup = {}  # stop_id -> vote_data
-    if stop_ids:
-        # Get all poll:vote rows in the id range, then match each stop to its preceding vote
-        min_id = min(stop_ids)
-        vote_rows = conn.execute("""
-            SELECT id, data FROM events
-            WHERE event_type = 'poll:vote' AND id < ?
-            ORDER BY id DESC
-        """, (max(stop_ids),)).fetchall()
-        # Match each stop to its nearest preceding vote (vote_rows already desc by id)
-        for sid in stop_ids:
-            # Find the first vote with id < sid (vote_ids is desc, so first >= works)
-            for vr in vote_rows:
-                if vr["id"] < sid:
-                    try:
-                        vdata = json.loads(vr["data"])
-                        if isinstance(vdata, list):
-                            vote_lookup[sid] = vdata
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                    break
-
     # Collect poll:stop pids so we can filter out their matching poll:start
     stop_pids = set()
     results = []
@@ -1370,9 +1312,15 @@ def get_polls(limit=50):
         if row["event_type"] == "poll:stop":
             if pid:
                 stop_pids.add(pid)
-            # Attach pre-fetched vote tallies
-            if row["id"] in vote_lookup:
-                evt["data"]["votes"] = vote_lookup[row["id"]]
+            # Attach final vote tallies from the last poll:vote before this poll:stop
+            vote_row = conn.execute(
+                "SELECT data FROM events WHERE event_type = 'poll:vote' AND id < ? ORDER BY id DESC LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if vote_row:
+                vote_data = json.loads(vote_row["data"])
+                if isinstance(vote_data, list):
+                    evt["data"]["votes"] = vote_data
             results.append(evt)
         else:
             # poll:start — only include if no matching poll:stop exists

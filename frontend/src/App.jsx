@@ -387,19 +387,15 @@ export default function App() {
 
   // Refresh stats periodically
   useEffect(() => {
-    let controller = new AbortController()
     const interval = setInterval(() => {
-      controller.abort()
-      controller = new AbortController()
-      const opts = { signal: controller.signal }
-      fetch('/api/stats', opts).then(okJson).then(raw => setStats(normalizeStats(raw))).catch(() => {})
+      fetch('/api/stats').then(okJson).then(raw => setStats(normalizeStats(raw))).catch(() => {})
       const since24h = new Date(Date.now() - 24 * 3600000).toISOString()
-      fetch(`/api/stats?since=${encodeURIComponent(since24h)}`, opts).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
-      fetch('/api/stocks', opts).then(okJson).then(setStocks).catch(() => {})
-      fetch('/api/feature-toggles', opts).then(okJson).then(setFeatureToggles).catch(() => {})
-      fetch('/api/fishtoy-availability', opts).then(okJson).then(setFishtoyStatus).catch(() => {})
+      fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
+      fetch('/api/stocks').then(okJson).then(setStocks).catch(() => {})
+      fetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
+      fetch('/api/fishtoy-availability').then(okJson).then(setFishtoyStatus).catch(() => {})
     }, 60000)
-    return () => { clearInterval(interval); controller.abort() }
+    return () => clearInterval(interval)
   }, [])
 
   // Poll duration counter
@@ -985,7 +981,6 @@ export default function App() {
                 startReached={activityAnchor ? loadNewerActivity : undefined}
                 endReached={loadMoreActivity}
                 overscan={200}
-                defaultItemHeight={80}
                 itemContent={(index, item) => (
                   <div className="px-2 py-0.5">
                     {item.event === 'fishtoy:used' ? (
@@ -1489,7 +1484,6 @@ export default function App() {
                   style={{ height: '100%' }}
                   data={sortedChats}
                   overscan={100}
-                  defaultItemHeight={60}
                   components={{
                     Header: activeSuperchats.length > 0 ? () => (
                       <div className="space-y-1 mb-2 px-2 pt-2">

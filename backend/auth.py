@@ -105,8 +105,6 @@ class AuthManager:
         self._lock = Lock()
         self._last_login = None
         self._login_count = 0
-        import threading
-        self._thread_local = threading.local()  # per-thread session for connection reuse
 
         # Determine auth mode
         if self._email and self._password:
@@ -254,17 +252,10 @@ class AuthManager:
         return json.dumps([self._access_token, self._refresh_token])
 
     def get_session(self):
-        """Return a requests.Session with the auth cookie set.
-
-        Uses thread-local sessions for connection pooling (TLS reuse)
-        while remaining thread-safe. Callers should NOT call .close().
-        """
-        if not hasattr(self._thread_local, "session") or self._thread_local.session is None:
-            self._thread_local.session = http_requests.Session()
-        session = self._thread_local.session
-        # Refresh cookie each call (tokens may have changed after re-auth)
-        session.cookies.clear()
+        """Return a requests.Session with the auth cookie set."""
+        session = http_requests.Session()
         if self._mode == "manual":
+            # Manual cookie is already in the correct format from the user
             raw = self._cookie_override.strip().strip("'\"").replace("\n", "").replace("\r", "")
             if raw:
                 session.cookies.set(COOKIE_NAME, raw, domain="api.fishtank.live")

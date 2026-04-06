@@ -18,8 +18,6 @@ export default defineConfig(({ mode }) => ({
       output: {
         manualChunks: {
           'recharts-vendor': ['recharts'],
-          'lucide-vendor': ['lucide-react'],
-          'virtuoso-vendor': ['react-virtuoso'],
         },
       },
     },
