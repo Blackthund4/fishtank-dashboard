@@ -105,7 +105,8 @@ class AuthManager:
         self._lock = Lock()
         self._last_login = None
         self._login_count = 0
-        self._shared_session = None  # persistent requests.Session for connection reuse
+        import threading
+        self._thread_local = threading.local()  # per-thread session for connection reuse
 
         # Determine auth mode
         if self._email and self._password:
@@ -255,13 +256,13 @@ class AuthManager:
     def get_session(self):
         """Return a requests.Session with the auth cookie set.
 
-        Reuses a persistent session for connection pooling (TLS reuse).
-        Callers should NOT call .close() on the returned session.
+        Uses thread-local sessions for connection pooling (TLS reuse)
+        while remaining thread-safe. Callers should NOT call .close().
         """
-        if self._shared_session is None:
-            self._shared_session = http_requests.Session()
-        session = self._shared_session
-        # Refresh cookie on the shared session each call (tokens may have changed)
+        if not hasattr(self._thread_local, "session") or self._thread_local.session is None:
+            self._thread_local.session = http_requests.Session()
+        session = self._thread_local.session
+        # Refresh cookie each call (tokens may have changed after re-auth)
         session.cookies.clear()
         if self._mode == "manual":
             raw = self._cookie_override.strip().strip("'\"").replace("\n", "").replace("\r", "")

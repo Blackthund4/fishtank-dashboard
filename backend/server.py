@@ -25,7 +25,6 @@ import types
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor
 from threading import Thread, Event, Lock
 
 import requests as http_requests
@@ -631,18 +630,6 @@ _last_stock_poll = None     # datetime of last successful stock poll
 _socket_connected_at = None # datetime when current socket connection was established
 
 
-def _fetch_url(url, session):
-    """Fetch a single URL, returning (url, response) or (url, None) on error."""
-    try:
-        r = session.get(url, timeout=10)
-        if r.status_code in (401, 403):
-            return (url, None, r.status_code)
-        return (url, r, None)
-    except Exception as e:
-        print(f"[WARN] Catalog fetch failed for {url}: {e}")
-        return (url, None, None)
-
-
 def load_catalog():
     """Fetch item catalog, contestants, room mapping, and stocks from fishtank API."""
     global _item_catalog, _contestants, _room_map, _stocks
@@ -652,48 +639,28 @@ def load_catalog():
 
     session = auth.get_session()
 
-    urls = [
-        "https://api.fishtank.live/v1/items",
-        "https://api.fishtank.live/v1/contestants",
-        "https://api.fishtank.live/v1/live-streams",
-        "https://api.fishtank.live/v1/stocks",
-    ]
-
-    # Fetch all 4 endpoints concurrently
-    results = {}
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(_fetch_url, url, session): url for url in urls}
-        for future in futures:
-            url, resp, err_code = future.result()
-            results[url] = resp
-            if err_code in (401, 403):
-                print(f"[!] Catalog load: auth expired on {url}. Attempting re-auth...")
-                if auth.handle_401():
-                    session = auth.get_session()
-                    # Re-fetch only the failed endpoint
-                    try:
-                        r = session.get(url, timeout=10)
-                        results[url] = r if r.status_code == 200 else None
-                    except Exception:
-                        results[url] = None
-
-    # Process items
-    r = results.get("https://api.fishtank.live/v1/items")
-    if r and r.status_code == 200:
-        try:
+    # Load item catalog
+    try:
+        r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+        if r.status_code in (401, 403):
+            print("[!] Catalog load: auth expired. Attempting re-auth...")
+            if auth.handle_401():
+                session = auth.get_session()
+                r = session.get("https://api.fishtank.live/v1/items", timeout=10)
+        if r.status_code == 200:
             raw = r.json()
             with _catalog_lock:
                 for key, val in raw.items():
                     if isinstance(val, dict) and "id" in val:
                         _item_catalog[str(val["id"])] = val
             print(f"[OK] Loaded {len(_item_catalog)} items ({sum(1 for v in _item_catalog.values() if v.get('type') in CAPTURE_TYPES)} fishtoys/bigtoys)")
-        except Exception as e:
-            print(f"[WARN] Could not load item catalog: {e}")
+    except Exception as e:
+        print(f"[WARN] Could not load item catalog: {e}")
 
-    # Process contestants
-    r = results.get("https://api.fishtank.live/v1/contestants")
-    if r and r.status_code == 200:
-        try:
+    # Load contestants
+    try:
+        r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
+        if r.status_code == 200:
             data = r.json()
             all_contestants = data.get("contestants", [])
             season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
@@ -701,13 +668,13 @@ def load_catalog():
                 _contestants.clear()
                 _contestants.extend(season_5 if season_5 else all_contestants)
             print(f"[OK] Loaded {len(_contestants)} contestants (season 5: {len(season_5)}, total: {len(all_contestants)})")
-        except Exception as e:
-            print(f"[WARN] Could not load contestants: {e}")
+    except Exception as e:
+        print(f"[WARN] Could not load contestants: {e}")
 
-    # Process room mapping from live-streams
-    r = results.get("https://api.fishtank.live/v1/live-streams")
-    if r and r.status_code == 200:
-        try:
+    # Load room mapping from live-streams
+    try:
+        r = session.get("https://api.fishtank.live/v1/live-streams", timeout=10)
+        if r.status_code == 200:
             data = r.json()
             streams = data.get("liveStreams", [])
             with _catalog_lock:
@@ -717,20 +684,20 @@ def load_catalog():
                     name = stream.get("name", sid)
                     _room_map[sid] = name
             print(f"[OK] Loaded {len(_room_map)} room mappings")
-        except Exception as e:
-            print(f"[WARN] Could not load room mappings: {e}")
+    except Exception as e:
+        print(f"[WARN] Could not load room mappings: {e}")
 
-    # Process stocks
-    r = results.get("https://api.fishtank.live/v1/stocks")
-    if r and r.status_code == 200:
-        try:
+    # Load stocks
+    try:
+        r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
+        if r.status_code == 200:
             data = r.json()
             with _catalog_lock:
                 _stocks.clear()
                 _stocks.extend(data.get("stocks", []))
             print(f"[OK] Loaded {len(_stocks)} stocks")
-        except Exception as e:
-            print(f"[WARN] Could not load stocks: {e}")
+    except Exception as e:
+        print(f"[WARN] Could not load stocks: {e}")
 
     # Load feature toggle state from database (local, no HTTP)
     try:
