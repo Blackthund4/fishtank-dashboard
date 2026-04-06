@@ -495,12 +495,17 @@ def make_event_handler(evt):
         if evt == "feature-toggles:update":
             _track_feature_toggle(data)
 
-        # Enrich superchat with displayName if missing
+        # Enrich superchat with displayName — prefer user.displayName over top-level
         if evt == "super-chat:new" and isinstance(data, dict):
-            # Normalize nested user.displayName to top-level
-            if not data.get("displayName"):
-                user = data.get("user") or {}
-                data["displayName"] = user.get("displayName") or data.get("username") or ""
+            user = data.get("user") or {}
+            # user.displayName is the canonical display name; top-level displayName
+            # may be the login handle (username) on some payloads
+            data["displayName"] = (
+                user.get("displayName")
+                or data.get("displayName")
+                or data.get("username")
+                or ""
+            )
             # Fetch from profile API as last resort
             if not data.get("displayName"):
                 user_id = data.get("userId")
@@ -690,10 +695,14 @@ def seed_superchats_from_rest():
             sc_id = str(sc.get("id", ""))
             if not sc_id or sc_id in known_ids:
                 continue
-            # Normalize nested user.displayName to top-level
-            if not sc.get("displayName"):
-                user = sc.get("user") or {}
-                sc["displayName"] = user.get("displayName") or sc.get("username") or ""
+            # Prefer user.displayName over top-level (may be login handle)
+            user = sc.get("user") or {}
+            sc["displayName"] = (
+                user.get("displayName")
+                or sc.get("displayName")
+                or sc.get("username")
+                or ""
+            )
             # Fetch from profile API as last resort
             if not sc.get("displayName") and sc.get("userId"):
                 profile = _fetch_user_profile(sc["userId"])
