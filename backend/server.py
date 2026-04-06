@@ -212,9 +212,17 @@ def db_backup_poller():
             dst.close()
             src.close()
 
+            # Compress the backup to save disk space (~70% smaller)
+            import gzip as _gzip
+            gz_path = backup_path + ".gz"
+            with open(backup_path, "rb") as f_in, _gzip.open(gz_path, "wb") as f_out:
+                while chunk := f_in.read(1 << 20):  # 1MB chunks
+                    f_out.write(chunk)
+            Path(backup_path).unlink()  # remove uncompressed
+
             _last_backup = datetime.now(timezone.utc)
-            size_mb = Path(backup_path).stat().st_size / (1024 * 1024)
-            print(f"[OK] Database backup: {backup_path} ({size_mb:.1f} MB)")
+            size_mb = Path(gz_path).stat().st_size / (1024 * 1024)
+            print(f"[OK] Database backup: {gz_path} ({size_mb:.1f} MB)")
         except Exception as e:
             print(f"[!] Database backup failed: {e}")
 
