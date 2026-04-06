@@ -30,6 +30,7 @@ from threading import Thread, Event, Lock
 import requests as http_requests
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
@@ -366,8 +367,6 @@ def _fetch_user_profile(user_id):
             return result
     except Exception as e:
         print(f"[!] Failed to fetch profile for {user_id}: {e}")
-    finally:
-        session.close()
     return {}
 
 
@@ -645,7 +644,6 @@ def load_catalog():
             if r.status_code in (401, 403):
                 print("[!] Catalog load: auth expired. Attempting re-auth...")
                 if auth.handle_401():
-                    session.close()
                     session = auth.get_session()
                     r = session.get("https://api.fishtank.live/v1/items", timeout=10)
             if r.status_code == 200:
@@ -709,8 +707,6 @@ def load_catalog():
                 print(f"[OK] Loaded {len(toggles)} feature toggle states: {', '.join(status_parts)}")
         except Exception as e:
             print(f"[WARN] Could not load feature toggles: {e}")
-    finally:
-        session.close()
 
 
 def _backfill_empty_sc_names():
@@ -780,8 +776,6 @@ def seed_superchats_from_rest():
             print(f"[OK] Seeded {new_count} superchats from REST API")
     except Exception as e:
         print(f"[WARN] Superchat seed failed: {e}")
-    finally:
-        session.close()
 
 
 def fishtoy_poller():
@@ -805,7 +799,6 @@ def fishtoy_poller():
                 if r.status_code in (401, 403):
                     print(f"[!] Fishtoy poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
                     if auth.handle_401():
-                        session.close()
                         session = auth.get_session()
                         print("[OK] Fishtoy poller: re-auth successful, resuming.")
                     else:
@@ -878,8 +871,6 @@ def fishtoy_poller():
                 print(f"[!] Fishtoy poll error: {e}")
 
             _poller_stop.wait(FISHTOY_POLL_INTERVAL)
-    finally:
-        session.close()
 
 
 def stock_poller():
@@ -897,7 +888,6 @@ def stock_poller():
                 if r.status_code in (401, 403):
                     print(f"[!] Stock poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
                     if auth.handle_401():
-                        session.close()
                         session = auth.get_session()
                         print("[OK] Stock poller: re-auth successful.")
                 elif r.status_code == 200:
@@ -913,8 +903,6 @@ def stock_poller():
                 pass
 
             _poller_stop.wait(60)
-    finally:
-        session.close()
 
 
 def catalog_refresh_poller():
@@ -933,7 +921,6 @@ def catalog_refresh_poller():
                 r = session.get("https://api.fishtank.live/v1/items", timeout=10)
                 if r.status_code in (401, 403):
                     if auth.handle_401():
-                        session.close()
                         session = auth.get_session()
                         r = session.get("https://api.fishtank.live/v1/items", timeout=10)
                 if r.status_code == 200:
@@ -967,8 +954,6 @@ def catalog_refresh_poller():
                         print(f"[OK] Catalog refresh: contestants updated ({old_count} -> {len(_contestants)})")
             except Exception as e:
                 print(f"[WARN] Catalog refresh failed (contestants): {e}")
-        finally:
-            session.close()
 
         _poller_stop.wait(600)  # 10 minutes
 
@@ -1036,6 +1021,7 @@ app.add_middleware(
     allow_headers=["content-type"],
     max_age=3600,
 )
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # Rate limiting middleware
