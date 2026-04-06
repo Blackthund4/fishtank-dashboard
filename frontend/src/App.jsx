@@ -139,6 +139,7 @@ export default function App() {
   const [knownVersion, setKnownVersion] = useState(null)
   const [chats, setChats] = useState([])
   const [roleChats, setRoleChats] = useState(null)       // null = use chats, or server-fetched role-filtered array
+  const [roleChatsLoading, setRoleChatsLoading] = useState(false)
   const [activity, setActivity] = useState([])
   const [stats, setStats] = useState({
     fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
@@ -511,13 +512,14 @@ export default function App() {
 
   // Fetch role-filtered chats from server when a role filter is active
   useEffect(() => {
-    if (chatFilter === 'all') { setRoleChats(null); return }
+    if (chatFilter === 'all') { setRoleChats(null); setRoleChatsLoading(false); return }
     const ac = new AbortController()
-    setRoleChats([])  // clear immediately so stale results don't linger
+    setRoleChats([])
+    setRoleChatsLoading(true)
     fetch(`/api/events?type=chat:message&limit=500&role=${chatFilter}`, { signal: ac.signal })
       .then(okJson)
-      .then(events => setRoleChats(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))))
-      .catch(() => {})
+      .then(events => { setRoleChats(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))); setRoleChatsLoading(false) })
+      .catch(() => setRoleChatsLoading(false))
     return () => ac.abort()
   }, [chatFilter])
 
@@ -1496,7 +1498,7 @@ export default function App() {
             >
               {sortedChats.length === 0 ? (
                 <div className="p-2">
-                  <EmptyState text="Waiting for chat messages..." />
+                  <EmptyState text={chatFilter !== 'all' ? (roleChatsLoading ? 'Looking for messages...' : 'No messages yet') : 'Waiting for chat messages...'} />
                 </div>
               ) : (
                 <Virtuoso
