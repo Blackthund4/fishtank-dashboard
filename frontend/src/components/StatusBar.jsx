@@ -1,5 +1,6 @@
 import { useEffect, useState, memo } from 'react'
 import { Fish, MessageSquare, Volume2, Clock } from 'lucide-react'
+import { okJson } from '../utils/fetchUtils'
 
 // Isolated timer component — re-renders every second without affecting parent
 function TimeDisplay() {
@@ -42,7 +43,7 @@ export default function StatusBar({ isConnected, stats }) {
   useEffect(() => {
     const check = () => {
       fetch('/api/status')
-        .then((r) => r.json())
+        .then(okJson)
         .then(setHealth)
         .catch(() => setHealth(null))
     }

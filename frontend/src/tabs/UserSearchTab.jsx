@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useCallback } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { Search, MessageSquare, Volume2, Music, Fish, User } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
+import { okJson } from '../utils/fetchUtils'
 
 export default function UserSearchTab({ itemCatalog, roomMap }) {
   const [query, setQuery] = useState('')
@@ -23,7 +24,7 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     if (suggestTimer.current) clearTimeout(suggestTimer.current)
     suggestTimer.current = setTimeout(() => {
       fetch(`/api/users/suggest?q=${encodeURIComponent(val.trim())}`)
-        .then(r => r.json())
+        .then(okJson)
         .then(data => { setSuggestions(data || []); setShowSuggestions(true) })
         .catch(() => setSuggestions([]))
     }, 250)
@@ -36,7 +37,7 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     // Auto-search
     setLoading(true)
     fetch(`/api/user/${encodeURIComponent(name)}`)
-      .then(r => r.json())
+      .then(okJson)
       .then(data => { setResults(data); setLoading(false); setActiveFilter('all') })
       .catch(() => { setResults(null); setLoading(false) })
   }
@@ -48,7 +49,7 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     if (!q) return
     setLoading(true)
     fetch(`/api/user/${encodeURIComponent(q)}`)
-      .then(r => r.json())
+      .then(okJson)
       .then(data => { setResults(data); setLoading(false); setActiveFilter('all') })
       .catch(() => { setResults(null); setLoading(false) })
   }
@@ -118,8 +119,8 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
             <div className="flex gap-2">
               {filters.map(f => {
                 const count = f.id === 'all'
-                  ? Object.values(results.totals).reduce((s, v) => s + v, 0)
-                  : results.totals[f.id] || 0
+                  ? Object.values(results.totals ?? {}).reduce((s, v) => s + v, 0)
+                  : (results.totals?.[f.id] || 0)
                 return (
                   <button
                     key={f.id}
@@ -200,7 +201,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
   const items = []
 
   if (filter === 'all' || filter === 'chat') {
-    results.chat.forEach(r => {
+    (results.chat || []).forEach(r => {
       items.push({
         id: r.id,
         type: 'chat',
@@ -222,7 +223,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
   }
 
   if (filter === 'all' || filter === 'tts') {
-    results.tts.forEach(r => {
+    (results.tts || []).forEach(r => {
       const roomCode = r.data?.room || ''
       items.push({
         id: r.id,
@@ -245,7 +246,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
   }
 
   if (filter === 'all' || filter === 'sfx') {
-    results.sfx.forEach(r => {
+    (results.sfx || []).forEach(r => {
       const roomCode = r.data?.room || ''
       items.push({
         id: r.id,
@@ -268,7 +269,7 @@ function buildTimeline(results, filter, itemCatalog = {}, roomMap = {}) {
   }
 
   if (filter === 'all' || filter === 'fishtoys') {
-    results.fishtoys.forEach(r => {
+    (results.fishtoys || []).forEach(r => {
       const iid = String(r.data?.itemId || '')
       const cat = itemCatalog[iid]
       const itemName = cat?.name || `Item #${iid}`
