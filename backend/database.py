@@ -139,6 +139,14 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_fishtoys_target_item
             ON events(event_type, target, item_id)
             WHERE event_type = 'fishtoy:used' AND target IS NOT NULL;
+
+        -- Covering indexes for aggregate queries (avoid table lookups for SUM(cost))
+        CREATE INDEX IF NOT EXISTS idx_events_sender_cost
+            ON events(event_type, display_name, cost)
+            WHERE display_name IS NOT NULL AND cost IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_fishtoys_target_item_cost
+            ON events(event_type, target, item_id, cost)
+            WHERE event_type = 'fishtoy:used' AND target IS NOT NULL;
     """)
     conn.commit()
 
