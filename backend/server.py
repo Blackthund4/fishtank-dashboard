@@ -1310,10 +1310,10 @@ def api_hidden_content(
     target: str = Query(None),
     search: str = Query(None),
     limit: int = Query(200, le=1000),
-    offset: int = Query(0, ge=0),
+    before_id: int = Query(None, description="Keyset pagination: return events with id < this"),
 ):
     """Get fishtoy events with hidden metadata content."""
-    return database.get_hidden_content(target=target, search=search, limit=limit, offset=offset)
+    return database.get_hidden_content(target=target, search=search, limit=limit, before_id=before_id)
 
 
 @app.get("/api/hidden-content/targets")

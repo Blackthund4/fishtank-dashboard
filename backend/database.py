@@ -1189,14 +1189,21 @@ def get_chat_analytics(since=None, until=None):
 # ============================================================
 
 
-def get_hidden_content(target=None, search=None, limit=200, offset=0):
-    """Get only fishtoy events that have metadata (hidden content)."""
+def get_hidden_content(target=None, search=None, limit=200, before_id=None):
+    """Get only fishtoy events that have metadata (hidden content).
+
+    Uses keyset pagination via before_id for constant-time paging.
+    """
     conn = _get_conn()
     conditions = [
         "event_type = ?",
         "metadata IS NOT NULL",
     ]
     params = [FISHTOY_TYPE]
+
+    if before_id is not None:
+        conditions.append("id < ?")
+        params.append(before_id)
 
     if target:
         conditions.append("target = ?")
@@ -1208,8 +1215,8 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
 
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
     query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
 
     rows = conn.execute(query, params).fetchall()
     return [
