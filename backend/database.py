@@ -1216,6 +1216,15 @@ def get_polls(limit=50):
         if row["event_type"] == "poll:stop":
             if pid:
                 stop_pids.add(pid)
+            # Attach final vote tallies from the last poll:vote before this poll:stop
+            vote_row = conn.execute(
+                "SELECT data FROM events WHERE event_type = 'poll:vote' AND id < ? ORDER BY id DESC LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if vote_row:
+                vote_data = json.loads(vote_row["data"])
+                if isinstance(vote_data, list):
+                    evt["data"]["votes"] = vote_data
             results.append(evt)
         else:
             # poll:start — only include if no matching poll:stop exists

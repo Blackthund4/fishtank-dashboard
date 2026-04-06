@@ -1216,8 +1216,9 @@ export default function App() {
                                       {isWinner && <Crown className="w-2.5 h-2.5 text-yellow-400" />}
                                       <span className={`truncate ${isWinner ? 'text-white font-medium' : 'text-tank-bright'}`}>{v.value}</span>
                                     </span>
-                                    <span className={`font-mono ml-1 ${isWinner ? 'text-purple-300' : 'text-purple-400/60'}`}>
+                                    <span className={`font-mono ml-1 flex items-center gap-1 ${isWinner ? 'text-purple-300' : 'text-purple-400/60'}`}>
                                       {score.toLocaleString()}t ({pct}%)
+                                      {!isWinner && topScore > 0 && <span className="text-red-400/70">[-{(topScore - score).toLocaleString()}t]</span>}
                                     </span>
                                   </div>
                                   <div className="h-2 bg-purple-900/30 rounded overflow-hidden">
@@ -1236,12 +1237,11 @@ export default function App() {
                             })}
                           </div>
                         )}
-                        {d.winner && (
+                        {d.winner && sortedVotes.length === 0 && (
                           <div className="text-[10px] mt-1 flex items-center gap-1">
                             <Crown className="w-3 h-3 text-yellow-400" />
                             <span className="text-tank-muted">Winner:</span>
                             <span className="font-semibold text-purple-400">{d.winner}</span>
-                            {votes.length > 0 && <span className="text-tank-muted ml-1">({total.toLocaleString()} tokens)</span>}
                           </div>
                         )}
                       </div>
