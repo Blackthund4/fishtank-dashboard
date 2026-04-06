@@ -107,17 +107,18 @@ The item catalog (`/v1/items`) provides human-readable names for item IDs, so th
 
 ### What I Built
 
-**Standalone fishtoy poller:** Single-file Python script. Polls `/v1/items/recent` every 2 seconds, deduplicates using a rolling ID window, resolves item names from the catalog, filters by item type (FISHTOY/BIGTOY only), writes to session-timestamped JSONL log files and terminal. ~145 lines.
+**Standalone fishtoy poller:** Single-file Python script. Polls `/v1/items/recent` every 5 seconds, deduplicates using a rolling ID window, resolves item names from the catalog, filters by item type (FISHTOY/BIGTOY only), writes to session-timestamped JSONL log files and terminal. ~145 lines.
 
 **Combined event logger:** Runs both the REST poller and Socket.IO connection in parallel threads. Thread-safe JSONL logging with `threading.Lock()`. Captures fishtoys, chat, TTS, SFX, polls, director messages, stock events, and system events in a single log. ~380 lines.
 
-**Real-time dashboard:** FastAPI backend + React/Tailwind frontend with four tabs:
-- **Dashboard tab:** Live fishtoy feed with collapsible cards, chat panel, TTS/SFX activity with room name resolution, STO-X ticker, target filtering with drill-down (click target to see stats, items used, top senders), metadata search. Director message banner and live poll bar with animated vote percentages appear at the top when active.
-- **Analytics tab:** STO-X cards with time filters (All/1hr/6hr/1day) and sort options, contestant grid with photos and stock prices, TTS/SFX analytics (most active rooms, top spenders, hourly bar charts), chat analytics (top chatters, hourly volume), poll history with results, director message timeline, TTS/SFX price change log, fishtoy availability status board.
-- **Hidden Content tab:** Dedicated searchable archive of fishtoy metadata (love letters, custom messages) with target filtering sidebar.
-- **User Search tab:** Cross-event-type username search with autocomplete, unified activity timeline, and type filters.
+**Real-time dashboard:** FastAPI backend + React/Tailwind frontend with five tabs:
+- **Dashboard tab:** Three-column layout with unified fishtoy/activity feed (virtual scrolling, keyset pagination, time-travel navigation), chat panel with superchat pinned banners and countdown timers, STO-X ticker with inline SVG sparklines, target filtering with drill-down stats, metadata search, and Last 24h sidebar with leaderboards. Director message banner and live poll bar with animated vote percentages and per-option colors appear at the top when active.
+- **Analytics tab:** STO-X cards with 7 range buttons (1h–IPO) and sort options, contestant grid with stock prices, TTS/SFX analytics with sentiment mood badges and per-section time filters, chat analytics with sentiment analysis, poll history with colored vote bars and crown icons, director message timeline, price change log, fishtoy availability status board, and system events. Supports anchor-based time-travel with drag-to-pan.
+- **Charts tab:** STO-X price history (LineChart, auto-downsampled), token spend trends (stacked BarChart + LineChart with TTS/SFX/Fishtoy/Poll/Superchat series and toggles), and chat volume (BarChart + top chatters). Nine time ranges from 30m to all-time.
+- **Hidden Content tab:** Dedicated searchable archive of fishtoy metadata (love letters, custom messages) with target filtering sidebar. Virtual scrolling with keyset pagination.
+- **User Search tab:** Cross-event-type username search with autocomplete, unified activity timeline, and type filters. Virtual scrolling.
 
-SQLite persistence with JSON storage and `json_extract` queries. Stock price history polled every 60 seconds. Browser WebSocket bridge for live updates. Single-process deployment (backend serves built frontend as static files). 22 REST API endpoints. 18 captured socket event types.
+SQLite persistence with extracted columns for performance-critical fields (avoiding `json_extract` in aggregates). Stock price history polled every 60 seconds. Browser WebSocket bridge for live updates. Single-process deployment (backend serves built frontend as static files). 35 REST API endpoints. 21 captured socket event types.
 
 **Research/diagnostic scripts:** API endpoint probers, raw WebSocket frame loggers, filtered catchall with auto-reconnect, cookie validation tool. These documented the investigation process and remain useful for discovering new events.
 
@@ -152,7 +153,7 @@ STOCK_PRICES: "stock:prices",
 
 This gave us the definitive, complete map of every event the server can send, organized into categories: chat (11 events), TTS/SFX (8 events), items (7 events), polls (3 events), stocks (7 events), notifications (3 events), trading (9 events), challenges (4 events), streams (5 events), and system events.
 
-From this registry, I selected 18 high-value events to capture: the ones that represent show-critical moments (polls, director messages, stock changes, price adjustments, feature toggles) without adding noise from per-user events like trading or DMs.
+From this registry, I selected the high-value events to capture: the ones that represent show-critical moments (polls, director messages, stock changes, price adjustments, feature toggles, superchats) without adding noise from per-user events like trading or DMs. The event list has grown to 21 as new features were added (superchats, chat room tracking, viewer presence).
 
 ### Phase 9: Solving the Duplicate Event Problem
 
@@ -174,11 +175,11 @@ Several data quality issues emerged during live testing:
 
 ### Technical Decisions Worth Discussing
 
-**Monkey-patching vs. forking:** Chose to patch fishclient at runtime rather than maintain a fork. This keeps the fix in one file and doesn't require managing a custom package. The tradeoff is fragility if the library updates, but the library hasn't been updated in months and the patches are well-documented. I submitted a PR with all fixes to give back to the project.
+**Monkey-patching vs. forking:** Initially chose to patch fishclient at runtime via monkey-patching to keep the fix in one file. Later vendored a full fork (`backend/vendor/fishclient/`) installed via `file:` reference in `requirements.txt`. The vendored approach is more maintainable: patches are visible in the codebase, and we can make deeper fixes (like the `_patched_listen` reconnection control) that monkey-patching can't reach. A PR with all fixes was submitted to the original project.
 
 **REST polling vs. WebSocket for fishtoys:** The polling approach has inherent latency (up to 2 seconds) and a theoretical event loss window (if 10+ fishtoys are redeemed within 2 seconds). In practice, fishtoys cost tokens, so redemption rate is low enough that 2-second polling with a 10-item buffer has zero observed loss.
 
-**SQLite with JSON storage:** Chose to store complete event payloads as JSON rather than normalizing into columns. This means queries use `json_extract()` which is slower than indexed column scans, but it provides forward compatibility: if the API adds new fields, they're automatically captured without schema changes. For the expected data volume (~38 MB/day with active chat), SQLite handles this fine.
+**SQLite with JSON + extracted columns:** Chose to store complete event payloads as JSON for forward compatibility (new API fields captured without schema changes), but performance-critical fields (`sentiment`, `cost`, `display_name`, `target`, `room`, `metadata`, `item_id`, `feature`) are extracted into real indexed columns on insert. All aggregate queries use these extracted columns instead of `json_extract()`, which was causing OOM kills on the 600k+ row table. The hybrid approach preserves the full raw payload while giving indexed query performance where it matters.
 
 **seen_ids pruning:** The deduplication set only keeps IDs from the last 3 polls (max 30 IDs). Without this, a 30-day season would accumulate ~690 MB of set memory. The rolling window is safe because the API returns items in reverse chronological order, so an item that's fallen off the 10-item response will never reappear.
 
@@ -263,7 +264,7 @@ Three additions to make the project deployable and maintainable:
 
 **Health endpoint.** `/api/health` reports socket connection status and uptime, fishtoy poller staleness (flagged at >30s), stock poller staleness (flagged at >120s), last event timestamp per event type, total event count, database accessibility, and auth status. Returns an overall "healthy" or "degraded" status with a specific issues list. Designed for external monitoring tools or a quick manual check.
 
-**Unit tests.** 50 pytest tests covering database operations (store, query, filter, paginate, analytics with time ranges, dedup, purge), filter functions (chat echo detection for tts/sfx/emote, notification gift detection, TTS event ID dedup), rate limiting (allows traffic, rejects over limit, per-IP isolation, prune lifecycle), poll state reconstruction (complete, missing stop, empty), and user search (case-insensitive, cross-event-type, autocomplete). All tests run against an in-memory SQLite database with a fresh schema per test.
+**Unit tests.** 110 pytest tests covering database operations (store, query, filter, paginate, analytics with time ranges, dedup, purge, extracted columns), filter functions (chat echo detection for tts/sfx/emote, notification gift detection, TTS event ID dedup), rate limiting (allows traffic, rejects over limit, per-IP isolation, prune lifecycle), poll state reconstruction (complete, missing stop, empty), user search (case-insensitive, cross-event-type, autocomplete), sentiment analysis, superchat handling, and chart data queries. All tests run against an in-memory SQLite database with a fresh schema per test.
 
 ### Phase 20: Security Hardening and VPS Deployment
 
@@ -285,9 +286,9 @@ With the show on day 19 of 30, capturing events 24/7 became urgent. The dashboar
 
 **VPS deployment.** Vultr Cloud Compute (Ubuntu 24.04 with Docker). Server hardening: SSH key-based auth with password login disabled, Docker log rotation (50MB max, 3 files), Ubuntu unattended security upgrades. Historical database (291k events) uploaded via SCP. UptimeRobot configured for external monitoring on `/api/health`.
 
-**Custom domain and Cloudflare.** Registered `fish-dash.com` through Cloudflare Registrar and configured it as a reverse proxy to the VPS. DNS A records point to the VPS IP with Cloudflare's proxy enabled, providing automatic SSL termination, DDoS protection, and CDN caching. SSL mode set to Flexible (Cloudflare terminates HTTPS, connects to VPS over HTTP on port 80). A cache bypass rule prevents Cloudflare from caching `/api/*` and `/ws` paths. Bot Fight Mode had to be disabled for UptimeRobot compatibility, and Email Address Obfuscation had to be disabled because it corrupts API JSON responses containing email-like strings.
+**Custom domain and Cloudflare.** Registered `fish-dash.com` through Cloudflare Registrar and configured it as a reverse proxy to the VPS. DNS A records point to the VPS IP with Cloudflare's proxy enabled, providing DDoS protection and CDN caching. SSL mode is Full (Strict) with a Cloudflare Origin Certificate installed on the server — the backend runs uvicorn with SSL directly, so encryption is end-to-end from browser to origin. A cache bypass rule prevents Cloudflare from caching `/api/*` and `/ws` paths. Bot Fight Mode is enabled with UptimeRobot IPs allowlisted via IP Access Rules. Email Address Obfuscation had to be disabled because it corrupts API JSON responses containing email-like strings.
 
-The UFW firewall accepts port 80 connections only from Cloudflare's published IP ranges, preventing anyone from bypassing Cloudflare by hitting the VPS IP directly. The only public entry points are port 22 (SSH, key-only) and port 80 (Cloudflare-only).
+The UFW firewall accepts port 443 connections only from Cloudflare's published IP ranges, preventing anyone from bypassing Cloudflare by hitting the VPS IP directly. The only public entry points are port 22 (SSH, key-only) and port 443 (Cloudflare-only).
 
 An unexpected issue surfaced with UptimeRobot: it sends HEAD requests by default, but FastAPI's `@app.get()` decorator only handles GET. HEAD requests returned 405 Method Not Allowed. The fix required two changes: adding HEAD to the CORS allowed methods, and changing the health endpoint's decorator from `@app.get()` to `@app.api_route("/api/health", methods=["GET", "HEAD"])`. Cloudflare's Bot Fight Mode also blocked UptimeRobot's automated requests until it was disabled.
 
@@ -303,13 +304,74 @@ Several rounds of improvements to make the codebase more robust and the frontend
 
 **STO-X time filters.** The Analytics tab's STO-X section gained time filter buttons (All/1hr/6hr/1day). Selecting a period computes reference prices from the filtered stock history, so the change percentages and movers sort reflect the chosen window rather than all-time data.
 
-**Docker security.** The container previously ran as root. A non-root `dashboard` user was added via `groupadd`/`useradd`, with an `entrypoint.sh` script that uses `gosu` to chown the data volume as root, then drops to the unprivileged user before starting the server. Memory limit was raised from 512MB to 1GB based on observed usage, with swap disabled (`memswap_limit` equal to `mem_limit`).
+**Docker security.** The container previously ran as root. A non-root `dashboard` user was added via `groupadd`/`useradd`, with an `entrypoint.sh` script that uses `gosu` to chown the data volume as root, then drops to the unprivileged user before starting the server. Memory limit was raised from 512MB to 1.5GB based on observed usage (including index creation on startup), with swap disabled (`memswap_limit` equal to `mem_limit`).
 
 **Dependency pinning.** Backend `requirements.txt` added upper bound constraints (e.g. `fishclient>=0.1.4,<1.0.0`) to prevent breaking changes from major version bumps. Frontend `package.json` switched from caret ranges (`^18.3.1`) to tilde ranges (`~18.3.1`) to allow patches but not minor version changes.
 
 **CORS default.** The `ALLOWED_ORIGINS` environment variable now defaults to `https://fish-dash.com,https://www.fish-dash.com` instead of a wildcard, so a fresh deployment is locked down without manual configuration.
 
 **Shared utilities.** Timestamp formatting logic (`formatTime` and `formatDateTime`) was duplicated across six frontend components. Extracted to a shared `utils/formatTime.js` module. The functions handle Unix timestamps (seconds or milliseconds), ISO strings, and smart date display (time-only for today, date+time for older events).
+
+### Phase 22: Superchat System
+
+Fishtank added "superchats" — token-purchased pinned chat messages with a chosen duration. Two socket events (`super-chat:new`, `super-chat:delete`) were added to the capture list. On startup, active superchats are seeded from the REST endpoint (`GET /v1/super-chat`).
+
+A subtle data quality issue emerged: some superchat payloads arrive with an empty `displayName` field and no `user` object. The fishtank API exposes a profile endpoint at `api.fishtank.live/v1/profile/{userId}` that can resolve the name. A cached profile fetcher (1h TTL, 500 entry cap with LRU eviction) handles lookups. An important gotcha: the profile URL must use `api.fishtank.live`, not `www.fishtank.live/api` (which returns 404). A startup backfill task patches existing events with empty names.
+
+The frontend shows pinned banners above the chat panel with countdown timers (pre-computed expiry timestamps). Banners auto-expire when their duration elapses. The Activity panel gained a superchat type filter.
+
+### Phase 23: Extracted Columns and Query Performance
+
+As the event table grew past 600,000 rows, `json_extract()` in aggregate queries (GROUP BY, SUM, AVG) started causing OOM kills in the 1.5GB Docker container. The fundamental problem: SQLite can't index into JSON fields efficiently, so every aggregate query required a full table scan with per-row JSON parsing.
+
+The fix was a two-phase migration:
+1. Add real columns (`sentiment`, `cost`, `display_name`, `target`, `room`, `metadata`, `item_id`, `feature`) to the events table.
+2. Extract values from JSON into these columns on INSERT via `_extract_columns()`. Backfill existing rows on first startup using Python-side parsing in 1,000-row batches (not SQL `UPDATE ... json_extract`, which also OOMs).
+
+All aggregate queries were rewritten to use the extracted columns. `UNION ALL` replaced `event_type IN (...)` with `GROUP BY` so each branch uses `idx_events_type_ts_local` independently. Python merges the small result sets.
+
+Critical lesson learned: `CREATE INDEX IF NOT EXISTS` on 600k+ rows is a one-time cost that stalls startup and can OOM if too many indexes are created at once. `DROP INDEX` + `CREATE INDEX` to replace a legacy index also OOMs. Legacy `json_extract` indexes were left in place rather than risk the DROP.
+
+### Phase 24: Charts Tab
+
+Added a dedicated Charts tab with three `recharts` visualizations:
+- **STO-X price history** (LineChart, auto-downsampled to prevent rendering thousands of points)
+- **Token spend trends** (stacked BarChart + LineChart showing TTS/SFX/Fishtoy/Poll/Superchat series with toggles). Poll data uses Python-side vote delta calculation to show active spend in real time.
+- **Chat volume** (BarChart with top chatters overlay)
+
+Three cached `/api/charts/*` endpoints serve pre-aggregated data with 9 range options (30m through all-time). `recharts` is code-split into a separate vendor chunk via `vite.config.js` `manualChunks` to keep the main bundle small. Charts auto-refresh every 5 minutes and skip when the tab is hidden.
+
+### Phase 25: Virtual Scrolling and Keyset Pagination
+
+All list panels (Activity, Chat, Fishtoys, Hidden Content, User Search) were converted from simple scrollable divs to `react-virtuoso` virtual scrolling. This reduced DOM node count from thousands to ~50 visible rows per panel, eliminating the render cost of scrolling through large datasets.
+
+Server-side keyset pagination (`before_id` parameter) replaced offset-based pagination. Keyset pagination is O(1) regardless of page depth (compared to `OFFSET N` which scans and discards N rows). Activity loads 500 events initially, then paginates in 200-event batches on scroll.
+
+The Activity panel also gained time-travel navigation: range buttons (1d/3d/7d/10d/30d) send an `around_ts` anchor to the server, which finds the nearest event and returns a page centered on that point. Bi-directional pagination allows scrolling both newer and older from the anchor. "Now" returns to live mode where WebSocket events prepend in real time.
+
+### Phase 26: Sentiment Analysis
+
+VADER-based sentiment scoring was added to TTS and chat messages at ingestion time. The `sentiment` field is stored as an extracted column (`positive`, `negative`, or `neutral`).
+
+Analytics panels gained sentiment breakdowns: hourly bar charts showing positive/negative/neutral counts, overall mood badges with emoji indicators, and per-contestant sentiment in the TTS analytics. A `_sentiment_base()` function runs a single hourly query and computes all stats in Python from the hourly rows, avoiding a second table scan.
+
+### Phase 27: Cloudflare Full Strict SSL
+
+Upgraded from Cloudflare Flexible SSL (Cloudflare terminates HTTPS, connects to origin over HTTP) to Full Strict (end-to-end encryption). A Cloudflare Origin Certificate was generated and installed on the server. The backend now runs uvicorn with `SSL_CERTFILE` and `SSL_KEYFILE` environment variables, serving HTTPS directly. Docker-compose maps port 443:8000. WebSocket keepalive pings (every 60s) prevent Cloudflare's idle timeout from dropping the connection. Bot Fight Mode was re-enabled with UptimeRobot IPs allowlisted via IP Access Rules.
+
+### Phase 28: Frontend Performance
+
+Multiple rounds of React performance optimization to handle the high re-render frequency (WebSocket events arrive multiple times per second during active hours):
+
+**Component memoization.** All list item components (`ChatMessage`, `ActivityCard`, `FishtoyCard`, `StatRow`) wrapped in `React.memo()`. Callbacks passed as props extracted to `useCallback` so memo reference checks pass. Chart bar components also memo'd with internal `useMemo` for sorted data and formatted labels.
+
+**Data memoization.** All filtered/sorted/sliced arrays computed in `useMemo` with minimal dependency arrays. `.toLocaleString()` and `tokensToUSD()` calls wrapped in `useMemo` keyed on the numeric value. Never call formatting functions inline in JSX.
+
+**Panel isolation.** Heavy sections extracted as `React.memo` components receiving only their data prop (`Last24hSidebar` receives `sessionStats`; `TimeDisplay` owns its own 1-second timer). This isolates re-renders to the section whose data actually changed.
+
+**Error boundary.** Added an `ErrorBoundary` component that catches render errors and displays a recovery UI instead of crashing to a black screen.
+
+**Service worker.** `sw.js` retries navigation requests during deploys (up to 3x with 2s delay). An update banner appears when WebSocket reconnects and detects a new `BUILD_VERSION` from `server:hello`.
 
 ### Key Takeaways
 
@@ -338,6 +400,14 @@ Several rounds of improvements to make the codebase more robust and the frontend
 12. **Shared queries with limits are a silent data loss vector.** When one event type has 50x the volume of another and they share a query with `LIMIT 500`, the low-volume type effectively doesn't exist in the results. This bug appeared three separate times (polls, activity, system events) before being recognized as a pattern. The rule is simple: never mix event types with different orders of magnitude in a single limited query.
 
 13. **Third-party services make assumptions you didn't plan for.** UptimeRobot sends HEAD requests; FastAPI's `@app.get()` rejects them with 405. Cloudflare's Bot Fight Mode blocks the same monitoring service you're relying on for uptime alerts. Each integration layer adds constraints that only surface in production. Testing locally with `curl` wouldn't have caught either issue because curl defaults to GET and doesn't route through Cloudflare.
+
+14. **`json_extract` doesn't scale.** It works fine for single-row lookups, but in aggregate queries over 600k+ rows it causes full-table scans with per-row JSON parsing — enough to OOM a 1.5GB container. The fix is to extract hot-path fields into real indexed columns at write time. The write-side cost is negligible; the read-side improvement is orders of magnitude.
+
+15. **Index creation is a deployment event.** `CREATE INDEX IF NOT EXISTS` on a large table is a one-time cost that stalls startup for minutes and can OOM if batched. Treat index additions like schema migrations: plan them, warn about the startup delay, and never batch multiple large indexes in one deploy.
+
+16. **Virtual scrolling is table stakes for real-time UIs.** Rendering 500+ DOM nodes per panel, with multiple panels updating from WebSocket events multiple times per second, creates visible jank. Virtual scrolling (react-virtuoso) reduces visible DOM to ~50 nodes regardless of data size. The performance difference is immediate and dramatic.
+
+17. **Memoization is defense in depth.** In a React app where the root component re-renders on every WebSocket event, every un-memoized computation runs on every message. `useMemo` for data, `useCallback` for handlers, `React.memo` for components, and extracted sub-components for independent data sources — each layer prevents unnecessary work from propagating to the next.
 
 ### Relevance to Sales Engineering
 

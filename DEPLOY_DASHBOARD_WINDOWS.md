@@ -133,7 +133,7 @@ Open your browser and go to:
 http://localhost:8000
 ```
 
-You should see the dashboard with four tabs (Dashboard, Analytics, Hidden Content, User Search). Director message banners and live poll bars appear at the top when active. Events arrive in real-time.
+You should see the dashboard with five tabs (Dashboard, Analytics, Charts, Hidden Content, User Search). Director message banners, superchat pinned banners, and live poll bars appear at the top when active. Events arrive in real-time.
 
 ---
 
