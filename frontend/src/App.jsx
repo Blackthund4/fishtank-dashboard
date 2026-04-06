@@ -17,6 +17,15 @@ const MAX_EVENTS = 500
 
 const FISHTOY_TYPES = new Set(['fishtoy:used'])
 const CHAT_TYPES = new Set(['chat:message'])
+const CHAT_FILTER_KEYS = { admin: 'isAdmin', mod: 'isMod', fish: 'isFish', gm: 'isGrandMarshall', epic: 'isEpic' }
+const CHAT_FILTERS = [
+  { id: 'all', label: 'All', color: 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40' },
+  { id: 'admin', label: 'Admin', color: 'bg-red-500/20 text-red-400 border border-red-500/40' },
+  { id: 'mod', label: 'Mod', color: 'bg-purple-500/20 text-purple-400 border border-purple-500/40' },
+  { id: 'fish', label: 'Fish', color: 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40' },
+  { id: 'gm', label: 'GM', color: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40' },
+  { id: 'epic', label: 'Epic', color: 'bg-orange-500/20 text-orange-400 border border-orange-500/40' },
+]
 const ACTIVITY_TYPES = new Set([
   'tts:update', 'sfx:update',
   'happening', 'item:new', 'item:update',
@@ -168,6 +177,8 @@ export default function App() {
   const [activeSuperchats, setActiveSuperchats] = useState([])
   const [scCountdowns, setScCountdowns] = useState({})
   const [activityFilter, setActivityFilter] = useState('all')
+  const [chatFilter, setChatFilter] = useState('all')
+  const [chatRoom, setChatRoom] = useState('')
   const [systemFilter, setSystemFilter] = useState('all')
   const [directorTimeRange, setDirectorTimeRange] = useState('all')
   const [activityTimeRange, setActivityTimeRange] = useState('all')
@@ -268,6 +279,12 @@ export default function App() {
             return v
           })
         }
+        if (msg.data?.chatRoom) setChatRoom(msg.data.chatRoom)
+        return
+      }
+
+      if (msg.event_type === 'chat:room') {
+        setChatRoom(typeof msg.data === 'string' ? msg.data : '')
         return
       }
 
@@ -472,7 +489,11 @@ export default function App() {
   }, [feedApiParams])
 
   // Chat array is already newest-first (server ORDER BY id DESC + WS prepend)
-  const sortedChats = chats
+  const sortedChats = useMemo(() => {
+    if (chatFilter === 'all') return chats
+    const key = CHAT_FILTER_KEYS[chatFilter]
+    return chats.filter(c => c.data?.metadata?.[key])
+  }, [chats, chatFilter])
   const sortedActivity = useMemo(() => {
     const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 }[activityTimeRange]
     const cutoff = hours ? Date.now() - hours * 3600000 : 0
@@ -1366,16 +1387,33 @@ export default function App() {
           {/* Bottom: Chat */}
           <div className="flex-1 flex flex-col min-h-[600px] md:min-h-0">
             <Panel
-              title="Chat (Season Pass)"
+              title={`Chat${chatRoom ? `: ${chatRoom}` : ''}`}
               icon={MessageSquare}
               count={stats.chats}
               className="flex-1 min-h-[300px] md:min-h-0"
               virtualized
-              extra={activeSuperchats.length > 0 ? (
-                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
-                  {activeSuperchats.length} pinned
-                </span>
-              ) : null}
+              extra={<>
+                <div className="flex gap-0.5">
+                  {CHAT_FILTERS.map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => setChatFilter(f.id)}
+                      className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                        chatFilter === f.id
+                          ? f.color
+                          : 'text-tank-muted hover:text-tank-text'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                {activeSuperchats.length > 0 && (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
+                    {activeSuperchats.length} pinned
+                  </span>
+                )}
+              </>}
             >
               {sortedChats.length === 0 ? (
                 <div className="p-2">

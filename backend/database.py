@@ -678,6 +678,48 @@ def prune_stock_history(retention_days=30):
     return deleted
 
 
+def prune_chat_events(retention_days=30):
+    """Delete ordinary chat messages older than retention_days.
+
+    Retains admin, mod, and fish messages forever (production value).
+    Prunes regular, epic, and grand marshall messages to keep the DB
+    manageable under Global chat volume (~240k msgs/day).
+
+    Uses the extracted `metadata` column (JSON string) to check role flags
+    without touching the large `data` column. This is a batch delete on
+    old rows, not a hot-path query — json_extract is acceptable here.
+    Returns count of deleted rows.
+    """
+    conn = _get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+
+    count = conn.execute(
+        """SELECT COUNT(*) FROM events
+           WHERE event_type = 'chat:message'
+             AND timestamp_local < ?
+             AND (metadata IS NULL
+                  OR (json_extract(metadata, '$.isAdmin') IS NOT 1
+                      AND json_extract(metadata, '$.isMod') IS NOT 1
+                      AND json_extract(metadata, '$.isFish') IS NOT 1))""",
+        (cutoff,),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+
+    conn.execute(
+        """DELETE FROM events
+           WHERE event_type = 'chat:message'
+             AND timestamp_local < ?
+             AND (metadata IS NULL
+                  OR (json_extract(metadata, '$.isAdmin') IS NOT 1
+                      AND json_extract(metadata, '$.isMod') IS NOT 1
+                      AND json_extract(metadata, '$.isFish') IS NOT 1))""",
+        (cutoff,),
+    )
+    conn.commit()
+    return count
+
+
 def get_stock_history(ticker=None, limit=500, since=None):
     """Get stock price history, optionally filtered by ticker and/or time."""
     conn = _get_conn()

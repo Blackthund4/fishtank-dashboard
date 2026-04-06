@@ -53,6 +53,7 @@ EVENTS = [
     # Fishtoys are polled via REST (/v1/items/recent), not socket events
     # Chat
     "chat:message",
+    "chat:room",
     # TTS / SFX (only :update, not :queued, to avoid duplicate logging)
     "tts:update",
     "tts:price",
@@ -99,12 +100,16 @@ CACHE_TTL = 60  # seconds
 CACHE_MAX_ENTRIES = 50  # max cache entries before pruning
 
 
-def _cached_query(key, func, *args):
+CACHE_TTL_CHAT = 180  # seconds -- chat analytics/sentiment/charts are expensive GROUP BY queries
+
+
+def _cached_query(key, func, *args, ttl=None):
     """Return cached result if fresh, otherwise run func and cache."""
+    effective_ttl = ttl or CACHE_TTL
     now = _time.time()
     if key in _analytics_cache:
         cached_at, data = _analytics_cache[key]
-        if now - cached_at < CACHE_TTL:
+        if now - cached_at < effective_ttl:
             return data
 
     # Prune expired entries if cache is getting large
@@ -220,6 +225,14 @@ def db_backup_poller():
                 print(f"[OK] Stock history pruned: {deleted} rows older than 30 days removed")
         except Exception as e:
             print(f"[!] Stock history prune failed: {e}")
+
+        # Prune old chat messages (highest volume event type)
+        try:
+            deleted = database.prune_chat_events(retention_days=30)
+            if deleted > 0:
+                print(f"[OK] Chat pruned: {deleted} non-staff messages older than 30 days removed")
+        except Exception as e:
+            print(f"[!] Chat prune failed: {e}")
 
         _poller_stop.wait(BACKUP_INTERVAL)
 
@@ -411,6 +424,7 @@ _DEDUP_WINDOW = 300  # 5 minutes (status transitions can be 30-60s apart)
 # Feature toggle state (fishtoys, tts, sfx, etc.)
 _feature_toggles: dict = {}  # feature_name -> {enabled, metadata, updated_at}
 _fishtank_online = 0  # Live viewer count from chat:presence
+_chat_room = ""       # Current chat room from chat:room event
 
 def _is_duplicate(evt, data):
     """Check if this TTS/SFX event ID has already been seen."""
@@ -436,12 +450,12 @@ def _is_duplicate(evt, data):
 
 
 def _should_filter_chat(data):
-    """Filter chat messages that are TTS/SFX/emote system echoes."""
+    """Filter chat messages that are system echoes (TTS/SFX/emote/happening)."""
     if not isinstance(data, dict):
         return False
     user = data.get("user", {})
     name = user.get("displayName", "") if isinstance(user, dict) else ""
-    return name.lower() in ("tts", "sfx", "emote")
+    return name.lower() in ("tts", "sfx", "emote", "happening")
 
 
 def _should_filter_notification(data):
@@ -479,6 +493,29 @@ def make_event_handler(evt):
             if isinstance(data, (int, float)):
                 _fishtank_online = int(data)
             return
+
+        # Track current chat room (don't store to DB, just broadcast)
+        if evt == "chat:room":
+            global _chat_room
+            _chat_room = str(data) if data else ""
+            print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] chat:room: {_chat_room}")
+            if _loop and _loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    broadcast_to_browsers("chat:room", _chat_room, 0), _loop
+                )
+            return
+
+        # Unwrap list-wrapped payloads (fishtank sometimes sends [{...}, ...] instead of {...})
+        # Multi-element lists are batched messages — process each individually then return.
+        if isinstance(data, list):
+            items = [d for d in data if isinstance(d, dict)]
+            if len(items) == 1:
+                data = items[0]
+            elif len(items) > 1:
+                for d in items:
+                    handler(d)
+                return
+            # If no dicts found, fall through to store the raw list as-is
 
         # Filter TTS/SFX/emote system echo from chat
         if evt == "chat:message" and _should_filter_chat(data):
@@ -1034,7 +1071,7 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.accept()
         browser_clients.add(ws)
     try:
-        await ws.send_text(json.dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION}}))
+        await ws.send_text(json.dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION, "chatRoom": _chat_room}}))
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
@@ -1210,14 +1247,14 @@ def api_tts_sfx_analytics(since: str = Query(None)):
 def api_chat_analytics(since: str = Query(None)):
     """Chat analytics: top chatters, hourly volume."""
     since = _normalize_since(since)
-    return _cached_query(f"chat:{since}", database.get_chat_analytics, since)
+    return _cached_query(f"chat:{since}", database.get_chat_analytics, since, ttl=CACHE_TTL_CHAT)
 
 
 @app.get("/api/analytics/chat-sentiment")
 def api_chat_sentiment(since: str = Query(None)):
     """Chat sentiment analytics: overall mood, hourly breakdown."""
     since = _normalize_since(since)
-    return _cached_query(f"chat-sentiment:{since}", database.get_chat_sentiment, since)
+    return _cached_query(f"chat-sentiment:{since}", database.get_chat_sentiment, since, ttl=CACHE_TTL_CHAT)
 
 
 @app.get("/api/analytics/tts-sentiment")
@@ -1386,7 +1423,7 @@ def api_charts_spend(range: str = Query('24h')):
 def api_charts_chatters(range: str = Query('24h')):
     if range not in {'30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all'}:
         range = '24h'
-    return _cached_query(f"charts-chatters:{range}", database.get_chat_chart, range)
+    return _cached_query(f"charts-chatters:{range}", database.get_chat_chart, range, ttl=CACHE_TTL_CHAT)
 
 
 # --- Serve frontend static files ---
