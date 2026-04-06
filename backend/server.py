@@ -333,6 +333,7 @@ def reconnect_loop():
 
 _profile_cache = {}  # user_id -> (timestamp, result)
 _PROFILE_CACHE_TTL = 3600  # 1 hour
+_PROFILE_CACHE_MAX = 500   # evict oldest when full (~100 KB at capacity)
 
 def _fetch_user_profile(user_id):
     """Fetch displayName and color for a user from fishtank API (cached 1h)."""
@@ -353,6 +354,9 @@ def _fetch_user_profile(user_id):
                 result["displayName"] = dn
             if profile.get("color"):
                 result["color"] = profile["color"]
+            if len(_profile_cache) >= _PROFILE_CACHE_MAX:
+                oldest = min(_profile_cache, key=lambda k: _profile_cache[k][0])
+                del _profile_cache[oldest]
             _profile_cache[user_id] = (now, result)
             return result
     except Exception as e:
@@ -1044,7 +1048,7 @@ async def rate_limit_middleware(request: Request, call_next):
         )
 
     # Periodic cleanup
-    if len(_rate_limits) > 1000:
+    if len(_rate_limits) > 200:
         _prune_rate_limits()
 
     return await call_next(request)
