@@ -318,36 +318,6 @@ def reconnect_loop():
         backoff = min(backoff * 2, 60)  # Exponential backoff up to 60s
 
 
-_profile_cache = {}  # user_id -> (timestamp, result)
-_PROFILE_CACHE_TTL = 3600  # 1 hour
-
-def _fetch_user_profile(user_id):
-    """Fetch displayName and color for a user from fishtank API (cached 1h)."""
-    import time
-    now = time.time()
-    cached = _profile_cache.get(user_id)
-    if cached and now - cached[0] < _PROFILE_CACHE_TTL:
-        return cached[1]
-    session = auth.get_session()
-    try:
-        resp = session.get(f"https://www.fishtank.live/api/v1/profile/{user_id}", timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            profile = data.get("profile", data)
-            result = {}
-            dn = profile.get("displayName") or profile.get("username") or ""
-            if dn:
-                result["displayName"] = dn
-            if profile.get("color"):
-                result["color"] = profile["color"]
-            _profile_cache[user_id] = (now, result)
-            return result
-    except Exception as e:
-        print(f"[!] Failed to fetch profile for {user_id}: {e}")
-    finally:
-        session.close()
-    return {}
-
 
 # ============================================================
 # BROWSER WEBSOCKET CLIENTS
@@ -496,24 +466,10 @@ def make_event_handler(evt):
         if evt == "feature-toggles:update":
             _track_feature_toggle(data)
 
-        # Enrich superchat with displayName — prefer user.displayName over top-level
-        if evt == "super-chat:new" and isinstance(data, dict):
-            user = data.get("user") or {}
-            data["displayName"] = (
-                user.get("displayName")
-                or data.get("displayName")
-                or data.get("username")
-                or ""
-            )
-            # Fetch from profile API as last resort
-            if not data.get("displayName"):
-                user_id = data.get("userId")
-                if user_id:
-                    profile = _fetch_user_profile(user_id)
-                    if profile:
-                        data.update(profile)
-                        if not data.get("displayName"):
-                            data["displayName"] = profile.get("username", "")
+        # Superchat displayName: fishtank usually sends it directly in the payload.
+        # Some users arrive with empty displayName and no profile API data (404).
+        # No user object is ever present on superchat payloads.
+        # Frontend handles missing names gracefully (shows "Anon").
 
         # Score sentiment for chat and TTS messages
         if isinstance(data, dict):
@@ -676,45 +632,6 @@ def load_catalog():
         session.close()
 
 
-def _backfill_empty_sc_names():
-    """Backfill empty superchat displayNames using the profile API."""
-    if not auth.is_configured:
-        return
-    conn = database._get_conn()
-    rows = conn.execute("""
-        SELECT id, data FROM events
-        WHERE event_type = 'super-chat:new' AND (display_name IS NULL OR display_name = '')
-    """).fetchall()
-    if not rows:
-        return
-    fixed = 0
-    for row in rows:
-        try:
-            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        user_id = data.get("userId")
-        if not user_id:
-            continue
-        profile = _fetch_user_profile(user_id)
-        dn = profile.get("displayName") or profile.get("username") or ""
-        if not dn:
-            continue
-        data["displayName"] = dn
-        if profile.get("color"):
-            data["color"] = profile["color"]
-        conn.execute(
-            "UPDATE events SET data = ?, display_name = ? WHERE id = ?",
-            (json.dumps(data, ensure_ascii=False, default=str), dn, row["id"])
-        )
-        fixed += 1
-    if fixed:
-        conn.commit()
-        print(f"[OK] Backfilled displayName for {fixed} superchats via profile API")
-
-
 def seed_superchats_from_rest():
     """Fetch active superchats from REST API and store any we haven't seen via Socket.IO."""
     if not auth.is_configured:
@@ -735,21 +652,8 @@ def seed_superchats_from_rest():
             sc_id = str(sc.get("id", ""))
             if not sc_id or sc_id in known_ids:
                 continue
-            # Prefer user.displayName over top-level (may be login handle)
-            user = sc.get("user") or {}
-            sc["displayName"] = (
-                user.get("displayName")
-                or sc.get("displayName")
-                or sc.get("username")
-                or ""
-            )
-            # Fetch from profile API as last resort
-            if not sc.get("displayName") and sc.get("userId"):
-                profile = _fetch_user_profile(sc["userId"])
-                if profile:
-                    sc.update(profile)
-                    if not sc.get("displayName"):
-                        sc["displayName"] = profile.get("username", "")
+            # displayName comes directly from fishtank payload when available.
+            # Some users have empty displayName with no profile API fallback.
             database.store_event("super-chat:new", sc)
             new_count += 1
         if new_count:
@@ -967,8 +871,6 @@ async def lifespan(app: FastAPI):
         if backfilled:
             print(f"[OK] Backfilled extracted columns for {backfilled} events")
         database.backfill_poll_vote_costs()
-        database.backfill_superchat_displaynames()
-        _backfill_empty_sc_names()
     Thread(target=_run_backfill, daemon=True).start()
 
     # Load item catalog and contestants from fishtank API

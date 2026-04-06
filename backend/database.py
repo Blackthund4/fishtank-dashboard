@@ -212,39 +212,6 @@ def backfill_poll_vote_costs():
     return len(rows)
 
 
-def backfill_superchat_displaynames():
-    """One-time backfill: prefer user.displayName over top-level displayName for superchats."""
-    conn = _get_conn()
-    rows = conn.execute("""
-        SELECT id, data FROM events WHERE event_type = 'super-chat:new'
-    """).fetchall()
-    if not rows:
-        return 0
-    fixed = 0
-    for row in rows:
-        try:
-            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        user = data.get("user") or {}
-        user_dn = user.get("displayName")
-        if not user_dn or data.get("displayName") == user_dn:
-            continue
-        # user.displayName differs from top-level — fix it
-        data["displayName"] = user_dn
-        conn.execute(
-            "UPDATE events SET data = ?, display_name = ? WHERE id = ?",
-            (json.dumps(data, ensure_ascii=False, default=str), user_dn, row["id"])
-        )
-        fixed += 1
-    if fixed:
-        conn.commit()
-        print(f"[OK] Fixed displayName for {fixed} superchat events")
-    return fixed
-
-
 _EXTRACTED_COLS = ("sentiment", "cost", "display_name", "target", "room", "metadata", "item_id", "feature")
 _EXTRACTED_NONE = {k: None for k in _EXTRACTED_COLS}
 _INSERT_SQL = (
