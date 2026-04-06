@@ -1354,9 +1354,10 @@ def api_superchats(
 
 
 @app.get("/api/targets")
-def api_targets():
+def api_targets(since: str = Query(None, description="ISO timestamp or 'all' for full history (default: 30 days)")):
     """Get all fishtoy targets with total count and spend."""
-    return _cached_query("targets", database.get_targets)
+    cache_key = f"targets:{since or 'default'}"
+    return _cached_query(cache_key, database.get_targets, since)
 
 
 @app.get("/api/target-stats")

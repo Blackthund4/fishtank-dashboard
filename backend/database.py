@@ -563,18 +563,36 @@ def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0, be
     ]
 
 
-def get_targets():
-    """Get all distinct fishtoy targets with total count and spend from the full event history."""
+def get_targets(since=None):
+    """Get all distinct fishtoy targets with total count and spend.
+
+    Args:
+        since: optional ISO timestamp to limit the time window (default: 30 days).
+               Pass 'all' for full history.
+    """
     conn = _get_conn()
-    rows = conn.execute("""
+    conditions = ["event_type = ?", "target IS NOT NULL"]
+    params = [FISHTOY_TYPE]
+
+    if since != "all":
+        if since:
+            conditions.append("timestamp_local >= ?")
+            params.append(since)
+        else:
+            # Default: 30 days
+            from datetime import datetime, timedelta, timezone
+            default_since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            conditions.append("timestamp_local >= ?")
+            params.append(default_since)
+
+    rows = conn.execute(f"""
         SELECT target, COUNT(*) as count,
             COALESCE(SUM(cost), 0) as spend
         FROM events
-        WHERE event_type = ?
-            AND target IS NOT NULL
+        WHERE {" AND ".join(conditions)}
         GROUP BY target
         ORDER BY count DESC
-    """, (FISHTOY_TYPE,)).fetchall()
+    """, params).fetchall()
     return [{"target": r["target"], "count": r["count"], "spend": r["spend"]} for r in rows]
 
 
