@@ -138,6 +138,7 @@ export default function App() {
   const [serverVersion, setServerVersion] = useState(null)
   const [knownVersion, setKnownVersion] = useState(null)
   const [chats, setChats] = useState([])
+  const [roleChats, setRoleChats] = useState(null)       // null = use chats, or server-fetched role-filtered array
   const [activity, setActivity] = useState([])
   const [stats, setStats] = useState({
     fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
@@ -188,6 +189,7 @@ export default function App() {
   const [activityHasNewer, setActivityHasNewer] = useState(false)
   const [activityLoading, setActivityLoading] = useState(false)
   const activityAnchorRef = useRef(null)
+  const chatFilterRef = useRef('all')
   const directorRef = useRef(null)
   // Load catalog + historical data on mount
   useEffect(() => {
@@ -274,6 +276,7 @@ export default function App() {
 
   // Sync anchor ref for WS listener (avoids re-registering listener on anchor change)
   useEffect(() => { activityAnchorRef.current = activityAnchor }, [activityAnchor])
+  useEffect(() => { chatFilterRef.current = chatFilter }, [chatFilter])
 
   // Live events
   useEffect(() => {
@@ -318,6 +321,14 @@ export default function App() {
         }
       } else if (CHAT_TYPES.has(msg.event_type)) {
         setChats(prev => [item, ...prev].slice(0, MAX_EVENTS))
+        // If a role filter is active, prepend to roleChats if the message matches
+        const activeRole = chatFilterRef.current
+        if (activeRole !== 'all') {
+          const key = CHAT_FILTER_KEYS[activeRole]
+          if (msg.data?.metadata?.[key]) {
+            setRoleChats(prev => prev ? [item, ...prev] : [item])
+          }
+        }
         setStats(s => ({ ...s, chats: s.chats + 1 }))
         setSessionStats(s => ({ ...s, chats: s.chats + 1 }))
       } else if (ACTIVITY_TYPES.has(msg.event_type)) {
@@ -498,12 +509,17 @@ export default function App() {
       .catch(() => {})
   }, [feedApiParams])
 
+  // Fetch role-filtered chats from server when a role filter is active
+  useEffect(() => {
+    if (chatFilter === 'all') { setRoleChats(null); return }
+    fetch(`/api/events?type=chat:message&limit=500&role=${chatFilter}`)
+      .then(okJson)
+      .then(events => setRoleChats(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))))
+      .catch(() => {})
+  }, [chatFilter])
+
   // Chat array is already newest-first (server ORDER BY id DESC + WS prepend)
-  const sortedChats = useMemo(() => {
-    if (chatFilter === 'all') return chats
-    const key = CHAT_FILTER_KEYS[chatFilter]
-    return chats.filter(c => c.data?.metadata?.[key])
-  }, [chats, chatFilter])
+  const sortedChats = useMemo(() => roleChats ?? chats, [roleChats, chats])
   const sortedActivity = useMemo(() => {
     const q = searchText.trim().toLowerCase()
 

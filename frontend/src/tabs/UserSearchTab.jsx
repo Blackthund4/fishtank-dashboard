@@ -8,6 +8,8 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
   const [activeFilter, setActiveFilter] = useState('all')
   const [suggestions, setSuggestions] = useState([])
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -30,16 +32,27 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     }, 250)
   }
 
+  function doSearch(name) {
+    setLoading(true)
+    setHasMore(true)
+    fetch(`/api/user/${encodeURIComponent(name)}`)
+      .then(okJson)
+      .then(data => {
+        setResults(data)
+        setLoading(false)
+        setActiveFilter('all')
+        // If any category returned fewer than 500, there's no more to load
+        const cats = ['chat', 'tts', 'sfx', 'fishtoys']
+        setHasMore(cats.some(c => (data[c] || []).length >= 500))
+      })
+      .catch(() => { setResults(null); setLoading(false); setHasMore(false) })
+  }
+
   function selectSuggestion(name) {
     setQuery(name)
     setSuggestions([])
     setShowSuggestions(false)
-    // Auto-search
-    setLoading(true)
-    fetch(`/api/user/${encodeURIComponent(name)}`)
-      .then(okJson)
-      .then(data => { setResults(data); setLoading(false); setActiveFilter('all') })
-      .catch(() => { setResults(null); setLoading(false) })
+    doSearch(name)
   }
 
   function handleSearch(e) {
@@ -47,11 +60,7 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     setShowSuggestions(false)
     const q = query.trim()
     if (!q) return
-    setLoading(true)
-    fetch(`/api/user/${encodeURIComponent(q)}`)
-      .then(okJson)
-      .then(data => { setResults(data); setLoading(false); setActiveFilter('all') })
-      .catch(() => { setResults(null); setLoading(false) })
+    doSearch(q)
   }
 
   const filters = [
@@ -61,6 +70,31 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     { id: 'sfx', label: 'SFX', icon: Music },
     { id: 'fishtoys', label: 'Fishtoys', icon: Fish },
   ]
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore || !results) return
+    // Find the min id across all result categories
+    const allIds = ['chat', 'tts', 'sfx', 'fishtoys'].flatMap(c => (results[c] || []).map(r => r.id)).filter(Boolean)
+    if (allIds.length === 0) return
+    const minId = Math.min(...allIds)
+    setLoadingMore(true)
+    fetch(`/api/user/${encodeURIComponent(results.username)}?before_id=${minId}`)
+      .then(okJson)
+      .then(data => {
+        setResults(prev => {
+          const merged = { ...prev }
+          const cats = ['chat', 'tts', 'sfx', 'fishtoys']
+          cats.forEach(c => { merged[c] = [...(prev[c] || []), ...(data[c] || [])] })
+          merged.totals = {}
+          cats.forEach(c => { merged.totals[c] = (merged[c] || []).length })
+          return merged
+        })
+        const cats = ['chat', 'tts', 'sfx', 'fishtoys']
+        setHasMore(cats.some(c => (data[c] || []).length >= 500))
+        setLoadingMore(false)
+      })
+      .catch(() => { setLoadingMore(false); setHasMore(false) })
+  }, [loadingMore, hasMore, results])
 
   // Build unified timeline
   const timeline = useMemo(() =>
@@ -151,6 +185,14 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
                 style={{ height: '100%' }}
                 data={timeline}
                 overscan={100}
+                endReached={loadMore}
+                components={{
+                  Footer: () => loadingMore ? (
+                    <div className="text-xs text-tank-muted font-mono text-center py-2">Loading more...</div>
+                  ) : !hasMore && timeline.length > 0 ? (
+                    <div className="text-xs text-tank-muted font-mono text-center py-2">All history loaded</div>
+                  ) : null
+                }}
                 itemContent={(index, item) => (
                   <div className="flex items-start gap-2 p-2 mb-1 bg-tank-surface border border-tank-border rounded hover:border-tank-accent/20 transition-colors">
                     <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 mt-0.5 ${item.iconBg}`}>

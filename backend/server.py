@@ -1098,9 +1098,10 @@ def api_events(
     item_id: str = Query(None, description="Filter by item ID"),
     search: str = Query(None, description="Search metadata and sender name"),
     around_ts: str = Query(None, description="Jump to events around this ISO timestamp"),
+    role: str = Query(None, description="Filter chat by role: admin, mod, fish, gm, epic"),
 ):
     return database.get_events(event_type=type, limit=limit, since_id=since_id, before_id=before_id,
-                               target=target, item_id=item_id, search=search, around_ts=around_ts)
+                               target=target, item_id=item_id, search=search, around_ts=around_ts, role=role)
 
 
 @app.get("/api/stats")
@@ -1373,9 +1374,9 @@ def api_price_changes(limit: int = Query(100, le=500)):
 
 
 @app.get("/api/user/{username}")
-def api_user_search(username: str, limit: int = Query(500, le=2000)):
+def api_user_search(username: str, limit: int = Query(500, le=2000), before_id: int = Query(None)):
     """Search all event types for a specific user."""
-    return database.search_user(username=username, limit=limit)
+    return database.search_user(username=username, limit=limit, before_id=before_id)
 
 
 @app.get("/api/users/suggest")

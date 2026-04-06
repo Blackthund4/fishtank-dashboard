@@ -279,7 +279,7 @@ def store_event(event_type: str, data):
 
 
 def get_events(event_type=None, limit=200, since_id=None, before_id=None,
-               target=None, item_id=None, search=None, around_ts=None):
+               target=None, item_id=None, search=None, around_ts=None, role=None):
     conn = _get_conn()
     query = "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events"
     conditions = []
@@ -327,6 +327,19 @@ def get_events(event_type=None, limit=200, since_id=None, before_id=None,
     if search:
         conditions.append("(metadata LIKE ? OR display_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
+
+    if role:
+        role_map = {
+            "admin": "$.metadata.isAdmin",
+            "mod": "$.metadata.isMod",
+            "fish": "$.metadata.isFish",
+            "gm": "$.metadata.isGrandMarshall",
+            "epic": "$.metadata.isEpic",
+        }
+        json_path = role_map.get(role)
+        if json_path:
+            conditions.append(f"json_extract(data, ?) = 1")
+            params.append(json_path)
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -1382,37 +1395,43 @@ def get_price_changes(limit=100):
 # ============================================================
 
 
-def search_user(username, limit=500):
+def search_user(username, limit=500, before_id=None):
     """Search across all event types for a specific username (case-insensitive).
 
     Single UNION ALL query — each branch uses idx_events_ext_sender_ts independently.
+    Optional before_id for keyset pagination.
     """
     conn = _get_conn()
-    rows = conn.execute("""
+    before_clause = " AND id < ?" if before_id is not None else ""
+    before_params = (before_id,) if before_id is not None else ()
+    rows = conn.execute(f"""
         SELECT * FROM (
             SELECT event_type, id, timestamp_local, data FROM events
-            WHERE event_type = 'chat:message' AND display_name = ? COLLATE NOCASE
+            WHERE event_type = 'chat:message' AND display_name = ? COLLATE NOCASE{before_clause}
             ORDER BY id DESC LIMIT ?
         )
         UNION ALL
         SELECT * FROM (
             SELECT event_type, id, timestamp_local, data FROM events
-            WHERE event_type = 'tts:update' AND display_name = ? COLLATE NOCASE
+            WHERE event_type = 'tts:update' AND display_name = ? COLLATE NOCASE{before_clause}
             ORDER BY id DESC LIMIT ?
         )
         UNION ALL
         SELECT * FROM (
             SELECT event_type, id, timestamp_local, data FROM events
-            WHERE event_type = 'sfx:update' AND display_name = ? COLLATE NOCASE
+            WHERE event_type = 'sfx:update' AND display_name = ? COLLATE NOCASE{before_clause}
             ORDER BY id DESC LIMIT ?
         )
         UNION ALL
         SELECT * FROM (
             SELECT event_type, id, timestamp_local, data FROM events
-            WHERE event_type = ? AND display_name = ? COLLATE NOCASE
+            WHERE event_type = ? AND display_name = ? COLLATE NOCASE{before_clause}
             ORDER BY id DESC LIMIT ?
         )
-    """, (username, limit, username, limit, username, limit, FISHTOY_TYPE, username, limit)).fetchall()
+    """, (username, *before_params, limit,
+          username, *before_params, limit,
+          username, *before_params, limit,
+          FISHTOY_TYPE, username, *before_params, limit)).fetchall()
 
     results = {"username": username, "chat": [], "tts": [], "sfx": [], "fishtoys": []}
     type_map = {"chat:message": "chat", "tts:update": "tts", "sfx:update": "sfx", FISHTOY_TYPE: "fishtoys"}
