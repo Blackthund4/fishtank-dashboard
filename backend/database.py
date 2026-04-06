@@ -91,6 +91,7 @@ def init_db():
         "metadata TEXT",
         "item_id TEXT",
         "feature TEXT",
+        "chat_role TEXT",
     ]:
         try:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col}")
@@ -139,6 +140,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_fishtoys_target_item
             ON events(event_type, target, item_id)
             WHERE event_type = 'fishtoy:used' AND target IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_chat_role
+            ON events(chat_role, id)
+            WHERE chat_role IS NOT NULL;
     """)
     conn.commit()
 
@@ -157,6 +161,7 @@ def backfill_extracted_columns(batch_size=1000):
         SELECT id FROM events
         WHERE (event_type = 'tts:update' AND cost IS NULL)
            OR (event_type = 'tts:update' AND room IS NULL)
+           OR (event_type = 'chat:message' AND chat_role IS NULL AND json_extract(data, '$.metadata.isAdmin') = 1)
         LIMIT 1
     """).fetchone()
     if not sample:
@@ -212,7 +217,7 @@ def backfill_poll_vote_costs():
     return len(rows)
 
 
-_EXTRACTED_COLS = ("sentiment", "cost", "display_name", "target", "room", "metadata", "item_id", "feature")
+_EXTRACTED_COLS = ("sentiment", "cost", "display_name", "target", "room", "metadata", "item_id", "feature", "chat_role")
 _EXTRACTED_NONE = {k: None for k in _EXTRACTED_COLS}
 _INSERT_SQL = (
     "INSERT INTO events (event_type, event_id, timestamp_server, timestamp_local, data, "
@@ -244,6 +249,21 @@ def _extract_columns(event_type, data):
     if event_type == "poll:vote" and isinstance(data, list):
         cost = sum(v.get("score", 0) for v in data if isinstance(v, dict))
 
+    # Extract chat role from metadata flags (priority order)
+    chat_role = None
+    if event_type == "chat:message":
+        meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        if meta.get("isAdmin"):
+            chat_role = "admin"
+        elif meta.get("isMod"):
+            chat_role = "mod"
+        elif meta.get("isFish"):
+            chat_role = "fish"
+        elif meta.get("isGrandMarshall"):
+            chat_role = "gm"
+        elif meta.get("isEpic"):
+            chat_role = "epic"
+
     return {
         "sentiment": data.get("sentiment"),
         "cost": cost,
@@ -253,6 +273,7 @@ def _extract_columns(event_type, data):
         "metadata": metadata_val,
         "item_id": item_id_val,
         "feature": data.get("feature"),
+        "chat_role": chat_role,
     }
 
 
@@ -329,20 +350,11 @@ def get_events(event_type=None, limit=200, since_id=None, before_id=None,
         params.extend([f"%{search}%", f"%{search}%"])
 
     if role:
-        # Uses the extracted metadata column (small JSON string) instead of
-        # json_extract on the full data blob — avoids parsing ~500 byte payloads
-        # per row. LIKE on a short string is faster than json_extract.
-        role_map = {
-            "admin": '"isAdmin": true',
-            "mod": '"isMod": true',
-            "fish": '"isFish": true',
-            "gm": '"isGrandMarshall": true',
-            "epic": '"isEpic": true',
-        }
-        pattern = role_map.get(role)
-        if pattern:
-            conditions.append("metadata LIKE ?")
-            params.append(f"%{pattern}%")
+        # Uses the extracted chat_role column with partial index — instant seek
+        valid_roles = {"admin", "mod", "fish", "gm", "epic"}
+        if role in valid_roles:
+            conditions.append("chat_role = ?")
+            params.append(role)
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -718,9 +730,7 @@ def prune_chat_events(retention_days=30):
     Prunes regular, epic, and grand marshall messages to keep the DB
     manageable under Global chat volume (~240k msgs/day).
 
-    Uses the extracted `metadata` column (JSON string) to check role flags
-    without touching the large `data` column. This is a batch delete on
-    old rows, not a hot-path query — json_extract is acceptable here.
+    Uses the extracted `chat_role` column — no json_extract needed.
     Returns count of deleted rows.
     """
     conn = _get_conn()
@@ -730,10 +740,7 @@ def prune_chat_events(retention_days=30):
         """SELECT COUNT(*) FROM events
            WHERE event_type = 'chat:message'
              AND timestamp_local < ?
-             AND (metadata IS NULL
-                  OR (json_extract(metadata, '$.isAdmin') IS NOT 1
-                      AND json_extract(metadata, '$.isMod') IS NOT 1
-                      AND json_extract(metadata, '$.isFish') IS NOT 1))""",
+             AND (chat_role IS NULL OR chat_role NOT IN ('admin', 'mod', 'fish'))""",
         (cutoff,),
     ).fetchone()[0]
     if count == 0:
@@ -743,10 +750,7 @@ def prune_chat_events(retention_days=30):
         """DELETE FROM events
            WHERE event_type = 'chat:message'
              AND timestamp_local < ?
-             AND (metadata IS NULL
-                  OR (json_extract(metadata, '$.isAdmin') IS NOT 1
-                      AND json_extract(metadata, '$.isMod') IS NOT 1
-                      AND json_extract(metadata, '$.isFish') IS NOT 1))""",
+             AND (chat_role IS NULL OR chat_role NOT IN ('admin', 'mod', 'fish'))""",
         (cutoff,),
     )
     conn.commit()
