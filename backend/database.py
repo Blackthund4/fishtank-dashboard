@@ -1297,6 +1297,31 @@ def get_polls(limit=50):
         FROM events WHERE event_type IN ('poll:start', 'poll:stop')
         ORDER BY id DESC LIMIT ?
     """, (limit,)).fetchall()
+
+    # Pre-fetch vote data for all poll:stop rows in one query instead of N+1
+    stop_ids = [row["id"] for row in rows if row["event_type"] == "poll:stop"]
+    vote_lookup = {}  # stop_id -> vote_data
+    if stop_ids:
+        # Get all poll:vote rows in the id range, then match each stop to its preceding vote
+        min_id = min(stop_ids)
+        vote_rows = conn.execute("""
+            SELECT id, data FROM events
+            WHERE event_type = 'poll:vote' AND id < ?
+            ORDER BY id DESC
+        """, (max(stop_ids),)).fetchall()
+        # Match each stop to its nearest preceding vote (vote_rows already desc by id)
+        for sid in stop_ids:
+            # Find the first vote with id < sid (vote_ids is desc, so first >= works)
+            for vr in vote_rows:
+                if vr["id"] < sid:
+                    try:
+                        vdata = json.loads(vr["data"])
+                        if isinstance(vdata, list):
+                            vote_lookup[sid] = vdata
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    break
+
     # Collect poll:stop pids so we can filter out their matching poll:start
     stop_pids = set()
     results = []
@@ -1312,15 +1337,9 @@ def get_polls(limit=50):
         if row["event_type"] == "poll:stop":
             if pid:
                 stop_pids.add(pid)
-            # Attach final vote tallies from the last poll:vote before this poll:stop
-            vote_row = conn.execute(
-                "SELECT data FROM events WHERE event_type = 'poll:vote' AND id < ? ORDER BY id DESC LIMIT 1",
-                (row["id"],),
-            ).fetchone()
-            if vote_row:
-                vote_data = json.loads(vote_row["data"])
-                if isinstance(vote_data, list):
-                    evt["data"]["votes"] = vote_data
+            # Attach pre-fetched vote tallies
+            if row["id"] in vote_lookup:
+                evt["data"]["votes"] = vote_lookup[row["id"]]
             results.append(evt)
         else:
             # poll:start — only include if no matching poll:stop exists
