@@ -31,7 +31,7 @@ import requests as http_requests
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, ORJSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 
 from fishclient import FishClient
@@ -1082,7 +1082,7 @@ async def lifespan(app: FastAPI):
     ping_task.cancel()
 
 
-app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan, default_response_class=ORJSONResponse)
+app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
 
 # CORS: configurable via ALLOWED_ORIGINS env var (comma-separated)
 _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
