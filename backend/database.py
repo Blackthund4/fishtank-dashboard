@@ -10,6 +10,18 @@ import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+try:
+    import orjson
+    def fast_loads(s):
+        return orjson.loads(s)
+    def fast_dumps(obj, **kwargs):
+        return orjson.dumps(obj, default=str).decode()
+except ImportError:
+    def fast_loads(s):
+        return json.loads(s)
+    def fast_dumps(obj, **kwargs):
+        return json.dumps(obj, ensure_ascii=False, default=str)
+
 DB_PATH = Path(os.environ.get("FISHTANK_DB_PATH", Path(__file__).parent / "fishtank.db"))
 
 FISHTOY_TYPE = "fishtoy:used"
@@ -181,7 +193,7 @@ def backfill_extracted_columns(batch_size=1000):
 
         for row in rows:
             try:
-                data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+                data = fast_loads(row["data"]) if isinstance(row["data"], str) else row["data"]
             except (json.JSONDecodeError, TypeError):
                 data = {}
             ext = _extract_columns(row["event_type"], data)
@@ -206,7 +218,7 @@ def backfill_poll_vote_costs():
         return 0
     for row in rows:
         try:
-            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            data = fast_loads(row["data"]) if isinstance(row["data"], str) else row["data"]
         except (json.JSONDecodeError, TypeError):
             continue
         if isinstance(data, list):
@@ -239,7 +251,7 @@ def _extract_columns(event_type, data):
     if metadata_val in (None, "null", ""):
         metadata_val = None
     elif not isinstance(metadata_val, str):
-        metadata_val = json.dumps(metadata_val)
+        metadata_val = fast_dumps(metadata_val)
     item_id_val = data.get("itemId")
     if item_id_val is not None:
         item_id_val = str(item_id_val)
@@ -287,7 +299,7 @@ def store_event(event_type: str, data):
         timestamp_server = data.get("timestamp") or data.get("createdAt")
 
     now = datetime.now(timezone.utc).isoformat()
-    data_json = json.dumps(data, ensure_ascii=False, default=str)
+    data_json = fast_dumps(data)
     ext = _extract_columns(event_type, data)
 
     cursor = conn.execute(
@@ -370,7 +382,7 @@ def get_events(event_type=None, limit=200, since_id=None, before_id=None,
             "event_id": row["event_id"],
             "timestamp_server": row["timestamp_server"],
             "timestamp_local": row["timestamp_local"],
-            "data": json.loads(row["data"]),
+            "data": fast_loads(row["data"]),
         }
         for row in rows
     ]
@@ -585,7 +597,7 @@ def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0, be
             "event_id": row["event_id"],
             "timestamp_server": row["timestamp_server"],
             "timestamp_local": row["timestamp_local"],
-            "data": json.loads(row["data"]),
+            "data": fast_loads(row["data"]),
         }
         for row in rows
     ]
@@ -1239,7 +1251,7 @@ def get_hidden_content(target=None, search=None, limit=200, offset=0):
             "event_id": row["event_id"],
             "timestamp_server": row["timestamp_server"],
             "timestamp_local": row["timestamp_local"],
-            "data": json.loads(row["data"]),
+            "data": fast_loads(row["data"]),
         }
         for row in rows
     ]
@@ -1286,7 +1298,7 @@ def get_superchats(limit=50, since=None):
             "id": row["id"],
             "event_id": row["event_id"],
             "timestamp_local": row["timestamp_local"],
-            "data": json.loads(row["data"]),
+            "data": fast_loads(row["data"]),
             "deleted": bool(row["deleted"]),
         }
         for row in rows
@@ -1322,7 +1334,7 @@ def get_polls(limit=50):
     seen_active_start = False
     results = []
     for row in rows:
-        data = json.loads(row["data"])
+        data = fast_loads(row["data"])
         pid = data.get("pid") or (data.get("poll") or {}).get("pid")
         evt = {
             "id": row["id"],
@@ -1345,7 +1357,7 @@ def get_polls(limit=50):
                 (start_id, row["id"]),
             ).fetchone()
             if vote_row:
-                vote_data = json.loads(vote_row["data"])
+                vote_data = fast_loads(vote_row["data"])
                 if isinstance(vote_data, list):
                     evt["data"]["votes"] = vote_data
                 elif isinstance(vote_data, dict) and "value" in vote_data:
@@ -1353,7 +1365,7 @@ def get_polls(limit=50):
                     # Source answers from poll:start, not poll:stop
                     answers = []
                     if start_row:
-                        start_data = json.loads(start_row["data"])
+                        start_data = fast_loads(start_row["data"])
                         answers = (start_data.get("poll") or start_data).get("answers", [])
                     vote_rows = conn.execute(
                         "SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ? AND id < ? ORDER BY id DESC",
@@ -1361,7 +1373,7 @@ def get_polls(limit=50):
                     ).fetchall()
                     latest_by_option = {}
                     for vr in vote_rows:
-                        vd = json.loads(vr["data"])
+                        vd = fast_loads(vr["data"])
                         if isinstance(vd, dict) and "value" in vd:
                             opt = vd["value"]
                             if opt not in latest_by_option:
@@ -1375,7 +1387,7 @@ def get_polls(limit=50):
                             evt["data"]["votes"] = list(latest_by_option.values())
             elif start_row:
                 # No vote events — fall back to initial scores from poll:start
-                start_data = json.loads(start_row["data"])
+                start_data = fast_loads(start_row["data"])
                 scores = (start_data.get("poll") or start_data).get("scores", [])
                 if scores:
                     evt["data"]["votes"] = scores
@@ -1406,7 +1418,7 @@ def get_notifications(limit=100):
             "id": row["id"],
             "event_type": row["event_type"],
             "timestamp_local": row["timestamp_local"],
-            "data": json.loads(row["data"]),
+            "data": fast_loads(row["data"]),
         }
         for row in rows
     ]
@@ -1430,7 +1442,7 @@ def get_price_changes(limit=100):
             "id": row["id"],
             "event_type": row["event_type"],
             "timestamp_local": row["timestamp_local"],
-            "data": json.loads(row["data"]),
+            "data": fast_loads(row["data"]),
         }
         for row in rows
     ]
@@ -1484,7 +1496,7 @@ def search_user(username, limit=500, before_id=None):
     for r in rows:
         key = type_map.get(r["event_type"])
         if key:
-            results[key].append({"id": r["id"], "timestamp": r["timestamp_local"], "data": json.loads(r["data"])})
+            results[key].append({"id": r["id"], "timestamp": r["timestamp_local"], "data": fast_loads(r["data"])})
 
     results["totals"] = {k: len(results[k]) for k in ("chat", "tts", "sfx", "fishtoys")}
     return results
@@ -1546,7 +1558,7 @@ def get_latest_poll_state():
     if not start:
         return None
 
-    start_data = json.loads(start["data"])
+    start_data = fast_loads(start["data"])
     poll_info = start_data.get("poll", start_data)
 
     # Fetch stop event and vote events after this poll:start
@@ -1575,7 +1587,7 @@ def get_latest_poll_state():
     # Reconstruct votes: handle both old format (list of all options) and
     # new format (individual dict per option, one event per changed option)
     if vote_rows:
-        last_data = json.loads(vote_rows[0]["data"])
+        last_data = fast_loads(vote_rows[0]["data"])
         if isinstance(last_data, list):
             # Old format: single event with all options
             result["votes"] = last_data
@@ -1583,7 +1595,7 @@ def get_latest_poll_state():
             # New format: individual vote events per option — collect latest per option
             latest_by_option = {}
             for vr in vote_rows:  # already DESC by id
-                vd = json.loads(vr["data"])
+                vd = fast_loads(vr["data"])
                 if isinstance(vd, dict) and "value" in vd:
                     opt = vd["value"]
                     if opt not in latest_by_option:
@@ -1595,7 +1607,7 @@ def get_latest_poll_state():
             ]
 
     if stop:
-        stop_data = json.loads(stop["data"])
+        stop_data = fast_loads(stop["data"])
         result["winner"] = stop_data.get("winner")
         result["ended_at"] = stop["timestamp_local"]
         result["active"] = False
@@ -1622,7 +1634,7 @@ def get_latest_feature_toggles():
     """).fetchall()
     result = {}
     for row in rows:
-        d = json.loads(row["data"])
+        d = fast_loads(row["data"])
         feature = d.get("feature", "")
         if feature:
             result[feature] = {

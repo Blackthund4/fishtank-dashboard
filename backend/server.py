@@ -31,7 +31,7 @@ import requests as http_requests
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, ORJSONResponse
 from pathlib import Path
 
 from fishclient import FishClient
@@ -39,6 +39,7 @@ from fishclient import FishClient
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 import database
+from database import fast_loads, fast_dumps
 from auth import AuthManager
 
 _sentiment_analyzer = SentimentIntensityAnalyzer()
@@ -403,11 +404,7 @@ async def _ws_ping_loop():
 
 async def broadcast_to_browsers(event_type: str, data, db_id: int):
     """Send event to all connected browser clients."""
-    message = json.dumps(
-        {"event_type": event_type, "data": data, "db_id": db_id},
-        ensure_ascii=False,
-        default=str,
-    )
+    message = fast_dumps({"event_type": event_type, "data": data, "db_id": db_id})
     with _clients_lock:
         clients_snapshot = set(browser_clients)
     disconnected = set()
@@ -786,7 +783,7 @@ def _backfill_empty_sc_names():
     fixed = 0
     for row in rows:
         try:
-            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            data = fast_loads(row["data"]) if isinstance(row["data"], str) else row["data"]
         except (json.JSONDecodeError, TypeError):
             continue
         if not isinstance(data, dict):
@@ -800,7 +797,7 @@ def _backfill_empty_sc_names():
         data.update(profile)
         conn.execute(
             "UPDATE events SET data = ?, display_name = ? WHERE id = ?",
-            (json.dumps(data, ensure_ascii=False, default=str), profile["displayName"], row["id"])
+            (fast_dumps(data), profile["displayName"], row["id"])
         )
         fixed += 1
     if fixed:
@@ -1085,7 +1082,7 @@ async def lifespan(app: FastAPI):
     ping_task.cancel()
 
 
-app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
+app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan, default_response_class=ORJSONResponse)
 
 # CORS: configurable via ALLOWED_ORIGINS env var (comma-separated)
 _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -1140,7 +1137,7 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.accept()
         browser_clients.add(ws)
     try:
-        await ws.send_text(json.dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION, "chatRoom": _chat_room}}))
+        await ws.send_text(fast_dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION, "chatRoom": _chat_room}}))
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
