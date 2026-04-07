@@ -1623,11 +1623,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
     })), [sessionStats.top_fishtoy_senders])
 
   return (
-    <div className="w-full md:w-[280px] md:shrink-0 overflow-y-auto bg-tank-surface border border-tank-border rounded-lg p-2.5">
-      <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
-        <Clock className="w-3.5 h-3.5" />
-        Last 24 Hours
-      </h3>
+    <Panel title="Last 24 Hours" icon={Clock} className="w-full md:w-[280px] md:shrink-0 border-t-2 border-t-cyan-500/60">
       <div className="space-y-1.5">
         <StatRow label="Fishtoys" value={sessionStats.fishtoys} color="text-tank-accent" />
         <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
@@ -1705,7 +1701,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
           </div>
         </div>
       )} />
-    </div>
+    </Panel>
   )
 })
 
