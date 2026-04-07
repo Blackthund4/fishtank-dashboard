@@ -843,7 +843,7 @@ export default function App() {
       {activeTab === 'dashboard' && (
       <main className="flex-1 flex flex-col md:flex-row gap-2 p-2 min-h-0 overflow-y-auto md:overflow-hidden">
         {/* LEFT: Unified Activity panel */}
-        <div className="w-full md:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border rounded-lg overflow-hidden min-h-[400px] md:min-h-0">
+        <div className="w-full md:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border border-t-2 border-t-emerald-500/60 rounded-lg overflow-hidden min-h-[400px] md:min-h-0">
           {/* Filter bar */}
           <div className="border-b border-tank-border p-2 space-y-1.5 shrink-0">
             <div className="flex items-center justify-between">
