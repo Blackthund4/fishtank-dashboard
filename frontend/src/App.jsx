@@ -1025,7 +1025,7 @@ export default function App() {
           <div className="shrink-0 flex flex-col gap-2">
             {/* Target pills */}
             {seenTargets.length > 0 && (
-              <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+              <div className="bg-tank-surface border border-tank-border border-t-2 border-t-red-500/60 rounded-lg p-2.5">
                 <div className="flex items-center gap-2 mb-1.5">
                   <Crosshair className="w-3.5 h-3.5 text-tank-muted" />
                   <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Targets</h3>
@@ -1129,7 +1129,7 @@ export default function App() {
 
           {/* STO-X ticker */}
           {stocks.length > 0 && (
-            <div className="bg-tank-surface border border-tank-border rounded-lg p-2 shrink-0">
+            <div className="bg-tank-surface border border-tank-border border-t-2 border-t-blue-500/60 rounded-lg p-2 shrink-0">
               <div className="flex items-center gap-2 mb-1.5">
                 <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
                 <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">STO-X</h3>
@@ -1199,7 +1199,7 @@ export default function App() {
           {/* Info grid: Director Messages, Poll History, System Events */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
             {/* Director Messages */}
-            <div ref={directorRef} className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+            <div ref={directorRef} className="bg-tank-surface border border-tank-border border-t-2 border-t-yellow-500/60 rounded-lg p-2.5">
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
                   <Bell className="w-3.5 h-3.5 text-yellow-400" />
@@ -1248,7 +1248,7 @@ export default function App() {
             </div>
 
             {/* Poll History */}
-            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+            <div className="bg-tank-surface border border-tank-border border-t-2 border-t-purple-500/60 rounded-lg p-2.5">
               <div className="flex items-center gap-2 mb-1.5">
                 <Vote className="w-3.5 h-3.5 text-purple-400" />
                 <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Poll History</h3>
@@ -1346,7 +1346,7 @@ export default function App() {
             </div>
 
             {/* System Events */}
-            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5">
+            <div className="bg-tank-surface border border-tank-border border-t-2 border-t-orange-500/60 rounded-lg p-2.5">
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
                   <Zap className="w-3.5 h-3.5 text-tank-muted" />
@@ -1402,7 +1402,7 @@ export default function App() {
               title={`Chat${chatRoom ? `: ${chatRoom}` : ''}`}
               icon={MessageSquare}
               count={stats.chats}
-              className="flex-1 min-h-[300px] md:min-h-0"
+              className="flex-1 min-h-[300px] md:min-h-0 border-t-2 border-t-rose-500/60"
               virtualized
               extra={<>
                 <div className="flex gap-0.5">
@@ -1571,7 +1571,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
         <StatRow label="Est. Revenue" value={formattedSpend.estRevenue} color="text-green-400" />
       </div>
 
-      <LeaderboardSection title="Top Spenders (TTS, SFX & Fishtoys)" items={topSenders} renderItem={(s, i) => (
+      <LeaderboardSection title="24h Top Spenders (TTS, SFX & Fishtoys)" items={topSenders} renderItem={(s, i) => (
         <div key={s.name} className="flex items-center justify-between text-[11px]">
           <div className="flex items-center gap-1">
             <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
@@ -1584,7 +1584,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
         </div>
       )} />
 
-      <LeaderboardSection title="Top TTS" items={topTTS} renderItem={(s, i) => (
+      <LeaderboardSection title="24h Top TTS" items={topTTS} renderItem={(s, i) => (
         <div key={s.name} className="flex items-center justify-between text-[11px]">
           <div className="flex items-center gap-1">
             <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
@@ -1597,7 +1597,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
         </div>
       )} />
 
-      <LeaderboardSection title="Top SFX" items={topSFX} renderItem={(s, i) => (
+      <LeaderboardSection title="24h Top SFX" items={topSFX} renderItem={(s, i) => (
         <div key={s.name} className="flex items-center justify-between text-[11px]">
           <div className="flex items-center gap-1">
             <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
@@ -1610,7 +1610,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
         </div>
       )} />
 
-      <LeaderboardSection title="Top Chat" items={topChat} renderItem={(s, i) => (
+      <LeaderboardSection title="24h Top Chat" items={topChat} renderItem={(s, i) => (
         <div key={s.name} className="flex items-center justify-between text-[11px]">
           <div className="flex items-center gap-1">
             <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
@@ -1620,7 +1620,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
         </div>
       )} />
 
-      <LeaderboardSection title="Top Fishtoy" items={topFishtoy} renderItem={(s, i) => (
+      <LeaderboardSection title="24h Top Fishtoy" items={topFishtoy} renderItem={(s, i) => (
         <div key={s.name} className="flex items-center justify-between text-[11px]">
           <div className="flex items-center gap-1">
             <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
