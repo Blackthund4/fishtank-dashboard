@@ -13,6 +13,8 @@ export function useWebSocket(url) {
 
   useEffect(() => {
     let alive = true
+    let delay = 1000
+    const lastMessageAt = { current: Date.now() }
 
     function connect() {
       if (!alive) return
@@ -24,6 +26,8 @@ export function useWebSocket(url) {
 
       ws.onopen = () => {
         setIsConnected(true)
+        delay = 1000
+        lastMessageAt.current = Date.now()
         if (reconnectTimer.current) {
           clearTimeout(reconnectTimer.current)
           reconnectTimer.current = null
@@ -31,6 +35,7 @@ export function useWebSocket(url) {
       }
 
       ws.onmessage = (e) => {
+        lastMessageAt.current = Date.now()
         try {
           const msg = JSON.parse(e.data)
           listeners.current.forEach((fn) => fn(msg))
@@ -43,7 +48,8 @@ export function useWebSocket(url) {
         setIsConnected(false)
         wsRef.current = null
         if (alive) {
-          reconnectTimer.current = setTimeout(connect, 3000)
+          reconnectTimer.current = setTimeout(connect, delay)
+          delay = Math.min(delay * 2, 30000)
         }
       }
 
@@ -54,8 +60,34 @@ export function useWebSocket(url) {
 
     connect()
 
+    // Heartbeat: detect silently dead connections (server pings every 60s)
+    const heartbeat = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN
+          && Date.now() - lastMessageAt.current > 90000) {
+        wsRef.current.close()
+      }
+    }, 15000)
+
+    // Visibility: reconnect immediately when tab regains focus if stale
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!wsRef.current
+          || wsRef.current.readyState !== WebSocket.OPEN
+          || Date.now() - lastMessageAt.current > 90000) {
+        if (wsRef.current) {
+          wsRef.current.close()
+        } else if (alive) {
+          delay = 1000
+          connect()
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
     return () => {
       alive = false
+      clearInterval(heartbeat)
+      document.removeEventListener('visibilitychange', onVisible)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       if (wsRef.current) wsRef.current.close()
     }
