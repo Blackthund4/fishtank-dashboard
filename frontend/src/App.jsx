@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo, lazy, Suspense } from 'react'
-import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, Package, Star, TrendingUp, Crosshair, Box, Users, Clock, Trophy, Crown } from 'lucide-react'
+import { Fish, MessageSquare, Radio, Search, X, BarChart3, FileText, Bell, Vote, User, Zap, TrendingUp, Crosshair, Box, Users, Clock, Trophy, Crown } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
 import { useWebSocket } from './useWebSocket'
 import { formatDateTime } from './utils/formatTime'
@@ -174,8 +174,6 @@ export default function App() {
   const [systemEvents, setSystemEvents] = useState([])
   const [featureToggles, setFeatureToggles] = useState({})
   const [polls, setPolls] = useState([])
-  const [fishtoyStatus, setFishtoyStatus] = useState([])
-  const [fishtoyFilter, setFishtoyFilter] = useState('enabled')
   const [allTargets, setAllTargets] = useState([])
   const [activeSuperchats, setActiveSuperchats] = useState([])
   const [scCountdowns, setScCountdowns] = useState({})
@@ -203,7 +201,6 @@ export default function App() {
     fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
     fetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
     fetch('/api/targets').then(okJson).then(setAllTargets).catch(() => {})
-    fetch('/api/fishtoy-availability').then(okJson).then(setFishtoyStatus).catch(() => {})
     fetch('/api/polls').then(okJson).then(setPolls).catch(() => {})
     fetch('/api/notifications?limit=500').then(okJson).then(data => {
       setNotifications(data.map(n => ({
@@ -405,7 +402,6 @@ export default function App() {
       fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
       fetch('/api/stocks').then(okJson).then(setStocks).catch(() => {})
       fetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
-      fetch('/api/fishtoy-availability').then(okJson).then(setFishtoyStatus).catch(() => {})
     }, 60000)
     return () => clearInterval(interval)
   }, [])
@@ -736,12 +732,6 @@ export default function App() {
     setFilterTarget(target)
     setActivityFilter('fishtoys')
   }, [])
-  const filteredFishtoyStatus = useMemo(() =>
-    [...fishtoyStatus]
-      .filter(item => fishtoyFilter === 'all' || (fishtoyFilter === 'enabled' ? item.enabled : !item.enabled))
-      .sort((a, b) => (a.name || '').localeCompare(b.name || '')),
-    [fishtoyStatus, fishtoyFilter]
-  )
 
   return (
     <div className="h-screen flex flex-col">
@@ -1405,65 +1395,6 @@ export default function App() {
                 )}
             </div>
           </div>
-
-          {/* Fishtoy Availability pills */}
-          {fishtoyStatus.length > 0 && (
-            <div className="bg-tank-surface border border-tank-border rounded-lg p-2.5 shrink-0">
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-2">
-                  <Package className="w-4 h-4 text-tank-muted" />
-                  <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Fishtoy Availability</h3>
-                  <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
-                    {fishtoyStatus.filter(f => f.enabled).length}/{fishtoyStatus.length}
-                  </span>
-                </div>
-                <div className="flex gap-1">
-                  {['enabled', 'all', 'disabled'].map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setFishtoyFilter(f)}
-                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-                        fishtoyFilter === f
-                          ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
-                          : 'text-tank-muted hover:text-tank-text'
-                      }`}
-                    >
-                      {f.charAt(0).toUpperCase() + f.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {featureToggles.fishtoys && !featureToggles.fishtoys.enabled && (
-                <div className="text-[10px] text-red-400 font-mono mb-1.5 p-1.5 bg-red-500/5 border border-red-500/20 rounded">
-                  Fishtoys globally disabled by production
-                </div>
-              )}
-              <div className="flex flex-wrap gap-1">
-                {filteredFishtoyStatus.map(item => {
-                    const isActive = filterItemId === String(item.id)
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => setFilterItemId(isActive ? null : String(item.id))}
-                        className={`text-[10px] font-medium px-2 py-1 rounded border transition-colors ${
-                          isActive
-                            ? 'border-tank-accent bg-tank-accent/10 text-tank-accent'
-                            : item.enabled
-                              ? 'border-green-500/30 hover:border-green-400/60 text-tank-text'
-                              : 'border-red-500/30 hover:border-red-400/40 text-tank-muted'
-                        }`}
-                      >
-                        {item.name}
-                        <span className="text-[9px] text-tank-warn ml-1">{item.cost}t</span>
-                        {item.type === 'BIGTOY' && (
-                          <Star className={`w-2.5 h-2.5 inline ml-0.5 ${isActive ? 'text-tank-accent' : 'text-purple-400'}`} />
-                        )}
-                      </button>
-                    )
-                  })}
-              </div>
-            </div>
-          )}
 
           {/* Bottom: Chat */}
           <div className="flex-1 flex flex-col min-h-[600px] md:min-h-0">
