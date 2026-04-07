@@ -265,13 +265,71 @@ def test_suggest_users_cross_event_types():
 
 
 def test_get_polls_excludes_votes():
-    database.store_event("poll:start", {"poll": {"question": "Test?", "answers": ["A", "B"]}})
+    database.store_event("poll:start", {"poll": {"pid": "t1", "question": "Test?", "answers": ["A", "B"]}})
     database.store_event("poll:vote", [{"value": "A", "score": 5}])
-    database.store_event("poll:stop", {"question": "Test?", "winner": "A"})
+    database.store_event("poll:stop", {"pid": "t1", "question": "Test?", "winner": "A"})
     polls = database.get_polls()
-    assert len(polls) == 2
-    types = {p["event_type"] for p in polls}
-    assert "poll:vote" not in types
+    # poll:start filtered out (matched by pid), only poll:stop remains
+    assert len(polls) == 1
+    assert polls[0]["event_type"] == "poll:stop"
+    assert "poll:vote" not in {p["event_type"] for p in polls}
+
+
+def test_get_polls_attaches_vote_scores():
+    """poll:stop results should include full vote breakdown, not just winner."""
+    database.store_event("poll:start", {"poll": {"pid": "v1", "question": "Pick?", "answers": ["A", "B"]}})
+    database.store_event("poll:vote", [{"value": "A", "score": 30}, {"value": "B", "score": 20}])
+    database.store_event("poll:stop", {"pid": "v1", "question": "Pick?", "winner": "A"})
+    polls = database.get_polls()
+    stop = [p for p in polls if p["event_type"] == "poll:stop"][0]
+    votes = stop["data"].get("votes", [])
+    assert len(votes) == 2
+    scores = {v["value"]: v["score"] for v in votes}
+    assert scores["A"] == 30
+    assert scores["B"] == 20
+
+
+def test_get_polls_scoped_votes():
+    """Each poll:stop should get votes from its own poll, not a different one."""
+    database.store_event("poll:start", {"poll": {"pid": "p1", "question": "Q1?", "answers": ["X", "Y"]}})
+    database.store_event("poll:vote", [{"value": "X", "score": 100}, {"value": "Y", "score": 50}])
+    database.store_event("poll:stop", {"pid": "p1", "question": "Q1?", "winner": "X"})
+    database.store_event("poll:start", {"poll": {"pid": "p2", "question": "Q2?", "answers": ["M", "N"]}})
+    database.store_event("poll:vote", [{"value": "M", "score": 10}, {"value": "N", "score": 5}])
+    database.store_event("poll:stop", {"pid": "p2", "question": "Q2?", "winner": "M"})
+    polls = database.get_polls()
+    stops = [p for p in polls if p["event_type"] == "poll:stop"]
+    assert len(stops) == 2
+    # Results are newest-first
+    stop_q2 = stops[0]
+    stop_q1 = stops[1]
+    q2_scores = {v["value"]: v["score"] for v in stop_q2["data"]["votes"]}
+    q1_scores = {v["value"]: v["score"] for v in stop_q1["data"]["votes"]}
+    assert q2_scores == {"M": 10, "N": 5}
+    assert q1_scores == {"X": 100, "Y": 50}
+
+
+def test_get_polls_stale_start_suppressed():
+    """Only the newest poll:start without a stop should appear (older ones are implicitly closed)."""
+    database.store_event("poll:start", {"poll": {"pid": "old", "question": "Old?", "answers": ["A", "B"]}})
+    database.store_event("poll:start", {"poll": {"pid": "new", "question": "New?", "answers": ["C", "D"]}})
+    polls = database.get_polls()
+    starts = [p for p in polls if p["event_type"] == "poll:start"]
+    assert len(starts) == 1
+    assert starts[0]["data"]["poll"]["pid"] == "new"
+
+
+def test_get_polls_no_votes_fallback():
+    """When no poll:vote events exist, fall back to initial scores from poll:start."""
+    database.store_event("poll:start", {"poll": {
+        "pid": "fb1", "question": "Fallback?", "answers": ["A", "B"],
+        "scores": [{"value": "A", "score": 0}, {"value": "B", "score": 0}],
+    }})
+    database.store_event("poll:stop", {"pid": "fb1", "question": "Fallback?", "winner": "A"})
+    polls = database.get_polls()
+    stop = [p for p in polls if p["event_type"] == "poll:stop"][0]
+    votes = stop["data"].get("votes", [])
+    assert len(votes) == 2
 
 
 # ============================================================

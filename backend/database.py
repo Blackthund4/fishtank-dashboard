@@ -1319,6 +1319,7 @@ def get_polls(limit=50):
     """, (limit,)).fetchall()
     # Collect poll:stop pids so we can filter out their matching poll:start
     stop_pids = set()
+    seen_active_start = False
     results = []
     for row in rows:
         data = json.loads(row["data"])
@@ -1332,24 +1333,28 @@ def get_polls(limit=50):
         if row["event_type"] == "poll:stop":
             if pid:
                 stop_pids.add(pid)
-            # Attach final vote tallies from poll:vote events before this poll:stop
-            vote_row = conn.execute(
-                "SELECT data FROM events WHERE event_type = 'poll:vote' AND id < ? ORDER BY id DESC LIMIT 1",
+            # Find the poll:start preceding this stop (need id + answers)
+            start_row = conn.execute(
+                "SELECT id, data FROM events WHERE event_type = 'poll:start' AND id < ? ORDER BY id DESC LIMIT 1",
                 (row["id"],),
+            ).fetchone()
+            start_id = start_row["id"] if start_row else 0
+            # Scoped: only votes between this poll's start and stop
+            vote_row = conn.execute(
+                "SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ? AND id < ? ORDER BY id DESC LIMIT 1",
+                (start_id, row["id"]),
             ).fetchone()
             if vote_row:
                 vote_data = json.loads(vote_row["data"])
                 if isinstance(vote_data, list):
                     evt["data"]["votes"] = vote_data
                 elif isinstance(vote_data, dict) and "value" in vote_data:
-                    # New format: individual vote events — collect latest per option
-                    answers = (data.get("poll") or data).get("answers", [])
-                    # Find the poll:start preceding this stop
-                    start_row = conn.execute(
-                        "SELECT id FROM events WHERE event_type = 'poll:start' AND id < ? ORDER BY id DESC LIMIT 1",
-                        (row["id"],),
-                    ).fetchone()
-                    start_id = start_row["id"] if start_row else 0
+                    # New format: collect latest per option
+                    # Source answers from poll:start, not poll:stop
+                    answers = []
+                    if start_row:
+                        start_data = json.loads(start_row["data"])
+                        answers = (start_data.get("poll") or start_data).get("answers", [])
                     vote_rows = conn.execute(
                         "SELECT data FROM events WHERE event_type = 'poll:vote' AND id > ? AND id < ? ORDER BY id DESC",
                         (start_id, row["id"]),
@@ -1362,14 +1367,24 @@ def get_polls(limit=50):
                             if opt not in latest_by_option:
                                 latest_by_option[opt] = vd
                     if latest_by_option:
-                        evt["data"]["votes"] = [
-                            latest_by_option.get(a, {"value": a, "score": 0}) for a in answers
-                        ]
+                        if answers:
+                            evt["data"]["votes"] = [
+                                latest_by_option.get(a, {"value": a, "score": 0}) for a in answers
+                            ]
+                        else:
+                            evt["data"]["votes"] = list(latest_by_option.values())
+            elif start_row:
+                # No vote events — fall back to initial scores from poll:start
+                start_data = json.loads(start_row["data"])
+                scores = (start_data.get("poll") or start_data).get("scores", [])
+                if scores:
+                    evt["data"]["votes"] = scores
             results.append(evt)
         else:
-            # poll:start — only include if no matching poll:stop exists
-            if pid and pid not in stop_pids:
+            # poll:start — only include if no matching poll:stop and no newer active start
+            if pid and pid not in stop_pids and not seen_active_start:
                 results.append(evt)
+                seen_active_start = True
     return results
 
 

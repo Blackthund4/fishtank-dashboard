@@ -689,7 +689,7 @@ export default function App() {
     const secondScore = sorted[1]?.score || 0
     const delta = maxScore > 0 && sorted.length > 1 ? maxScore - secondScore : 0
     return (
-      <div className="space-y-1.5">
+      <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
         {pollVotes.map((v, i) => {
           const score = v.score || 0
           const pct = Math.round(score / total * 100)
