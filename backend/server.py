@@ -36,13 +36,19 @@ from pathlib import Path
 
 from fishclient import FishClient
 
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-
 import database
 from database import fast_loads, fast_dumps
 from auth import AuthManager
 
-_sentiment_analyzer = SentimentIntensityAnalyzer()
+_sentiment_analyzer = None
+
+
+def _get_analyzer():
+    global _sentiment_analyzer
+    if _sentiment_analyzer is None:
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        _sentiment_analyzer = SentimentIntensityAnalyzer()
+    return _sentiment_analyzer
 
 # ============================================================
 # CONFIG
@@ -490,7 +496,7 @@ def _score_sentiment(text):
     """Return VADER compound sentiment score (-1.0 to 1.0). Returns 0.0 for empty/None text."""
     if not text or not isinstance(text, str):
         return 0.0
-    return _sentiment_analyzer.polarity_scores(text)["compound"]
+    return _get_analyzer().polarity_scores(text)["compound"]
 
 
 # In-memory poll vote accumulator: always holds the full list of {value, score} dicts
@@ -1071,6 +1077,24 @@ async def lifespan(app: FastAPI):
 
     # Start database backup poller (every 6 hours)
     Thread(target=db_backup_poller, daemon=True).start()
+
+    # Pre-warm analytics cache so first browser connect doesn't trigger a CPU spike
+    def _warm_caches():
+        _time.sleep(5)  # Let ingestion threads stabilize first
+        warmup = [
+            ("stats:None", database.get_stats, (None,), None),
+            ("targets", database.get_targets, (), None),
+            ("peak-hours", database.get_peak_hours, (), None),
+            ("tts-sfx:None:None", database.get_tts_sfx_analytics, (None, None), None),
+            ("chat:None:None", database.get_chat_analytics, (None, None), CACHE_TTL_CHAT),
+        ]
+        for key, fn, args, ttl in warmup:
+            try:
+                _cached_query(key, fn, *args, ttl=ttl)
+            except Exception:
+                pass
+        print("[OK] Analytics cache pre-warmed")
+    Thread(target=_warm_caches, daemon=True).start()
 
     # Keep browser WebSocket connections alive through Cloudflare's 100s idle timeout
     ping_task = asyncio.create_task(_ws_ping_loop())
