@@ -737,19 +737,7 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col">
-      <StatusBar isConnected={isConnected} stats={stats} />
-
-      {serverVersion && knownVersion && serverVersion !== knownVersion && (
-        <div className="bg-tank-accent/10 border-b border-tank-accent/30 px-3 py-1.5 flex items-center justify-center gap-2 shrink-0">
-          <span className="text-xs text-tank-accent">A new version is available.</span>
-          <button
-            onClick={() => window.location.reload()}
-            className="text-xs font-medium text-tank-accent underline hover:text-tank-bright"
-          >
-            Refresh
-          </button>
-        </div>
-      )}
+      <StatusBar isConnected={isConnected} stats={stats} updateAvailable={!!(serverVersion && knownVersion && serverVersion !== knownVersion)} />
 
       {/* Tab navigation */}
       <div className="bg-tank-surface border-b border-tank-border px-2 sm:px-3 flex items-center gap-0.5 sm:gap-1 shrink-0 overflow-x-auto">

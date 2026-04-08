@@ -1,5 +1,5 @@
 import { useEffect, useState, memo } from 'react'
-import { Fish, MessageSquare, Volume2, Clock } from 'lucide-react'
+import { Fish, MessageSquare, Volume2, Clock, RefreshCw } from 'lucide-react'
 import { okJson } from '../utils/fetchUtils'
 
 // Isolated timer component — re-renders every second without affecting parent
@@ -37,7 +37,7 @@ function TimeDisplay() {
   )
 }
 
-export default function StatusBar({ isConnected, stats }) {
+export default function StatusBar({ isConnected, stats, updateAvailable }) {
   const [health, setHealth] = useState(null)
 
   useEffect(() => {
@@ -53,7 +53,7 @@ export default function StatusBar({ isConnected, stats }) {
   }, [])
 
   return (
-    <header className="bg-tank-surface border-b border-tank-border flex flex-wrap items-center justify-between px-2 sm:px-4 gap-y-1 shrink-0">
+    <header className="bg-tank-surface border-b border-tank-border flex flex-wrap items-center justify-between px-2 sm:px-4 gap-y-1 shrink-0 min-h-9">
       <div className="flex items-center gap-1 sm:gap-3">
         <div className="flex items-center gap-2">
           <Fish className="w-5 h-5 text-tank-accent" />
@@ -81,6 +81,18 @@ export default function StatusBar({ isConnected, stats }) {
             <span className="text-xs text-tank-muted font-mono hidden sm:inline">
               {health.fishtank_online > 0 && <><span className="text-tank-bright">{health.fishtank_online.toLocaleString()}</span> watching | </>}{health.browser_clients} fish-dasher{health.browser_clients !== 1 ? 's' : ''}
             </span>
+          </>
+        )}
+        {updateAvailable && (
+          <>
+            <div className="w-px h-5 bg-tank-border mx-1" />
+            <button
+              onClick={() => window.location.reload()}
+              className="text-xs font-mono text-green-400 hover:text-green-300 transition-colors cursor-pointer flex items-center gap-1"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Update available: Refresh
+            </button>
           </>
         )}
       </div>
