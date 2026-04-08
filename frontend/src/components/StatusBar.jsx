@@ -65,7 +65,7 @@ export default function StatusBar({ isConnected, stats, updateAvailable }) {
         <div className="flex items-center gap-1.5">
           {isConnected ? (
             <>
-              <span className="w-1.5 h-1.5 rounded-full bg-tank-accent animate-pulse-dot" />
+              <span className="w-1.5 h-1.5 rounded-full bg-tank-accent animate-live-glow" />
               <span className="text-xs text-tank-accent font-mono">LIVE</span>
             </>
           ) : (
