@@ -1187,18 +1187,18 @@ export default function App() {
           )}
 
           {/* Info grid: Director Messages, Poll History, System Events */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 shrink-0">
             {/* Director Messages */}
-            <div ref={directorRef} className="bg-tank-surface border border-tank-border border-t-2 border-t-yellow-500/60 rounded-lg p-2.5">
-              <div className="flex items-center justify-between mb-1.5">
+            <div ref={directorRef} className="group bg-tank-surface border border-tank-border rounded-lg overflow-hidden transition-colors hover:border-yellow-500/30">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-tank-border bg-gradient-to-r from-yellow-500/5 to-transparent">
                 <div className="flex items-center gap-2">
                   <Bell className="w-3.5 h-3.5 text-yellow-400" />
                   <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Director Messages</h3>
-                  <span className="text-[10px] font-mono text-tank-muted bg-tank-highlight px-1.5 py-0.5 rounded">
+                  <span className="text-[10px] font-mono text-yellow-400/70 bg-yellow-500/10 px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
                     {notifications.length}
                   </span>
                 </div>
-                <div className="flex gap-0.5">
+                <div className="flex gap-0.5 bg-tank-bg/50 rounded-md p-0.5">
                   {[
                     { id: '1h', label: '1h' },
                     { id: '6h', label: '6h' },
@@ -1208,10 +1208,10 @@ export default function App() {
                     <button
                       key={t.id}
                       onClick={() => setDirectorTimeRange(t.id)}
-                      className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-all ${
                         directorTimeRange === t.id
-                          ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40'
-                          : 'text-tank-muted hover:text-tank-text'
+                          ? 'bg-yellow-500/20 text-yellow-400 shadow-sm'
+                          : 'text-tank-muted hover:text-yellow-400/70'
                       }`}
                     >
                       {t.label}
@@ -1219,130 +1219,140 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              {filteredDirectorMessages.length > 0 ? (
-                  <div className="space-y-1 max-h-[150px] overflow-y-auto">
+              <div className="p-2">
+                {filteredDirectorMessages.length > 0 ? (
+                  <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
                     {filteredDirectorMessages.map(n => (
-                      <div key={n.id} className="flex items-start gap-1.5 p-1.5 bg-yellow-500/5 border border-yellow-500/20 rounded">
+                      <div key={n.id} className="flex items-start gap-2 p-2 bg-yellow-500/[0.03] border border-yellow-500/15 rounded-md transition-colors hover:bg-yellow-500/[0.06]">
+                        <div className="w-0.5 h-full min-h-[24px] bg-yellow-500/40 rounded-full shrink-0 self-stretch" />
                         <div className="min-w-0 flex-1">
-                          <p className="text-xs text-tank-bright break-words">{n.message}</p>
-                          <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(n.timestamp)}</span>
+                          <p className="text-xs text-tank-bright break-words leading-relaxed">{n.message}</p>
+                          <span className="text-[9px] font-mono text-tank-muted mt-0.5 block">{formatDateTime(n.timestamp)}</span>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-tank-muted font-mono">
+                  <div className="text-[10px] text-tank-muted font-mono py-3 text-center">
                     {directorTimeRange !== 'all' ? `No messages in last ${directorTimeRange}` : 'No director messages yet'}
                   </div>
                 )}
+              </div>
             </div>
 
             {/* Poll History */}
-            <div className="bg-tank-surface border border-tank-border border-t-2 border-t-purple-500/60 rounded-lg p-2.5">
-              <div className="flex items-center gap-2 mb-1.5">
+            <div className="group bg-tank-surface border border-tank-border rounded-lg overflow-hidden transition-colors hover:border-purple-500/30">
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-tank-border bg-gradient-to-r from-purple-500/5 to-transparent">
                 <Vote className="w-3.5 h-3.5 text-purple-400" />
                 <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">Poll History</h3>
+                {polls.length > 0 && (
+                  <span className="text-[10px] font-mono text-purple-400/70 bg-purple-500/10 px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                    {polls.length}
+                  </span>
+                )}
               </div>
-              {polls.length > 0 ? (
-                <div className="space-y-1.5 max-h-[150px] overflow-y-auto">
-                  {polls.map(p => {
-                    const d = p.data || {}
-                    const pollInfo = d.poll || d
-                    const question = pollInfo.question
-                    const pid = pollInfo.pid
-                    // Use live vote tallies for the active poll (#46)
-                    const isActivePoll = p.event_type === 'poll:start' && activePoll && !activePoll.ended && pid && pid === activePoll.pid
-                    const votes = isActivePoll ? pollVotes : (d.votes || d.scores || [])
-                    const total = votes.reduce((s, v) => s + (v.score || 0), 0) || 1
-                    const sortedVotes = [...votes].sort((a, b) => (b.score || 0) - (a.score || 0))
-                    const topScore = sortedVotes[0]?.score || 0
-                    return (
-                      <div key={p.id} className={`p-2 rounded-lg border ${
-                        p.event_type === 'poll:stop'
-                          ? 'border-purple-500/30 bg-purple-500/5'
-                          : isActivePoll
-                            ? 'border-purple-400/50 bg-purple-500/10'
-                            : 'border-tank-border bg-tank-bg'
-                      }`}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
-                            p.event_type === 'poll:stop'
-                              ? 'bg-purple-500/10 text-purple-400'
-                              : isActivePoll
-                                ? 'bg-purple-500/20 text-purple-300'
-                                : 'bg-tank-highlight text-tank-muted'
-                          }`}>
-                            {p.event_type === 'poll:stop' ? 'RESULT' : isActivePoll ? 'LIVE' : 'STARTED'}
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            {isActivePoll && pollElapsed !== null && (
-                              <span className="text-[9px] font-mono text-purple-300/70">
-                                {Math.floor(pollElapsed / 3600)}:{String(Math.floor((pollElapsed % 3600) / 60)).padStart(2, '0')}:{String(pollElapsed % 60).padStart(2, '0')}
-                              </span>
-                            )}
-                            <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
+              <div className="p-2">
+                {polls.length > 0 ? (
+                  <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
+                    {polls.map(p => {
+                      const d = p.data || {}
+                      const pollInfo = d.poll || d
+                      const question = pollInfo.question
+                      const pid = pollInfo.pid
+                      // Use live vote tallies for the active poll (#46)
+                      const isActivePoll = p.event_type === 'poll:start' && activePoll && !activePoll.ended && pid && pid === activePoll.pid
+                      const votes = isActivePoll ? pollVotes : (d.votes || d.scores || [])
+                      const total = votes.reduce((s, v) => s + (v.score || 0), 0) || 1
+                      const sortedVotes = [...votes].sort((a, b) => (b.score || 0) - (a.score || 0))
+                      const topScore = sortedVotes[0]?.score || 0
+                      return (
+                        <div key={p.id} className={`p-2 rounded-md border transition-colors ${
+                          p.event_type === 'poll:stop'
+                            ? 'border-purple-500/25 bg-purple-500/[0.04]'
+                            : isActivePoll
+                              ? 'border-purple-400/40 bg-purple-500/[0.08] shadow-[0_0_12px_rgba(168,85,247,0.08)]'
+                              : 'border-tank-border bg-tank-bg/50'
+                        }`}>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full ${
+                              p.event_type === 'poll:stop'
+                                ? 'bg-purple-500/15 text-purple-400'
+                                : isActivePoll
+                                  ? 'bg-purple-500/25 text-purple-300 animate-pulse-glow'
+                                  : 'bg-tank-highlight text-tank-muted'
+                            }`}>
+                              {p.event_type === 'poll:stop' ? 'RESULT' : isActivePoll ? 'LIVE' : 'STARTED'}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {isActivePoll && pollElapsed !== null && (
+                                <span className="text-[9px] font-mono text-purple-300/70 tabular-nums">
+                                  {Math.floor(pollElapsed / 3600)}:{String(Math.floor((pollElapsed % 3600) / 60)).padStart(2, '0')}:{String(pollElapsed % 60).padStart(2, '0')}
+                                </span>
+                              )}
+                              <span className="text-[9px] font-mono text-tank-muted">{formatDateTime(p.timestamp_local)}</span>
+                            </div>
                           </div>
+                          {question && <p className="text-[11px] text-tank-bright mb-1.5 leading-relaxed">{question}</p>}
+                          {sortedVotes.length > 0 && (
+                            <div className="space-y-1">
+                              {sortedVotes.map((v, i) => {
+                                const score = v.score || 0
+                                const pct = Math.round(score / total * 100)
+                                const isWinner = score === topScore && topScore > 0
+                                const color = POLL_COLORS[i % POLL_COLORS.length]
+                                return (
+                                  <div key={v.value}>
+                                    <div className="flex items-center justify-between text-[9px] mb-0.5">
+                                      <span className="flex items-center gap-1 min-w-0">
+                                        {isWinner && <Crown className="w-2.5 h-2.5 text-yellow-400 shrink-0" />}
+                                        <span className={`truncate ${isWinner ? 'text-white font-medium' : 'text-tank-bright'}`}>{v.value}</span>
+                                      </span>
+                                      <span className={`font-mono ml-2 flex items-center gap-1 shrink-0 tabular-nums ${isWinner ? 'text-purple-300' : 'text-purple-400/60'}`}>
+                                        {score.toLocaleString()}t ({pct}%)
+                                        {!isWinner && topScore > 0 && <span className="text-red-400/60 text-[8px]">-{(topScore - score).toLocaleString()}t</span>}
+                                      </span>
+                                    </div>
+                                    <div className="h-1.5 bg-purple-900/20 rounded-full overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-full transition-all duration-700 ease-out ${isWinner ? 'shadow-[0_0_8px_rgba(192,132,252,0.35)]' : ''}`}
+                                        style={{
+                                          width: `${Math.max(pct, 2)}%`,
+                                          background: isWinner
+                                            ? `linear-gradient(90deg, ${color}ee, ${color})`
+                                            : `${color}33`,
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                          {d.winner && sortedVotes.length === 0 && (
+                            <div className="text-[10px] mt-1.5 flex items-center gap-1.5">
+                              <Crown className="w-3 h-3 text-yellow-400" />
+                              <span className="text-tank-muted">Winner:</span>
+                              <span className="font-semibold text-purple-400">{d.winner}</span>
+                            </div>
+                          )}
                         </div>
-                        {question && <p className="text-[11px] text-tank-bright mb-1">{question}</p>}
-                        {sortedVotes.length > 0 && (
-                          <div className="space-y-1">
-                            {sortedVotes.map((v, i) => {
-                              const score = v.score || 0
-                              const pct = Math.round(score / total * 100)
-                              const isWinner = score === topScore && topScore > 0
-                              const color = POLL_COLORS[i % POLL_COLORS.length]
-                              return (
-                                <div key={v.value}>
-                                  <div className="flex items-center justify-between text-[9px] mb-0.5">
-                                    <span className="flex items-center gap-1">
-                                      {isWinner && <Crown className="w-2.5 h-2.5 text-yellow-400" />}
-                                      <span className={`truncate ${isWinner ? 'text-white font-medium' : 'text-tank-bright'}`}>{v.value}</span>
-                                    </span>
-                                    <span className={`font-mono ml-1 flex items-center gap-1 ${isWinner ? 'text-purple-300' : 'text-purple-400/60'}`}>
-                                      {score.toLocaleString()}t ({pct}%)
-                                      {!isWinner && topScore > 0 && <span className="text-red-400/70">[-{(topScore - score).toLocaleString()}t]</span>}
-                                    </span>
-                                  </div>
-                                  <div className="h-2 bg-purple-900/30 rounded overflow-hidden">
-                                    <div
-                                      className={`h-full rounded transition-all duration-500 ${isWinner ? 'shadow-[0_0_6px_rgba(192,132,252,0.3)]' : ''}`}
-                                      style={{
-                                        width: `${Math.max(pct, 1)}%`,
-                                        background: isWinner
-                                          ? `linear-gradient(90deg, ${color}, ${color}cc)`
-                                          : `${color}44`,
-                                      }}
-                                    />
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-                        {d.winner && sortedVotes.length === 0 && (
-                          <div className="text-[10px] mt-1 flex items-center gap-1">
-                            <Crown className="w-3 h-3 text-yellow-400" />
-                            <span className="text-tank-muted">Winner:</span>
-                            <span className="font-semibold text-purple-400">{d.winner}</span>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="text-[10px] text-tank-muted font-mono">No polls recorded yet</div>
-              )}
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-tank-muted font-mono py-3 text-center">No polls recorded yet</div>
+                )}
+              </div>
             </div>
 
             {/* System Events */}
-            <div className="bg-tank-surface border border-tank-border border-t-2 border-t-orange-500/60 rounded-lg p-2.5">
-              <div className="flex items-center justify-between mb-1.5">
+            <div className="group bg-tank-surface border border-tank-border rounded-lg overflow-hidden transition-colors hover:border-orange-500/30 sm:col-span-2 lg:col-span-1">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-tank-border bg-gradient-to-r from-orange-500/5 to-transparent">
                 <div className="flex items-center gap-2">
-                  <Zap className="w-3.5 h-3.5 text-tank-muted" />
+                  <Zap className="w-3.5 h-3.5 text-orange-400" />
                   <h3 className="text-[10px] font-mono text-tank-muted uppercase tracking-wider">System Events</h3>
                 </div>
-                <div className="flex gap-0.5">
+                <div className="flex gap-0.5 bg-tank-bg/50 rounded-md p-0.5">
                   {[
                     { id: 'all', label: 'All' },
                     { id: 'toggle', label: 'Toggle' },
@@ -1352,10 +1362,10 @@ export default function App() {
                     <button
                       key={f.id}
                       onClick={() => setSystemFilter(f.id)}
-                      className={`text-[9px] font-mono px-1 py-0.5 rounded transition-colors ${
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-all ${
                         systemFilter === f.id
-                          ? 'bg-tank-accent/20 text-tank-accent border border-tank-accent/40'
-                          : 'text-tank-muted hover:text-tank-text'
+                          ? 'bg-orange-500/20 text-orange-400 shadow-sm'
+                          : 'text-tank-muted hover:text-orange-400/70'
                       }`}
                     >
                       {f.label}
@@ -1363,26 +1373,28 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              {filteredSystemEvents.length > 0 ? (
-                  <div className="space-y-0.5 max-h-[150px] overflow-y-auto">
+              <div className="p-2">
+                {filteredSystemEvents.length > 0 ? (
+                  <div className="space-y-1 max-h-[160px] overflow-y-auto">
                     {filteredSystemEvents.map(e => {
                       const fmt = formatSystemEvent(e)
                       return (
-                        <div key={e.dbId} className="flex items-center gap-1.5 text-[10px] p-1 bg-tank-bg rounded">
-                          <span className={`font-mono text-[9px] px-1 py-0.5 rounded shrink-0 ${fmt.badgeClass}`}>
+                        <div key={e.dbId} className="flex items-center gap-2 text-[10px] px-2 py-1.5 bg-tank-bg/60 rounded-md transition-colors hover:bg-tank-bg">
+                          <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded shrink-0 ${fmt.badgeClass}`}>
                             {fmt.badge}
                           </span>
                           <span className="text-tank-text flex-1 truncate">{fmt.message}</span>
-                          {fmt.time && <span className="text-[9px] text-tank-muted font-mono shrink-0">{fmt.time}</span>}
+                          {fmt.time && <span className="text-[9px] text-tank-muted font-mono shrink-0 tabular-nums">{fmt.time}</span>}
                         </div>
                       )
                     })}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-tank-muted font-mono">
+                  <div className="text-[10px] text-tank-muted font-mono py-3 text-center">
                     {systemFilter !== 'all' ? `No ${systemFilter} events` : 'No system events yet'}
                   </div>
                 )}
+              </div>
             </div>
           </div>
 

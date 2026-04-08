@@ -79,3 +79,23 @@ body {
 .animate-highlight-pulse {
   animation: highlight-pulse 2s ease-in-out;
 }
+
+/* Tabular figures for numeric displays */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Smooth transitions for panel interactions */
+.group:hover .group-hover\:visible {
+  visibility: visible;
+}
+
+/* Info grid panel scrollbar refinement */
+.max-h-\[160px\]::-webkit-scrollbar {
+  width: 4px;
+}
+
+.max-h-\[160px\]::-webkit-scrollbar-thumb {
+  background: #2a2a34;
+  border-radius: 2px;
+}

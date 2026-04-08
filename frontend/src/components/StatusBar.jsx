@@ -1,6 +1,9 @@
 import { useEffect, useState, memo } from 'react'
-import { Fish, MessageSquare, Volume2, Clock, RefreshCw } from 'lucide-react'
+import { Fish, MessageSquare, Volume2, Clock, RefreshCw, Wifi, WifiOff, Coins } from 'lucide-react'
 import { okJson } from '../utils/fetchUtils'
+
+const fmt = (n) => Number(n || 0).toLocaleString()
+const fmtUSD = (n) => (n * 0.10).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
 // Isolated timer component — re-renders every second without affecting parent
 function TimeDisplay() {
@@ -29,10 +32,10 @@ function TimeDisplay() {
 
   return (
     <div className="flex items-center gap-1.5">
-      <Clock className="w-3.5 h-3.5 text-tank-warn" />
-      <span className="text-xs font-mono text-tank-muted hidden sm:inline">Tank Time</span>
-      <span className="text-xs font-mono text-tank-bright">{tankTime}</span>
-      <span className="text-xs font-mono text-tank-muted hidden md:inline">| {localTime}</span>
+      <Clock className="w-3.5 h-3.5 text-tank-amber" />
+      <span className="text-[11px] font-mono text-tank-muted hidden sm:inline">Tank</span>
+      <span className="text-[11px] font-mono text-tank-bright tabular-nums">{tankTime}</span>
+      <span className="text-[11px] font-mono text-tank-muted hidden lg:inline">| {localTime}</span>
     </div>
   )
 }
@@ -53,72 +56,102 @@ export default function StatusBar({ isConnected, stats, updateAvailable }) {
   }, [])
 
   return (
-    <header className="bg-tank-surface border-b border-tank-border flex flex-wrap items-center justify-between px-2 sm:px-4 gap-y-1 shrink-0 min-h-9">
-      <div className="flex items-center gap-1 sm:gap-3">
+    <header className="bg-tank-surface/80 backdrop-blur-sm border-b border-tank-border flex flex-wrap items-center justify-between px-2 sm:px-4 gap-y-1 shrink-0 py-1">
+      {/* Row 1 left: Brand + connection + health */}
+      <div className="flex items-center gap-1.5 sm:gap-3">
         <div className="flex items-center gap-2">
-          <Fish className="w-5 h-5 text-tank-accent" />
-          <span className="font-sans font-bold text-tank-bright text-sm tracking-wide uppercase">
+          <div className="relative">
+            <Fish className="w-5 h-5 text-tank-accent" />
+            {isConnected && <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-tank-accent animate-live-glow" />}
+          </div>
+          <span className="font-display font-bold text-tank-bright text-sm tracking-wide uppercase hidden sm:inline">
             Fishtank Dashboard
           </span>
+          <span className="font-display font-bold text-tank-bright text-sm tracking-wide uppercase sm:hidden">
+            FTD
+          </span>
         </div>
-        <div className="w-px h-5 bg-tank-border mx-1" />
-        <div className="flex items-center gap-1.5">
+        <div className="w-px h-5 bg-tank-border" />
+        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider transition-colors ${
+          isConnected
+            ? 'bg-tank-accent/10 text-tank-accent'
+            : 'bg-tank-danger/10 text-tank-danger'
+        }`}>
           {isConnected ? (
             <>
-              <span className="w-1.5 h-1.5 rounded-full bg-tank-accent animate-live-glow" />
-              <span className="text-xs text-tank-accent font-mono">LIVE</span>
+              <Wifi className="w-3 h-3" />
+              <span>Live</span>
             </>
           ) : (
             <>
-              <span className="w-1.5 h-1.5 rounded-full bg-tank-danger" />
-              <span className="text-xs text-tank-danger font-mono">OFFLINE</span>
+              <WifiOff className="w-3 h-3" />
+              <span>Offline</span>
             </>
           )}
         </div>
         {health && (
           <>
-            <div className="w-px h-5 bg-tank-border mx-1" />
-            <span className="text-xs text-tank-muted font-mono hidden sm:inline">
-              {health.fishtank_online > 0 && <><span className="text-tank-bright">{health.fishtank_online.toLocaleString()}</span> watching | </>}{health.browser_clients} fish-dasher{health.browser_clients !== 1 ? 's' : ''}
+            <div className="w-px h-5 bg-tank-border hidden sm:block" />
+            <span className="text-[11px] text-tank-muted font-mono hidden sm:inline">
+              {health.fishtank_online > 0 && <><span className="text-tank-bright tabular-nums">{fmt(health.fishtank_online)}</span> watching<span className="hidden md:inline"> | </span><span className="hidden md:inline">{fmt(health.browser_clients)} dasher{health.browser_clients !== 1 ? 's' : ''}</span></>}
+              {!health.fishtank_online && <>{fmt(health.browser_clients)} dasher{health.browser_clients !== 1 ? 's' : ''}</>}
             </span>
           </>
         )}
         {updateAvailable && (
           <>
-            <div className="w-px h-5 bg-tank-border mx-1" />
+            <div className="w-px h-5 bg-tank-border" />
             <button
               onClick={() => window.location.reload()}
-              className="text-xs font-mono text-green-400 hover:text-green-300 transition-colors cursor-pointer flex items-center gap-1"
+              className="text-[11px] font-mono text-green-400 hover:text-green-300 transition-colors cursor-pointer flex items-center gap-1 bg-green-500/10 px-2 py-0.5 rounded-full hover:bg-green-500/15"
             >
               <RefreshCw className="w-3 h-3" />
-              Update available: Refresh
+              <span className="hidden sm:inline">Update available</span>
+              <span className="sm:hidden">Update</span>
             </button>
           </>
         )}
       </div>
-      <div className="flex items-center gap-1 sm:gap-4">
+
+      {/* Row 1 right: Time + stats */}
+      <div className="flex items-center gap-2 sm:gap-3">
         <TimeDisplay />
-        <div className="w-px h-5 bg-tank-border" />
-        <StatChip icon={Fish} label="Fishtoys" value={stats.fishtoys} color="text-tank-accent" />
-        <StatChip icon={MessageSquare} label="Chat" value={stats.chats} color="text-blue-400" />
-        <StatChip icon={Volume2} label="TTS/SFX" value={stats.tts + stats.sfx} color="text-purple-400" />
+        <div className="w-px h-4 bg-tank-border" />
+        <div className="flex items-center gap-2 sm:gap-3">
+          <StatChip icon={Fish} label="Fishtoys" value={fmt(stats.fishtoys)} color="text-tank-accent" />
+          <StatChip icon={MessageSquare} label="Chat" value={fmt(stats.chats)} color="text-blue-400" />
+          <StatChip icon={Volume2} label="TTS/SFX" value={fmt(stats.tts + stats.sfx)} color="text-purple-400" />
+        </div>
+        {/* Token spend: visible inline on md+, wraps to its own row below md */}
         {stats.total_spend > 0 && (
-          <div className="text-xs font-mono text-tank-warn hidden md:block">
-            {stats.total_spend.toLocaleString()} tokens spent
-            <span className="text-green-400 ml-2">({(stats.total_spend * 0.10).toLocaleString('en-US', {style:'currency',currency:'USD'})})</span>
-          </div>
+          <>
+            <div className="w-px h-4 bg-tank-border hidden md:block" />
+            <div className="text-[11px] font-mono hidden md:flex items-center gap-1.5">
+              <span className="text-tank-amber tabular-nums">{fmt(stats.total_spend)}t</span>
+              <span className="text-green-400/80">({fmtUSD(stats.total_spend)})</span>
+            </div>
+          </>
         )}
       </div>
+
+      {/* Row 3 (narrow only): Token spend - full width below md */}
+      {stats.total_spend > 0 && (
+        <div className="flex md:hidden items-center justify-center gap-2 w-full py-0.5 border-t border-tank-border/50 mt-0.5">
+          <Coins className="w-3 h-3 text-tank-amber opacity-70" />
+          <span className="text-[11px] font-mono text-tank-amber tabular-nums">{fmt(stats.total_spend)} tokens</span>
+          <span className="text-[11px] font-mono text-green-400/80">({fmtUSD(stats.total_spend)})</span>
+        </div>
+      )}
     </header>
   )
 }
 
 function StatChip({ icon: Icon, label, value, color }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <Icon className={`w-3.5 h-3.5 ${color}`} />
-      <span className="text-xs font-mono text-tank-muted hidden sm:inline">{label}</span>
-      <span className="text-xs font-mono text-tank-bright">{value}</span>
+    <div className="flex items-center gap-1">
+      <Icon className={`w-3 h-3 ${color} opacity-70`} />
+      <span className="text-[10px] font-mono text-tank-muted hidden lg:inline">{label}</span>
+      <span className="text-[11px] font-mono text-tank-bright tabular-nums">{value}</span>
     </div>
   )
 }
