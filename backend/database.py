@@ -37,6 +37,7 @@ def _get_conn():
         _local.conn.execute("PRAGMA synchronous=NORMAL")
         _local.conn.execute("PRAGMA temp_store=MEMORY")
         _local.conn.execute("PRAGMA cache_size=-16384")  # 16 MB page cache per connection
+        _local.conn.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s for write lock instead of failing immediately
     return _local.conn
 
 
