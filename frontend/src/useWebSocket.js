@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
+const STALE_THRESHOLD = 120000 // 2 minutes — reconnects after this gap trigger a full data re-fetch
+
 export function useWebSocket(url) {
   const [isConnected, setIsConnected] = useState(false)
+  const [staleReconnect, setStaleReconnect] = useState(0)
   const wsRef = useRef(null)
   const reconnectTimer = useRef(null)
   const listeners = useRef(new Set())
@@ -14,10 +17,13 @@ export function useWebSocket(url) {
   useEffect(() => {
     let alive = true
     let delay = 1000
+    let wasConnected = false
     const lastMessageAt = { current: Date.now() }
 
     function connect() {
       if (!alive) return
+
+      const gapMs = Date.now() - lastMessageAt.current
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const wsUrl = url || `${protocol}//${window.location.host}/ws`
@@ -27,6 +33,12 @@ export function useWebSocket(url) {
       ws.onopen = () => {
         setIsConnected(true)
         delay = 1000
+        // If we previously had a connection and the gap since last message exceeds
+        // the stale threshold, signal App.jsx to re-fetch all data
+        if (wasConnected && gapMs > STALE_THRESHOLD) {
+          setStaleReconnect(n => n + 1)
+        }
+        wasConnected = true
         lastMessageAt.current = Date.now()
         if (reconnectTimer.current) {
           clearTimeout(reconnectTimer.current)
@@ -93,5 +105,5 @@ export function useWebSocket(url) {
     }
   }, [url])
 
-  return { isConnected, addListener }
+  return { isConnected, addListener, staleReconnect }
 }

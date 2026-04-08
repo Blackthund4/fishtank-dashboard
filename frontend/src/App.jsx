@@ -134,7 +134,7 @@ function Sparkline({ data, color, width = 64, height = 20 }) {
 }
 
 export default function App() {
-  const { isConnected, addListener } = useWebSocket()
+  const { isConnected, addListener, staleReconnect } = useWebSocket()
   const [serverVersion, setServerVersion] = useState(null)
   const [knownVersion, setKnownVersion] = useState(null)
   const [chats, setChats] = useState([])
@@ -190,8 +190,9 @@ export default function App() {
   const activityAnchorRef = useRef(null)
   const chatFilterRef = useRef('all')
   const directorRef = useRef(null)
-  // Load catalog + historical data on mount
-  useEffect(() => {
+  // Load catalog + historical data on mount AND after stale WebSocket reconnect
+  // (staleReconnect increments when WS reconnects after >2min gap, e.g. overnight idle)
+  const loadAllData = useCallback(() => {
     fetch('/api/items').then(okJson).then(setItemCatalog).catch(() => {})
     fetch('/api/contestants').then(okJson).then(setContestants).catch(() => {})
     fetch('/api/rooms').then(okJson).then(setRoomMap).catch(() => {})
@@ -261,6 +262,7 @@ export default function App() {
       })
       .catch(() => {})
   }, [])
+  useEffect(loadAllData, [loadAllData, staleReconnect])
 
   // Fetch custom delta base prices and sparkline data when stoxRange changes
   useEffect(() => {
@@ -492,7 +494,7 @@ export default function App() {
     return p.toString()
   }, [activityFilter, filterTarget, filterItemId, debouncedSearch, activityAnchor])
 
-  // Re-fetch unified feed when filters change
+  // Re-fetch unified feed when filters change or after stale reconnect
   useEffect(() => {
     setActivityHasMore(true)
     setActivityHasNewer(!!activityAnchor)
@@ -504,7 +506,7 @@ export default function App() {
         if (events.length < 500) setActivityHasMore(false)
       })
       .catch(() => {})
-  }, [feedApiParams])
+  }, [feedApiParams, staleReconnect])
 
   // Fetch role-filtered chats from server when a role filter is active
   useEffect(() => {
