@@ -686,47 +686,51 @@ export default function App() {
   const pollVoteBars = useMemo(() => {
     if (!Array.isArray(pollVotes) || pollVotes.length === 0) return null
     const total = pollVotes.reduce((s, v) => s + (v.score || 0), 0) || 1
-    const sorted = [...pollVotes].sort((a, b) => (b.score || 0) - (a.score || 0))
-    const maxScore = sorted[0]?.score || 0
-    const secondScore = sorted[1]?.score || 0
-    const delta = maxScore > 0 && sorted.length > 1 ? maxScore - secondScore : 0
+    const maxScore = Math.max(...pollVotes.map(v => v.score || 0))
+    // Pair options off: [0,1], [2,3], etc.
+    const pairs = []
+    for (let i = 0; i < pollVotes.length; i += 2) {
+      pairs.push(pollVotes.slice(i, i + 2))
+    }
     return (
-      <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
-        {pollVotes.map((v, i) => {
-          const score = v.score || 0
-          const pct = Math.round(score / total * 100)
-          const isLeading = score === maxScore && maxScore > 0
-          const color = POLL_COLORS[i % POLL_COLORS.length]
-          return (
-            <div key={v.value}>
-              <div className="flex items-center justify-between text-[10px] mb-0.5">
-                <span className="flex items-center gap-1">
-                  {isLeading && <Crown className="w-3 h-3 text-yellow-400" />}
-                  <span className={`font-medium truncate ${isLeading ? 'text-white' : 'text-purple-200/70'}`}>{v.value}</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  {isLeading && delta > 0 && (
-                    <span className="text-[9px] font-mono text-yellow-400/70">+{delta.toLocaleString()}t ahead</span>
-                  )}
-                  <span className={`font-mono ${isLeading ? 'text-purple-200' : 'text-purple-400/60'}`}>
-                    {score.toLocaleString()}t ({pct}%)
-                  </span>
-                </span>
-              </div>
-              <div className="h-3.5 bg-purple-900/40 rounded overflow-hidden">
-                <div
-                  className={`h-full rounded transition-all duration-500 ${isLeading ? 'shadow-[0_0_10px_rgba(192,132,252,0.4)]' : ''}`}
-                  style={{
-                    width: `${Math.max(pct, 1)}%`,
-                    background: isLeading
-                      ? `linear-gradient(90deg, ${color}, ${color}cc)`
-                      : `${color}55`,
-                  }}
-                />
-              </div>
-            </div>
-          )
-        })}
+      <div className="space-y-1 max-h-[56px] overflow-y-auto">
+        {pairs.map((pair, pi) => (
+          <div key={pi} className="flex items-stretch gap-2">
+            {pair.map((v, vi) => {
+              const idx = pi * 2 + vi
+              const score = v.score || 0
+              const pct = Math.round(score / total * 100)
+              const isLeading = score === maxScore && maxScore > 0
+              const color = POLL_COLORS[idx % POLL_COLORS.length]
+              const isLeft = vi === 0
+              const isSolo = pair.length === 1
+              return (
+                <div key={v.value} className={`flex-1 min-w-0 ${isSolo ? 'max-w-[50%]' : ''}`}>
+                  {/* Bar */}
+                  <div className="h-2.5 bg-purple-900/30 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${isLeading ? 'shadow-[0_0_8px_rgba(192,132,252,0.4)]' : ''} ${!isLeft && !isSolo ? 'ml-auto' : ''}`}
+                      style={{
+                        width: `${Math.max(pct, 3)}%`,
+                        background: isLeading
+                          ? `linear-gradient(${isLeft ? '90deg' : '270deg'}, ${color}, ${color}cc)`
+                          : `${color}44`,
+                      }}
+                    />
+                  </div>
+                  {/* Label row */}
+                  <div className={`flex items-center gap-1 mt-0.5 ${!isLeft && !isSolo ? 'justify-end' : ''}`}>
+                    {isLeading && <Crown className="w-2.5 h-2.5 text-yellow-400 shrink-0" />}
+                    <span className={`text-[10px] truncate ${isLeading ? 'text-white font-medium' : 'text-purple-200/60'}`}>{v.value}</span>
+                    <span className={`text-[9px] font-mono shrink-0 ${isLeading ? 'text-purple-200' : 'text-purple-400/50'}`}>
+                      {score.toLocaleString()}t ({pct}%)
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ))}
       </div>
     )
   }, [pollVotes])
@@ -786,37 +790,45 @@ export default function App() {
         </div>
       )}
 
-      {/* Live poll bar */}
-      {activePoll && !activePoll.ended && (
-        <div className="bg-purple-950/80 border-b border-purple-500/40 px-3 py-2 shrink-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1.5">
-            <Vote className="w-4 h-4 text-purple-400 shrink-0" />
-            <span className="text-xs font-semibold text-purple-400 uppercase shrink-0">Live Poll</span>
-            {pollElapsed !== null && (
-              <span className="text-[10px] font-mono text-purple-300/70 shrink-0">
+      {/* Poll banner (live or ended) — fixed height, head-to-head layout */}
+      {activePoll && (
+        <div className={`border-b px-3 py-1.5 shrink-0 h-[88px] flex flex-col justify-center ${
+          activePoll.ended
+            ? 'bg-purple-500/5 border-purple-500/20'
+            : 'bg-purple-950/80 border-purple-500/40'
+        }`}>
+          {/* Header row: badge, question, total */}
+          <div className="flex items-center gap-2 mb-1 min-h-[20px]">
+            <Vote className={`w-3.5 h-3.5 shrink-0 ${activePoll.ended ? 'text-purple-400/60' : 'text-purple-400'}`} />
+            <span className={`text-[10px] font-mono uppercase shrink-0 px-1.5 py-0.5 rounded-full ${
+              activePoll.ended
+                ? 'bg-purple-500/10 text-purple-400/60'
+                : 'bg-purple-500/20 text-purple-300 animate-pulse-glow'
+            }`}>
+              {activePoll.ended ? 'Ended' : 'Live'}
+            </span>
+            {!activePoll.ended && pollElapsed !== null && (
+              <span className="text-[10px] font-mono text-purple-300/60 shrink-0 tabular-nums">
                 {Math.floor(pollElapsed / 3600)}:{String(Math.floor((pollElapsed % 3600) / 60)).padStart(2, '0')}:{String(pollElapsed % 60).padStart(2, '0')}
               </span>
             )}
-            <span className="text-sm font-medium text-white">{activePoll.question || 'Poll'}</span>
-            {pollVotes.length > 0 && (
-              <span className="text-[10px] font-mono text-purple-300/60 shrink-0 ml-auto">
-                {pollVotes.reduce((s, v) => s + (v.score || 0), 0).toLocaleString()}t total
+            <span className={`text-xs font-medium truncate ${activePoll.ended ? 'text-tank-muted' : 'text-white'}`}>
+              {activePoll.question || 'Poll'}
+            </span>
+            {activePoll.ended && activePoll.winner && (
+              <span className="flex items-center gap-1 shrink-0">
+                <Crown className="w-3 h-3 text-yellow-400" />
+                <span className="text-xs font-semibold text-purple-400">{activePoll.winner}</span>
+              </span>
+            )}
+            {!activePoll.ended && pollVotes.length > 0 && (
+              <span className="text-[9px] font-mono text-purple-300/50 shrink-0 ml-auto tabular-nums">
+                {pollVotes.reduce((s, v) => s + (v.score || 0), 0).toLocaleString()}t
               </span>
             )}
           </div>
-          {pollVoteBars}
-        </div>
-      )}
-
-      {/* Poll result (briefly shown after close) */}
-      {activePoll && activePoll.ended && (
-        <div className="bg-purple-500/5 border-b border-purple-500/20 px-3 py-1.5 flex items-center gap-2 shrink-0">
-          <Vote className="w-4 h-4 text-purple-400/60 shrink-0" />
-          <span className="text-xs font-semibold text-purple-400/60 uppercase shrink-0">Poll Ended</span>
-          <span className="text-sm text-tank-muted">{activePoll.question}</span>
-          {activePoll.winner && (
-            <span className="text-sm font-semibold text-purple-400">Winner: {activePoll.winner}</span>
-          )}
+          {/* Vote bars */}
+          {!activePoll.ended && pollVoteBars}
         </div>
       )}
 
