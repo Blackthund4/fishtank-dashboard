@@ -19,11 +19,11 @@ os.environ["FISHTANK_DB_PATH"] = ":memory:"
 
 import database
 
-# Import filter functions from server (without starting the app)
+# Import functions from server and ingest (without starting either app)
 sys.path.insert(0, os.path.dirname(__file__))
-from server import _should_filter_chat, _should_filter_notification, _is_duplicate, _seen_tts_sfx_ids
+from ingest import _should_filter_chat, _should_filter_notification, _is_duplicate, _seen_tts_sfx_ids
+from ingest import _score_sentiment
 from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX
-from server import _score_sentiment
 
 
 # ============================================================

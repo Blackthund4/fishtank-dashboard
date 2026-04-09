@@ -1,102 +1,42 @@
 """
-Fishtank Dashboard Backend
+Fishtank Dashboard API Server
 
-Captures fishtank.live events via two methods:
-  - REST polling: /v1/items/recent for fishtoy redemptions
-  - Socket.IO: real-time push for chat, TTS, SFX, polls, notifications
+Read-only API server for the React dashboard. Serves REST endpoints,
+WebSocket live updates, and static files. Reads events from SQLite
+(written by ingest.py) and catalog/status from _shared_state.json.
 
-Stores everything in SQLite and serves a React dashboard.
-
-Usage (recommended):
-    Create backend/.env with FISHTANK_EMAIL and FISHTANK_PASSWORD
-    python server.py
-
-Legacy usage:
-    export FISHTANK_COOKIE='your_cookie_here'
+Usage:
     python server.py
 """
 
 import asyncio
-import json
-import logging
 import os
 import time as _time
-import types
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from threading import Thread, Event, Lock
+from threading import Thread, Lock
 
-import requests as http_requests
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 
-from fishclient import FishClient
-
 import database
+import shared_state
 from database import fast_loads, fast_dumps
-from auth import AuthManager
-
-_sentiment_analyzer = None
-
-
-def _get_analyzer():
-    global _sentiment_analyzer
-    if _sentiment_analyzer is None:
-        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-        _sentiment_analyzer = SentimentIntensityAnalyzer()
-    return _sentiment_analyzer
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-auth = AuthManager()
-
-EVENTS = [
-    # Fishtoys are polled via REST (/v1/items/recent), not socket events
-    # Chat
-    "chat:message",
-    "chat:room",
-    # TTS / SFX (only :update, not :queued, to avoid duplicate logging)
-    "tts:update",
-    "tts:price",
-    "sfx:update",
-    "sfx:price",
-    # Polls
-    "poll:start",
-    "poll:stop",
-    "poll:vote",
-    # Notifications / Director messages
-    "notification:global",
-    "announcement",
-    # Stocks (change events, not periodic prices)
-    "stock:update",
-    "stock:new",
-    "stock:remove",
-    "stock:split",
-    # System
-    "happening",
-    "feature-toggles:update",
-    # Presence
-    "chat:presence",
-    # Superchat (pinned messages)
-    "super-chat:new",
-    "super-chat:delete",
-]
-
-FISHTOY_POLL_INTERVAL = 5  # seconds
-
-# ---- Cached catalog data (loaded on startup) ----
-_catalog_lock = Lock()
-_item_catalog = {}  # itemId -> {name, description, icon, type, ...}
-_contestants = []   # [{id, name, color, photo, ...}]
-_room_map = {}      # room code -> room name (e.g. "hwdn-5" -> "Hallway")
-_stocks = []        # [{tickerSymbol, currentPrice, ...}]
 CAPTURE_TYPES = {"FISHTOY", "BIGTOY"}
+
+_SHARED_STATE_PATH = os.environ.get(
+    "FISHTANK_SHARED_STATE",
+    str(Path(__file__).parent / "_shared_state.json"),
+)
 
 # ============================================================
 # ANALYTICS CACHE
@@ -173,215 +113,6 @@ def _prune_rate_limits():
 
 
 # ============================================================
-# DATABASE BACKUP
-# ============================================================
-
-BACKUP_INTERVAL = 21600  # 6 hours
-WAL_CHECKPOINT_INTERVAL = 3600  # 1 hour
-_last_backup = None
-
-
-def db_backup_poller():
-    """Periodically back up the SQLite database and checkpoint the WAL."""
-    global _last_backup
-    import sqlite3
-
-    # First backup after 5 minutes (don't wait 6 hours)
-    _poller_stop.wait(300)
-
-    last_checkpoint = _time.time()
-
-    while not _poller_stop.is_set():
-        db_path = database.DB_PATH
-        if str(db_path) == ":memory:" or not Path(db_path).exists():
-            _poller_stop.wait(WAL_CHECKPOINT_INTERVAL)
-            continue
-
-        # WAL checkpoint every hour -- prevents WAL from ballooning under
-        # continuous write load with many concurrent readers
-        now = _time.time()
-        if now - last_checkpoint >= WAL_CHECKPOINT_INTERVAL:
-            try:
-                conn = sqlite3.connect(str(db_path))
-                busy, log, checkpointed = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-                conn.close()
-                if log > 0:
-                    print(f"[OK] WAL checkpoint (PASSIVE): {checkpointed}/{log} pages checkpointed")
-                last_checkpoint = now
-            except Exception as e:
-                print(f"[!] WAL checkpoint failed: {e}")
-
-        try:
-            backup_path = str(db_path) + ".backup"
-            src = sqlite3.connect(str(db_path))
-            dst = sqlite3.connect(backup_path)
-            src.backup(dst)
-            dst.close()
-            src.close()
-
-            # Compress the backup to save disk space (~70% smaller)
-            import gzip as _gzip
-            gz_path = backup_path + ".gz"
-            with open(backup_path, "rb") as f_in, _gzip.open(gz_path, "wb") as f_out:
-                while chunk := f_in.read(1 << 20):  # 1MB chunks
-                    f_out.write(chunk)
-            Path(backup_path).unlink()  # remove uncompressed
-
-            _last_backup = datetime.now(timezone.utc)
-            size_mb = Path(gz_path).stat().st_size / (1024 * 1024)
-            print(f"[OK] Database backup: {gz_path} ({size_mb:.1f} MB)")
-        except Exception as e:
-            print(f"[!] Database backup failed: {e}")
-
-        # Prune old stock history to prevent unbounded disk growth
-        try:
-            deleted = database.prune_stock_history(retention_days=30)
-            if deleted > 0:
-                print(f"[OK] Stock history pruned: {deleted} rows older than 30 days removed")
-        except Exception as e:
-            print(f"[!] Stock history prune failed: {e}")
-
-        # Prune old chat messages (highest volume event type)
-        try:
-            deleted = database.prune_chat_events(retention_days=30)
-            if deleted > 0:
-                print(f"[OK] Chat pruned: {deleted} non-staff messages older than 30 days removed")
-        except Exception as e:
-            print(f"[!] Chat prune failed: {e}")
-
-        _poller_stop.wait(BACKUP_INTERVAL)
-
-# ============================================================
-# FISHCLIENT PATCHES (same as the logger script)
-# ============================================================
-
-
-def _patched_handle_message(self, message):
-    if isinstance(message, str):
-        if message.startswith("2"):
-            try:
-                self.websocket.send("3")
-            except Exception:
-                pass
-    elif isinstance(message, bytes):
-        try:
-            self.handle_packed(message)
-        except Exception:
-            pass
-
-
-def _patched_listen(self):
-    if self.websocket is None:
-        return
-    _logger = logging.getLogger("fishclient.client")
-    while self.is_connected:
-        try:
-            message = self.websocket.recv()
-            self.handle_message(message)
-        except Exception as e:
-            if not self.is_connected:
-                break
-            _logger.error(f"Error receiving message: {e}")
-            self.is_connected = False  # Signal reconnect_loop to reconnect
-            break
-
-
-def reconnect_loop():
-    """Continuously maintain the fishclient connection with fresh tokens."""
-    global fish_client, _socket_connected_at
-    _logger = logging.getLogger("fishclient.reconnect")
-    backoff = 5
-
-    while not _poller_stop.is_set():
-        if not auth.is_configured:
-            _poller_stop.wait(30)
-            continue
-
-        cookie = auth.get_fishclient_cookie()
-        if not cookie:
-            _logger.warning("No cookie available, retrying in 30s...")
-            _poller_stop.wait(30)
-            continue
-
-        try:
-            client = FishClient(cookie=cookie)
-            client.handle_message = types.MethodType(_patched_handle_message, client)
-            client.listen = types.MethodType(_patched_listen, client)
-
-            # Register all event handlers
-            for event_name in EVENTS:
-                client.dispatcher.on(event_name)(make_event_handler(event_name))
-
-            @client.dispatcher.on("disconnect")
-            def on_disc(data):
-                _logger.warning(f"Server disconnect: {data}")
-
-            @client.dispatcher.on("connect_error")
-            def on_err(data):
-                _logger.error(f"Connection error: {data}")
-
-            client.connect()
-            fish_client = client
-            _socket_connected_at = datetime.now(timezone.utc)
-            backoff = 5  # Reset backoff on successful connect
-            print(f"[OK] Connected to fishtank.live")
-
-            # Block until the listen thread exits (disconnect)
-            while client.is_connected and not _poller_stop.is_set():
-                _poller_stop.wait(2)
-
-            if _poller_stop.is_set():
-                break
-
-            print(f"[!] Socket disconnected. Reconnecting in {backoff}s with fresh tokens...")
-
-        except Exception as e:
-            print(f"[!] Connection failed: {e}. Retrying in {backoff}s...")
-
-        # If token might be expired, refresh before reconnecting
-        if auth.mode == "auto":
-            auth.handle_401()
-
-        _poller_stop.wait(backoff)
-        backoff = min(backoff * 2, 60)  # Exponential backoff up to 60s
-
-
-_profile_cache = {}  # user_id -> (timestamp, result)
-_PROFILE_CACHE_TTL = 3600  # 1 hour
-_PROFILE_CACHE_MAX = 500   # evict oldest when full (~100 KB at capacity)
-
-def _fetch_user_profile(user_id):
-    """Fetch displayName and color for a user from fishtank API (cached 1h)."""
-    import time
-    now = time.time()
-    cached = _profile_cache.get(user_id)
-    if cached and now - cached[0] < _PROFILE_CACHE_TTL:
-        return cached[1]
-    session = auth.get_session()
-    try:
-        resp = session.get(f"https://api.fishtank.live/v1/profile/{user_id}", timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            profile = data.get("profile", data)
-            result = {}
-            dn = profile.get("displayName") or profile.get("username") or ""
-            if dn:
-                result["displayName"] = dn
-            if profile.get("color"):
-                result["color"] = profile["color"]
-            if len(_profile_cache) >= _PROFILE_CACHE_MAX:
-                oldest = min(_profile_cache, key=lambda k: _profile_cache[k][0])
-                del _profile_cache[oldest]
-            _profile_cache[user_id] = (now, result)
-            return result
-    except Exception as e:
-        print(f"[!] Failed to fetch profile for {user_id}: {e}")
-    finally:
-        session.close()
-    return {}
-
-
-# ============================================================
 # BROWSER WEBSOCKET CLIENTS
 # ============================================================
 
@@ -425,614 +156,28 @@ async def broadcast_to_browsers(event_type: str, data, db_id: int):
 
 
 # ============================================================
-# FISHCLIENT BRIDGE
+# NOTIFY POLLER
 # ============================================================
 
-fish_client: FishClient = None
-_loop: asyncio.AbstractEventLoop = None
 
-# Dedup tracking for TTS/SFX (server fires "approved" then "played" for same ID)
-_dedup_lock = Lock()
-_seen_tts_sfx_ids: dict = {}  # event_id -> timestamp
-_DEDUP_WINDOW = 300  # 5 minutes (status transitions can be 30-60s apart)
-
-# Feature toggle state (fishtoys, tts, sfx, etc.)
-_feature_toggles: dict = {}  # feature_name -> {enabled, metadata, updated_at}
-_fishtank_online = 0  # Live viewer count from chat:presence
-_chat_room = ""       # Current chat room from chat:room event
-
-def _is_duplicate(evt, data):
-    """Check if this TTS/SFX event ID has already been seen."""
-    if evt not in ("tts:update", "sfx:update"):
-        return False
-    if not isinstance(data, dict):
-        return False
-    event_id = data.get("id")
-    if not event_id:
-        return False
-    event_id = str(event_id)
-    now = datetime.now(timezone.utc).timestamp()
-    with _dedup_lock:
-        if event_id in _seen_tts_sfx_ids:
-            return True
-        _seen_tts_sfx_ids[event_id] = now
-        if len(_seen_tts_sfx_ids) > 500:
-            cutoff = now - _DEDUP_WINDOW
-            stale = [k for k, v in _seen_tts_sfx_ids.items() if v < cutoff]
-            for k in stale:
-                del _seen_tts_sfx_ids[k]
-        return False
-
-
-def _should_filter_chat(data):
-    """Filter chat messages that are system echoes (TTS/SFX/emote/happening)."""
-    if not isinstance(data, dict):
-        return False
-    user = data.get("user", {})
-    name = user.get("displayName", "") if isinstance(user, dict) else ""
-    return name.lower() in ("tts", "sfx", "emote", "happening")
-
-
-def _should_filter_notification(data):
-    """Filter season pass gift notifications."""
-    text = str(data).lower() if data else ""
-    return "gifted" in text and "season pass" in text
-
-
-def _track_feature_toggle(data):
-    """Track feature toggle state changes."""
-    if not isinstance(data, dict):
-        return
-    feature = data.get("feature", "")
-    if feature:
-        _feature_toggles[feature] = {
-            "enabled": data.get("enabled", False),
-            "metadata": data.get("metadata"),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-
-def _score_sentiment(text):
-    """Return VADER compound sentiment score (-1.0 to 1.0). Returns 0.0 for empty/None text."""
-    if not text or not isinstance(text, str):
-        return 0.0
-    return _get_analyzer().polarity_scores(text)["compound"]
-
-
-# In-memory poll vote accumulator: always holds the full list of {value, score} dicts
-# for the current poll. Initialized from poll:start scores, updated by poll:vote dicts.
-_poll_vote_state = []
-
-
-def _seed_poll_vote_state():
-    """Seed _poll_vote_state from DB on startup so mid-poll restarts don't lose votes."""
-    global _poll_vote_state
-    state = database.get_latest_poll_state()
-    if state and state.get("active") and isinstance(state.get("votes"), list):
-        _poll_vote_state = state["votes"]
-        print(f"[OK] Seeded poll vote state: {len(_poll_vote_state)} options")
-    elif state and state.get("active") and state.get("answers"):
-        # No votes yet, seed from answer list with zero scores
-        _poll_vote_state = [{"value": a, "score": 0} for a in state["answers"]]
-        print(f"[OK] Seeded poll vote state from answers: {len(_poll_vote_state)} options")
-
-
-def _normalize_poll_vote(data):
-    """Normalize poll:vote data to always be a full list of all options.
-
-    Old API format: list of all options (pass through, update tracked state).
-    New API format: single dict per option (merge into tracked state, return full list).
-    The list unwrap code would otherwise split list payloads into individual dicts,
-    so this runs first to keep poll:vote data as a complete snapshot.
-    """
-    global _poll_vote_state
-    if isinstance(data, list):
-        # Old format or list-wrapped: full snapshot — adopt as current state
-        _poll_vote_state = [v for v in data if isinstance(v, dict) and "value" in v]
-        return list(_poll_vote_state)
-    if isinstance(data, dict) and "value" in data:
-        # New format: single option update — merge into tracked state
-        merged = False
-        for i, v in enumerate(_poll_vote_state):
-            if v.get("value") == data["value"]:
-                _poll_vote_state[i] = data
-                merged = True
-                break
-        if not merged:
-            _poll_vote_state.append(data)
-        return list(_poll_vote_state)
-    return data
-
-
-def make_event_handler(evt):
-    """Create an event handler for a specific socket event type."""
-    def handler(data):
-        # Track live viewer count (don't store to DB)
-        if evt == "chat:presence":
-            global _fishtank_online
-            if isinstance(data, (int, float)):
-                _fishtank_online = int(data)
-            return
-
-        # Track current chat room (don't store to DB, just broadcast)
-        if evt == "chat:room":
-            global _chat_room
-            _chat_room = str(data) if data else ""
-            print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] chat:room: {_chat_room}")
-            if _loop and _loop.is_running():
-                asyncio.run_coroutine_threadsafe(
-                    broadcast_to_browsers("chat:room", _chat_room, 0), _loop
-                )
-            return
-
-        # Normalize poll:vote to full list BEFORE the list unwrap splits it
-        if evt == "poll:vote":
-            data = _normalize_poll_vote(data)
-
-        # Initialize poll vote state from poll:start scores
-        if evt == "poll:start" and isinstance(data, dict):
-            scores = (data.get("poll") or data).get("scores", [])
-            global _poll_vote_state
-            _poll_vote_state = [v for v in scores if isinstance(v, dict) and "value" in v]
-
-        # Unwrap list-wrapped payloads (fishtank sometimes sends [{...}, ...] instead of {...})
-        # Multi-element lists are batched messages — process each individually then return.
-        # poll:vote is already normalized above so its lists are intentional snapshots.
-        if isinstance(data, list) and evt != "poll:vote":
-            items = [d for d in data if isinstance(d, dict)]
-            if len(items) == 1:
-                data = items[0]
-            elif len(items) > 1:
-                for d in items:
-                    handler(d)
-                return
-            # If no dicts found, fall through to store the raw list as-is
-
-        # Filter TTS/SFX/emote system echo from chat
-        if evt == "chat:message" and _should_filter_chat(data):
-            return
-
-        # Filter season pass gift notifications
-        if evt == "notification:global" and _should_filter_notification(data):
-            return
-
-        # Dedup TTS/SFX (server sends "approved" then "played" for same ID)
-        if _is_duplicate(evt, data):
-            return
-
-        # Track feature toggle state
-        if evt == "feature-toggles:update":
-            _track_feature_toggle(data)
-
-        # Superchat displayName: fishtank sometimes sends empty displayName.
-        # Fetch from profile API (api.fishtank.live, not www) as fallback.
-        if evt == "super-chat:new" and isinstance(data, dict):
-            if not data.get("displayName"):
-                user_id = data.get("userId")
-                if user_id:
-                    profile = _fetch_user_profile(user_id)
-                    if profile:
-                        data.update(profile)
-
-        # Score sentiment for chat and TTS messages
-        if isinstance(data, dict):
-            if evt in ("chat:message", "tts:update"):
-                data["sentiment"] = _score_sentiment(data.get("message"))
-
-        # Store in database
-        db_id = database.store_event(evt, data)
-
-        # Log to console
-        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        summary = ""
-        if evt == "chat:message" and isinstance(data, dict):
-            user = data.get("user", {})
-            name = user.get("displayName", "?") if isinstance(user, dict) else "?"
-            msg = str(data.get("message", ""))[:60]
-            summary = f"{name}: {msg}"
-        elif evt == "notification:global" or evt == "announcement":
-            summary = str(data)[:120]
-        elif evt == "poll:start" and isinstance(data, dict):
-            summary = f"Q: {data.get('question', '?')} | {len(data.get('answers', []))} options"
-        elif evt == "poll:stop" and isinstance(data, dict):
-            summary = f"Winner: {data.get('winner', '?')} | Q: {data.get('question', '?')}"
-        elif evt == "poll:vote" and isinstance(data, list):
-            parts = [f"{v.get('value','?')}:{v.get('score',0)}" for v in data[:5]]
-            summary = " | ".join(parts)
-        elif "stock:" in evt and isinstance(data, dict):
-            summary = f"{data.get('tickerSymbol', '?')} {str(data)[:80]}"
-        elif evt == "super-chat:new" and isinstance(data, dict):
-            name = data.get("displayName", data.get("userId", "?"))
-            cost = data.get("cost", "?")
-            dur = data.get("duration", "?")
-            summary = f"{name} ({cost}t, {dur}min): {str(data.get('message', ''))[:60]}"
-        elif evt == "super-chat:delete" and isinstance(data, dict):
-            summary = f"Deleted SC {data.get('id', '?')}"
-        elif ("tts:price" in evt or "sfx:price" in evt):
-            summary = str(data)[:80]
-        elif ("tts" in evt or "sfx" in evt) and isinstance(data, dict):
-            summary = data.get("displayName", "?")
-        elif isinstance(data, dict):
-            summary = str(data)[:80]
-        else:
-            summary = str(data)[:80]
-        print(f"[{ts}] {evt}: {summary}")
-
-        # Broadcast to browsers
-        if _loop and _loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                broadcast_to_browsers(evt, data, db_id), _loop
-            )
-
-    return handler
-
-
-def stop_fish_client():
-    global fish_client
-    if fish_client is None:
-        return
-    fish_client.is_connected = False
-    if fish_client.websocket is not None:
+async def _notify_poller():
+    """Poll _notify table every 200ms and broadcast new events to browser WebSockets."""
+    last_seen_id = 0
+    while True:
         try:
-            fish_client.websocket.close()
-        except Exception:
-            pass
-    fish_client = None
-
-
-# ============================================================
-# FISHTOY REST POLLER
-# ============================================================
-
-_poller_stop = Event()
-
-# Health tracking
-_last_fishtoy_poll = None   # datetime of last successful fishtoy poll
-_last_stock_poll = None     # datetime of last successful stock poll
-_socket_connected_at = None # datetime when current socket connection was established
-
-
-def load_catalog():
-    """Fetch item catalog, contestants, room mapping, and stocks from fishtank API."""
-    global _item_catalog, _contestants, _room_map, _stocks
-
-    if not auth.is_configured:
-        return
-
-    session = auth.get_session()
-    try:
-        # Load item catalog
-        try:
-            r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-            if r.status_code in (401, 403):
-                print("[!] Catalog load: auth expired. Attempting re-auth...")
-                if auth.handle_401():
-                    session.close()
-                    session = auth.get_session()
-                    r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-            if r.status_code == 200:
-                raw = r.json()
-                with _catalog_lock:
-                    for key, val in raw.items():
-                        if isinstance(val, dict) and "id" in val:
-                            _item_catalog[str(val["id"])] = val
-                print(f"[OK] Loaded {len(_item_catalog)} items ({sum(1 for v in _item_catalog.values() if v.get('type') in CAPTURE_TYPES)} fishtoys/bigtoys)")
+            rows = database.poll_notify(last_seen_id)
+            for row in rows:
+                last_seen_id = row["id"]
+                evt = database.get_event_by_id(row["event_id"])
+                if evt:
+                    await broadcast_to_browsers(
+                        row["event_type"],
+                        evt["data"],
+                        evt["id"],
+                    )
         except Exception as e:
-            print(f"[WARN] Could not load item catalog: {e}")
-
-        # Load contestants
-        try:
-            r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                all_contestants = data.get("contestants", [])
-                season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
-                with _catalog_lock:
-                    _contestants.clear()
-                    _contestants.extend(season_5 if season_5 else all_contestants)
-                print(f"[OK] Loaded {len(_contestants)} contestants (season 5: {len(season_5)}, total: {len(all_contestants)})")
-        except Exception as e:
-            print(f"[WARN] Could not load contestants: {e}")
-
-        # Load room mapping from live-streams
-        try:
-            r = session.get("https://api.fishtank.live/v1/live-streams", timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                streams = data.get("liveStreams", [])
-                with _catalog_lock:
-                    _room_map.clear()
-                    for stream in streams:
-                        sid = stream.get("id", "")
-                        name = stream.get("name", sid)
-                        _room_map[sid] = name
-                print(f"[OK] Loaded {len(_room_map)} room mappings")
-        except Exception as e:
-            print(f"[WARN] Could not load room mappings: {e}")
-
-        # Load stocks
-        try:
-            r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                with _catalog_lock:
-                    _stocks.clear()
-                    _stocks.extend(data.get("stocks", []))
-                print(f"[OK] Loaded {len(_stocks)} stocks")
-        except Exception as e:
-            print(f"[WARN] Could not load stocks: {e}")
-
-        # Load feature toggle state from database
-        try:
-            toggles = database.get_latest_feature_toggles()
-            _feature_toggles.update(toggles)
-            if toggles:
-                status_parts = [f"{k}={'ON' if v['enabled'] else 'OFF'}" for k, v in toggles.items()]
-                print(f"[OK] Loaded {len(toggles)} feature toggle states: {', '.join(status_parts)}")
-        except Exception as e:
-            print(f"[WARN] Could not load feature toggles: {e}")
-    finally:
-        session.close()
-
-
-def _backfill_empty_sc_names():
-    """Backfill empty superchat displayNames using the profile API."""
-    if not auth.is_configured:
-        return
-    conn = database._get_conn()
-    rows = conn.execute("""
-        SELECT id, data FROM events
-        WHERE event_type = 'super-chat:new' AND (display_name IS NULL OR display_name = '')
-    """).fetchall()
-    if not rows:
-        return
-    fixed = 0
-    for row in rows:
-        try:
-            data = fast_loads(row["data"]) if isinstance(row["data"], str) else row["data"]
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        user_id = data.get("userId")
-        if not user_id:
-            continue
-        profile = _fetch_user_profile(user_id)
-        if not profile or not profile.get("displayName"):
-            continue
-        data.update(profile)
-        conn.execute(
-            "UPDATE events SET data = ?, display_name = ? WHERE id = ?",
-            (fast_dumps(data), profile["displayName"], row["id"])
-        )
-        fixed += 1
-    if fixed:
-        conn.commit()
-        print(f"[OK] Backfilled displayName for {fixed} superchats via profile API")
-
-
-def seed_superchats_from_rest():
-    """Fetch active superchats from REST API and store any we haven't seen via Socket.IO."""
-    if not auth.is_configured:
-        return
-    session = auth.get_session()
-    try:
-        r = session.get("https://api.fishtank.live/v1/super-chat", timeout=10)
-        if r.status_code != 200:
-            print(f"[WARN] Superchat seed: HTTP {r.status_code}")
-            return
-        data = r.json()
-        chats = data if isinstance(data, list) else data.get("superChats", [])
-        if not chats:
-            return
-        known_ids = database.get_known_superchat_ids()
-        new_count = 0
-        for sc in chats:
-            sc_id = str(sc.get("id", ""))
-            if not sc_id or sc_id in known_ids:
-                continue
-            # Fetch displayName from profile API if fishtank sent it empty
-            if not sc.get("displayName") and sc.get("userId"):
-                profile = _fetch_user_profile(sc["userId"])
-                if profile:
-                    sc.update(profile)
-            database.store_event("super-chat:new", sc)
-            new_count += 1
-        if new_count:
-            print(f"[OK] Seeded {new_count} superchats from REST API")
-    except Exception as e:
-        print(f"[WARN] Superchat seed failed: {e}")
-    finally:
-        session.close()
-
-
-def fishtoy_poller():
-    """Poll /v1/items/recent for fishtoy redemptions."""
-    global _last_fishtoy_poll
-    if not auth.is_configured:
-        return
-
-    session = auth.get_session()
-    seen_ids = set()
-    prev_poll_ids = []
-    first_poll = True
-
-    # Load known fishtoy IDs from database for backfill detection
-    known_ids = database.get_known_fishtoy_ids()
-
-    try:
-        while not _poller_stop.is_set():
-            try:
-                r = session.get("https://api.fishtank.live/v1/items/recent", timeout=10)
-                if r.status_code in (401, 403):
-                    print(f"[!] Fishtoy poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
-                    if auth.handle_401():
-                        session.close()
-                        session = auth.get_session()
-                        print("[OK] Fishtoy poller: re-auth successful, resuming.")
-                    else:
-                        print("[!] Fishtoy poller: re-auth failed. Will retry in 30s.")
-                        _poller_stop.wait(30)
-                    continue
-                if r.status_code != 200:
-                    _poller_stop.wait(FISHTOY_POLL_INTERVAL)
-                    continue
-
-                items = r.json().get("items", [])
-                _last_fishtoy_poll = datetime.now(timezone.utc)
-                this_poll_ids = set()
-                backfilled = 0
-
-                for item in items:
-                    item_id = item.get("id")
-                    this_poll_ids.add(item_id)
-
-                    if item_id in seen_ids:
-                        continue
-
-                    # On first poll, check DB for backfill instead of skipping
-                    if first_poll:
-                        if str(item_id) in known_ids:
-                            continue
-                        # This item happened while we were down - backfill it
-                        backfilled += 1
-
-                    # Filter: only capture FISHTOY and BIGTOY
-                    iid = str(item.get("itemId", ""))
-                    cat_entry = _item_catalog.get(iid, {})
-                    item_type = cat_entry.get("type")
-                    if cat_entry and item_type not in CAPTURE_TYPES:
-                        continue
-
-                    # Store in database
-                    db_id = database.store_event("fishtoy:used", item)
-
-                    # Log to console
-                    t = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                    name = item.get("displayName", "?")
-                    target = item.get("target", "?")
-                    item_name = cat_entry.get("name", f"#{iid}")
-                    meta = item.get("metadata", "")
-                    meta_str = str(meta) if meta else ""
-                    prefix = "[BACKFILL] " if first_poll else ""
-                    print(f"[{t}] {prefix}{item_type or '?'}: {name} -> {target} ({item_name}){f' [{meta_str[:50]}]' if meta_str else ''}")
-
-                    # Broadcast to browsers
-                    if _loop and _loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            broadcast_to_browsers("fishtoy:used", item, db_id), _loop
-                        )
-
-                # Prune seen_ids to last 3 polls
-                prev_poll_ids.append(this_poll_ids)
-                if len(prev_poll_ids) > 3:
-                    prev_poll_ids.pop(0)
-                seen_ids = set().union(*prev_poll_ids)
-
-                if first_poll:
-                    first_poll = False
-                    if backfilled:
-                        print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: backfilled {backfilled} missed events from {len(items)} items")
-                    else:
-                        print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Fishtoy poller: {len(items)} items in snapshot, no gaps detected. Watching...")
-
-            except http_requests.RequestException as e:
-                print(f"[!] Fishtoy poll error: {e}")
-
-            _poller_stop.wait(FISHTOY_POLL_INTERVAL)
-    finally:
-        session.close()
-
-
-def stock_poller():
-    """Poll /v1/stocks every 60s and store price history."""
-    global _last_stock_poll
-    if not auth.is_configured:
-        return
-
-    session = auth.get_session()
-
-    try:
-        while not _poller_stop.is_set():
-            try:
-                r = session.get("https://api.fishtank.live/v1/stocks", timeout=10)
-                if r.status_code in (401, 403):
-                    print(f"[!] Stock poller: auth expired (HTTP {r.status_code}). Attempting re-auth...")
-                    if auth.handle_401():
-                        session.close()
-                        session = auth.get_session()
-                        print("[OK] Stock poller: re-auth successful.")
-                elif r.status_code == 200:
-                    data = r.json()
-                    stocks = data.get("stocks", [])
-                    if stocks:
-                        with _catalog_lock:
-                            _stocks.clear()
-                            _stocks.extend(stocks)
-                        database.store_stock_snapshot(stocks)
-                        _last_stock_poll = datetime.now(timezone.utc)
-            except http_requests.RequestException:
-                pass
-
-            _poller_stop.wait(60)
-    finally:
-        session.close()
-
-
-def catalog_refresh_poller():
-    """Refresh contestants and item catalog every 30 minutes."""
-    if not auth.is_configured:
-        return
-
-    # Wait 10 minutes before first refresh (load_catalog already ran on startup)
-    _poller_stop.wait(600)
-
-    while not _poller_stop.is_set():
-        session = auth.get_session()
-        try:
-            # Refresh item catalog
-            try:
-                r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-                if r.status_code in (401, 403):
-                    if auth.handle_401():
-                        session.close()
-                        session = auth.get_session()
-                        r = session.get("https://api.fishtank.live/v1/items", timeout=10)
-                if r.status_code == 200:
-                    raw = r.json()
-                    new_count = 0
-                    with _catalog_lock:
-                        for key, val in raw.items():
-                            if isinstance(val, dict) and "id" in val:
-                                sid = str(val["id"])
-                                if sid not in _item_catalog:
-                                    new_count += 1
-                                _item_catalog[sid] = val
-                    if new_count:
-                        print(f"[OK] Catalog refresh: {new_count} new items added ({len(_item_catalog)} total)")
-            except Exception as e:
-                print(f"[WARN] Catalog refresh failed (items): {e}")
-
-            # Refresh contestants
-            try:
-                r = session.get("https://api.fishtank.live/v1/contestants", timeout=10)
-                if r.status_code == 200:
-                    data = r.json()
-                    all_contestants = data.get("contestants", [])
-                    season_5 = [c for c in all_contestants if str(c.get("season", "")) == "5"]
-                    new_list = season_5 if season_5 else all_contestants
-                    with _catalog_lock:
-                        old_count = len(_contestants)
-                        _contestants.clear()
-                        _contestants.extend(new_list)
-                    if len(_contestants) != old_count:
-                        print(f"[OK] Catalog refresh: contestants updated ({old_count} -> {len(_contestants)})")
-            except Exception as e:
-                print(f"[WARN] Catalog refresh failed (contestants): {e}")
-        finally:
-            session.close()
-
-        _poller_stop.wait(600)  # 10 minutes
+            print(f"[WARN] Notify poller error: {e}")
+        await asyncio.sleep(0.2)
 
 
 # ============================================================
@@ -1042,9 +187,6 @@ def catalog_refresh_poller():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _loop
-    _loop = asyncio.get_running_loop()
-
     database.init_db()
 
     # Backfill extracted columns in background (one-time migration, batched)
@@ -1053,30 +195,7 @@ async def lifespan(app: FastAPI):
         if backfilled:
             print(f"[OK] Backfilled extracted columns for {backfilled} events")
         database.backfill_poll_vote_costs()
-        _backfill_empty_sc_names()
-        _seed_poll_vote_state()
     Thread(target=_run_backfill, daemon=True).start()
-
-    # Load item catalog and contestants from fishtank API
-    load_catalog()
-
-    # Seed any active superchats from REST (may be missed if server restarted)
-    seed_superchats_from_rest()
-
-    # Start fishclient reconnect loop (Socket.IO for chat/TTS/SFX/polls/notifications)
-    Thread(target=reconnect_loop, daemon=True).start()
-
-    # Start fishtoy REST poller in background thread
-    Thread(target=fishtoy_poller, daemon=True).start()
-
-    # Start stock price history poller in background thread
-    Thread(target=stock_poller, daemon=True).start()
-
-    # Start catalog refresh poller (contestants + items every 10 min)
-    Thread(target=catalog_refresh_poller, daemon=True).start()
-
-    # Start database backup poller (every 6 hours)
-    Thread(target=db_backup_poller, daemon=True).start()
 
     # Pre-warm analytics cache so first browser connect doesn't trigger a CPU spike
     def _warm_caches():
@@ -1099,11 +218,13 @@ async def lifespan(app: FastAPI):
     # Keep browser WebSocket connections alive through Cloudflare's 100s idle timeout
     ping_task = asyncio.create_task(_ws_ping_loop())
 
+    # Poll _notify table for new events from ingestion process
+    notify_task = asyncio.create_task(_notify_poller())
+
     yield
 
-    _poller_stop.set()
-    stop_fish_client()
     ping_task.cancel()
+    notify_task.cancel()
 
 
 app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
@@ -1161,7 +282,8 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.accept()
         browser_clients.add(ws)
     try:
-        await ws.send_text(fast_dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION, "chatRoom": _chat_room}}))
+        state = shared_state.read_state(_SHARED_STATE_PATH)
+        await ws.send_text(fast_dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION, "chatRoom": state.get("chat_room", "")}}))
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
@@ -1205,13 +327,13 @@ def api_stats(since: str = Query(None, description="ISO timestamp to filter from
 
 @app.get("/api/status")
 def api_status():
-    fc = fish_client  # Local ref to avoid race condition
+    state = shared_state.read_state(_SHARED_STATE_PATH)
     return {
-        "connected": fc is not None and fc.is_connected,
+        "connected": state.get("socket_connected_at") is not None,
         "browser_clients": len(browser_clients),
-        "fishtank_online": _fishtank_online,
-        "auth_mode": auth.mode,
-        "auth_configured": auth.is_configured,
+        "fishtank_online": state.get("fishtank_online", 0),
+        "auth_mode": state.get("auth_mode", "unknown"),
+        "auth_configured": state.get("auth_configured", False),
     }
 
 
@@ -1219,21 +341,34 @@ def api_status():
 def api_health():
     """Health check for monitoring. Sensitive details omitted."""
     now = datetime.now(timezone.utc)
-    fc = fish_client
+    state = shared_state.read_state(_SHARED_STATE_PATH)
 
-    # Socket health
-    socket_connected = fc is not None and fc.is_connected
+    # Socket health (derived from shared state)
+    socket_connected_at_str = state.get("socket_connected_at")
+    socket_connected = socket_connected_at_str is not None
     socket_uptime = None
-    if socket_connected and _socket_connected_at:
-        socket_uptime = int((now - _socket_connected_at).total_seconds())
+    if socket_connected_at_str:
+        try:
+            socket_connected_at = datetime.fromisoformat(socket_connected_at_str)
+            socket_uptime = int((now - socket_connected_at).total_seconds())
+        except (ValueError, TypeError):
+            pass
 
-    # Poller health
+    # Poller health (derived from shared state)
     fishtoy_age = None
-    if _last_fishtoy_poll:
-        fishtoy_age = int((now - _last_fishtoy_poll).total_seconds())
+    last_fishtoy_str = state.get("last_fishtoy_poll")
+    if last_fishtoy_str:
+        try:
+            fishtoy_age = int((now - datetime.fromisoformat(last_fishtoy_str)).total_seconds())
+        except (ValueError, TypeError):
+            pass
     stock_age = None
-    if _last_stock_poll:
-        stock_age = int((now - _last_stock_poll).total_seconds())
+    last_stock_str = state.get("last_stock_poll")
+    if last_stock_str:
+        try:
+            stock_age = int((now - datetime.fromisoformat(last_stock_str)).total_seconds())
+        except (ValueError, TypeError):
+            pass
 
     # Database health — count cached 30s to avoid a COUNT(*) on every monitor ping
     now_ts = _time.time()
@@ -1248,17 +383,32 @@ def api_health():
         db_ok = True
     total_events = _health_event_count["value"]
 
+    # Backup health (derived from shared state)
+    last_backup_str = state.get("last_backup")
+
+    # Shared state freshness
+    updated_at_str = state.get("updated_at")
+    state_age = None
+    if updated_at_str:
+        try:
+            state_age = int((now - datetime.fromisoformat(updated_at_str)).total_seconds())
+        except (ValueError, TypeError):
+            pass
+
     # Overall status
+    auth_configured = state.get("auth_configured", False)
     issues = []
+    if state_age is not None and state_age > 120:
+        issues.append(f"shared state stale ({state_age}s)")
     if not socket_connected:
         issues.append("socket disconnected")
     if fishtoy_age is not None and fishtoy_age > 30:
         issues.append(f"fishtoy poller stale ({fishtoy_age}s)")
-    elif fishtoy_age is None and auth.is_configured:
+    elif fishtoy_age is None and auth_configured:
         issues.append("fishtoy poller not started")
     if stock_age is not None and stock_age > 90:
         issues.append(f"stock poller stale ({stock_age}s)")
-    elif stock_age is None and auth.is_configured:
+    elif stock_age is None and auth_configured:
         issues.append("stock poller not started")
     if not db_ok:
         issues.append("database error")
@@ -1277,7 +427,7 @@ def api_health():
             "total_events": total_events,
         },
         "backup": {
-            "last_backup": _last_backup.isoformat() if _last_backup else None,
+            "last_backup": last_backup_str,
         },
         "browser_clients": len(browser_clients),
         "checked_at": now.isoformat(),
@@ -1287,35 +437,36 @@ def api_health():
 @app.get("/api/items")
 def api_items():
     """Return the item catalog (itemId -> name/description/icon)."""
-    with _catalog_lock:
-        return dict(_item_catalog)
+    state = shared_state.read_state(_SHARED_STATE_PATH)
+    return state.get("item_catalog", {})
 
 
 @app.get("/api/contestants")
 def api_contestants():
     """Return the contestant list."""
-    with _catalog_lock:
-        return list(_contestants)
+    state = shared_state.read_state(_SHARED_STATE_PATH)
+    return state.get("contestants", [])
 
 
 @app.get("/api/rooms")
 def api_rooms():
     """Return room code -> name mapping."""
-    with _catalog_lock:
-        return dict(_room_map)
+    state = shared_state.read_state(_SHARED_STATE_PATH)
+    return state.get("room_map", {})
 
 
 @app.get("/api/stocks")
 def api_stocks():
     """Return current stock data (updated by stock_poller every 60s)."""
-    with _catalog_lock:
-        return list(_stocks)
+    state = shared_state.read_state(_SHARED_STATE_PATH)
+    return state.get("stocks", [])
 
 
 @app.get("/api/feature-toggles")
 def api_feature_toggles():
     """Return current feature toggle states."""
-    return _feature_toggles
+    state = shared_state.read_state(_SHARED_STATE_PATH)
+    return state.get("feature_toggles", {})
 
 
 @app.get("/api/stocks/history")
@@ -1393,6 +544,8 @@ def api_hidden_content_targets():
 @app.get("/api/fishtoy-availability")
 def api_fishtoy_availability():
     """Return fishtoy/bigtoy items with their enabled/cooldown status."""
+    state = shared_state.read_state(_SHARED_STATE_PATH)
+    item_catalog = state.get("item_catalog", {})
     return [
         {
             "id": v.get("id"),
@@ -1406,7 +559,7 @@ def api_fishtoy_availability():
             "hasCustomText": v.get("hasCustomText"),
             "description": v.get("description"),
         }
-        for v in _item_catalog.values()
+        for v in item_catalog.values()
         if v.get("type") in CAPTURE_TYPES
     ]
 
@@ -1567,24 +720,10 @@ if FRONTEND_DIST.exists():
 if __name__ == "__main__":
     import uvicorn
 
-    if not auth.is_configured:
-        print("=" * 60)
-        print("  WARNING: No auth credentials configured")
-        print()
-        print("  Option 1 (recommended): Create backend/.env file:")
-        print("    FISHTANK_EMAIL=your_email@example.com")
-        print("    FISHTANK_PASSWORD=your_password")
-        print()
-        print("  Option 2 (legacy): Set cookie manually:")
-        print("    $env:FISHTANK_COOKIE = 'your_cookie'  (PowerShell)")
-        print()
-        print("  See .env.example for details.")
-        print("=" * 60)
-
     ssl_keyfile = os.environ.get("SSL_KEYFILE")
     ssl_certfile = os.environ.get("SSL_CERTFILE")
     scheme = "https" if ssl_certfile else "http"
-    print(f"Starting Fishtank Dashboard on {scheme}://localhost:8000")
+    print(f"Starting Fishtank Dashboard API on {scheme}://localhost:8000")
     uvicorn.run(
         app,
         host="0.0.0.0",

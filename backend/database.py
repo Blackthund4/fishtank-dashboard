@@ -396,6 +396,25 @@ def get_events(event_type=None, limit=200, since_id=None, before_id=None,
     ]
 
 
+def get_event_by_id(event_id):
+    """Fetch a single event by its primary key. Returns dict or None."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, event_type, event_id, timestamp_server, timestamp_local, data FROM events WHERE id = ?",
+        (event_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "event_type": row["event_type"],
+        "event_id": row["event_id"],
+        "timestamp_server": row["timestamp_server"],
+        "timestamp_local": row["timestamp_local"],
+        "data": fast_loads(row["data"]),
+    }
+
+
 def get_stats(since=None):
     conn = _get_conn()
     since_clause = ""
