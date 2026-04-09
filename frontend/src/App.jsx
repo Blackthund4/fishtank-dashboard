@@ -835,7 +835,7 @@ export default function App() {
       {activeTab === 'dashboard' && (
       <main className="flex-1 flex flex-col md:flex-row gap-2 p-2 min-h-0 overflow-y-auto md:overflow-hidden">
         {/* LEFT: Unified Activity panel */}
-        <div className="w-full md:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border border-t-2 border-t-emerald-500/60 rounded-lg overflow-hidden min-h-[400px] md:min-h-0">
+        <div className="w-full md:w-[240px] lg:w-[420px] md:shrink-0 flex flex-col bg-tank-surface border border-tank-border border-t-2 border-t-emerald-500/60 rounded-lg overflow-hidden min-h-[400px] md:min-h-0">
           {/* Filter bar */}
           <div className="border-b border-tank-border p-2 space-y-1.5 shrink-0">
             <div className="flex items-center justify-between">
@@ -1568,7 +1568,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
     })), [sessionStats.top_fishtoy_senders])
 
   return (
-    <Panel title="Last 24 Hours" icon={Clock} className="w-full md:w-[280px] md:shrink-0 border-t-2 border-t-cyan-500/60">
+    <Panel title="Last 24 Hours" icon={Clock} className="w-full md:w-[240px] lg:w-[280px] md:shrink-0 border-t-2 border-t-cyan-500/60">
       <div className="space-y-1.5">
         <StatRow label="Fishtoys" value={sessionStats.fishtoys} color="text-tank-accent" />
         <StatRow label="Chat" value={sessionStats.chats} color="text-blue-400" />
