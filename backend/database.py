@@ -77,6 +77,13 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_stock_ts ON stock_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_stock_ticker_ts ON stock_history(ticker, timestamp);
 
+        CREATE TABLE IF NOT EXISTS _notify (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+
         -- Legacy json_extract indexes (kept to avoid DROP+CREATE OOM; harmless)
         CREATE INDEX IF NOT EXISTS idx_events_sentiment ON events(event_type, timestamp_local)
             WHERE json_extract(data, '$.sentiment') IS NOT NULL;
@@ -684,6 +691,35 @@ def store_stock_snapshot(stocks):
             (now, s.get("tickerSymbol"), s.get("currentPrice"), s.get("today"),
              s.get("lastHour"), s.get("lastWeek"), s.get("averagePrice")),
         )
+    conn.commit()
+
+
+def notify_new_event(event_id, event_type):
+    """Insert a notification row for the API server's WS fan-out poller."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO _notify (event_id, event_type) VALUES (?, ?)",
+        (event_id, event_type),
+    )
+    conn.commit()
+
+
+def poll_notify(last_seen_id=0):
+    """Poll for new notify rows since last_seen_id. Returns list of dicts."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, event_id, event_type FROM _notify WHERE id > ? ORDER BY id",
+        (last_seen_id,),
+    ).fetchall()
+    return [{"id": r["id"], "event_id": r["event_id"], "event_type": r["event_type"]} for r in rows]
+
+
+def prune_notify():
+    """Delete _notify rows older than 60 seconds."""
+    conn = _get_conn()
+    conn.execute(
+        "DELETE FROM _notify WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-60 seconds')"
+    )
     conn.commit()
 
 

@@ -40,6 +40,7 @@ def fresh_db():
     conn.executescript("""
         DROP TABLE IF EXISTS events;
         DROP TABLE IF EXISTS stock_history;
+        DROP TABLE IF EXISTS _notify;
     """)
     database.init_db()
     yield
@@ -1097,3 +1098,51 @@ def test_shared_state_atomic_write_no_corrupt(tmp_path, reset_shared_state_cache
     # Original file untouched
     result = shared_state.read_state(path)
     assert result == {"original": True}
+
+
+# ============================================================
+# NOTIFY TABLE: inter-process event notification
+# ============================================================
+
+
+def test_notify_new_event_and_poll():
+    database.notify_new_event(42, "chat:message")
+    rows = database.poll_notify(0)
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == 42
+    assert rows[0]["event_type"] == "chat:message"
+
+
+def test_poll_notify_filters_by_last_seen_id():
+    database.notify_new_event(1, "chat:message")
+    database.notify_new_event(2, "tts:update")
+    database.notify_new_event(3, "sfx:update")
+    all_rows = database.poll_notify(0)
+    second_id = all_rows[1]["id"]
+    rows = database.poll_notify(second_id)
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == 3
+
+
+def test_poll_notify_empty_when_no_new_rows():
+    rows = database.poll_notify(0)
+    assert rows == []
+
+
+def test_prune_notify_deletes_old_rows():
+    database.notify_new_event(1, "chat:message")
+    # Backdate the row to 2 minutes ago
+    conn = database._get_conn()
+    conn.execute(
+        "UPDATE _notify SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')"
+    )
+    conn.commit()
+    database.prune_notify()
+    assert database.poll_notify(0) == []
+
+
+def test_prune_notify_keeps_recent_rows():
+    database.notify_new_event(1, "chat:message")
+    database.prune_notify()
+    rows = database.poll_notify(0)
+    assert len(rows) == 1
