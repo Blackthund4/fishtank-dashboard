@@ -1,5 +1,28 @@
 services:
-  dashboard:
+  ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    volumes:
+      - fishtank-data:/app/data
+    environment:
+      - FISHTANK_DB_PATH=/app/data/fishtank.db
+      - FISHTANK_TOKEN_CACHE=/app/data/token_cache.json
+      - FISHTANK_SHARED_STATE=/app/data/_shared_state.json
+      - FISHTANK_EMAIL=${FISHTANK_EMAIL}
+      - FISHTANK_PASSWORD=${FISHTANK_PASSWORD}
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "sh", "-c", "[ -f /app/data/_shared_state.json ] && [ $(( $(date +%s) - $(stat -c %Y /app/data/_shared_state.json) )) -lt 120 ]"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  api:
     build:
       context: .
       args:
@@ -11,15 +34,13 @@ services:
       - /opt/fishtank-dashboard/certs:/app/certs:ro
     environment:
       - FISHTANK_DB_PATH=/app/data/fishtank.db
-      - FISHTANK_TOKEN_CACHE=/app/data/token_cache.json
-      - FISHTANK_EMAIL=${FISHTANK_EMAIL}
-      - FISHTANK_PASSWORD=${FISHTANK_PASSWORD}
+      - FISHTANK_SHARED_STATE=/app/data/_shared_state.json
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://fish-dash.com,https://www.fish-dash.com}
       - SSL_CERTFILE=/app/certs/origin.crt
       - SSL_KEYFILE=/app/certs/origin.key
-    mem_limit: 4g
-    memswap_limit: 4g
-    cpus: 2
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
     healthcheck:
       test: ["CMD", "curl", "-sf", "--insecure", "https://localhost:8000/api/health"]
       interval: 60s

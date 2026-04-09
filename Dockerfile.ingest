@@ -1,0 +1,29 @@
+FROM python:3.12.7-slim
+
+WORKDIR /app
+
+# Install gosu for dropping privileges
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y gosu
+
+# Install Python dependencies (vendor/fishclient must be present before pip runs)
+COPY backend/vendor/ ./vendor/
+COPY backend/requirements.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# Copy backend
+COPY backend/ ./backend/
+
+# Create non-root user and data directory
+RUN groupadd -r dashboard && useradd -r -g dashboard dashboard \
+    && mkdir -p /app/data && chown -R dashboard:dashboard /app/data
+
+# Copy entrypoint
+COPY entrypoint-ingest.sh /app/entrypoint-ingest.sh
+RUN chmod +x /app/entrypoint-ingest.sh
+
+WORKDIR /app/backend
+
+ENTRYPOINT ["/app/entrypoint-ingest.sh"]

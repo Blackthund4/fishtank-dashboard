@@ -22,9 +22,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y gosu curl
 
-# Install Python dependencies (vendor/fishclient must be present before pip runs)
-COPY backend/vendor/ ./vendor/
-COPY backend/requirements.txt ./
+# Install Python dependencies (API-only, no fishclient/vaderSentiment/requests)
+COPY backend/requirements-api.txt ./requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
