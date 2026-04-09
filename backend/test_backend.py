@@ -1033,3 +1033,67 @@ def test_tts_sentiment_hourly():
     result = database.get_tts_sentiment()
     assert len(result["hourly"]) >= 1
     assert result["hourly"][0]["avg_sentiment"] == 0.3
+
+
+# ============================================================
+# SHARED STATE: atomic read/write with mtime caching
+# ============================================================
+
+import shared_state
+
+
+@pytest.fixture(autouse=False)
+def reset_shared_state_cache():
+    """Reset module-level cache between shared_state tests."""
+    shared_state._cached_state = {}
+    shared_state._cached_mtime = 0.0
+    yield
+    shared_state._cached_state = {}
+    shared_state._cached_mtime = 0.0
+
+
+def test_shared_state_round_trip(tmp_path, reset_shared_state_cache):
+    path = str(tmp_path / "state.json")
+    data = {"updated_at": "2026-04-09T00:00:00Z", "stocks": [1, 2, 3], "item_catalog": {"a": 1}}
+    shared_state.write_state(path, data)
+    result = shared_state.read_state(path)
+    assert result == data
+
+
+def test_shared_state_missing_file_returns_empty(tmp_path, reset_shared_state_cache):
+    path = str(tmp_path / "nonexistent.json")
+    result = shared_state.read_state(path)
+    assert result == {}
+
+
+def test_shared_state_mtime_cache_hit(tmp_path, reset_shared_state_cache):
+    path = str(tmp_path / "state.json")
+    shared_state.write_state(path, {"v": 1})
+    shared_state.read_state(path)
+    mtime_after_first = shared_state._cached_mtime
+    # Second read without file change should reuse cache
+    result = shared_state.read_state(path)
+    assert result == {"v": 1}
+    assert shared_state._cached_mtime == mtime_after_first
+
+
+def test_shared_state_cache_invalidates_on_write(tmp_path, reset_shared_state_cache):
+    path = str(tmp_path / "state.json")
+    shared_state.write_state(path, {"v": 1})
+    assert shared_state.read_state(path) == {"v": 1}
+    shared_state.write_state(path, {"v": 2})
+    assert shared_state.read_state(path) == {"v": 2}
+
+
+def test_shared_state_atomic_write_no_corrupt(tmp_path, reset_shared_state_cache):
+    """If os.replace fails, the original file stays intact."""
+    path = str(tmp_path / "state.json")
+    shared_state.write_state(path, {"original": True})
+    # Simulate os.replace failure mid-write
+    from unittest.mock import patch
+    with patch("shared_state.os.replace", side_effect=OSError("disk full")):
+        with pytest.raises(OSError):
+            shared_state.write_state(path, {"corrupted": True})
+    # Original file untouched
+    result = shared_state.read_state(path)
+    assert result == {"original": True}
