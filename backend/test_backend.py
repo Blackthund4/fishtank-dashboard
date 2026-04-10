@@ -23,7 +23,12 @@ import database
 sys.path.insert(0, os.path.dirname(__file__))
 from ingest import _should_filter_chat, _should_filter_notification, _is_duplicate, _seen_tts_sfx_ids
 from ingest import _score_sentiment
-from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX, _get_client_ip
+from server import (
+    _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX, _get_client_ip,
+    _is_origin_allowed, _try_reserve_ws_slot, _release_ws_slot,
+    _ws_ip_counts, browser_clients, MAX_WS_PER_IP, MAX_WS_CLIENTS,
+)
+import server as _server
 
 
 # ============================================================
@@ -47,6 +52,8 @@ def fresh_db():
     # Clear dedup and rate limit state between tests
     _seen_tts_sfx_ids.clear()
     _rate_limits.clear()
+    _ws_ip_counts.clear()
+    browser_clients.clear()
 
 
 # ============================================================
@@ -703,6 +710,87 @@ def test_parse_allowed_origins_does_not_default_to_wildcard():
     # cross-origin requests from anywhere if the env var was unset.
     assert "*" not in _parse_allowed_origins("")
     assert _parse_allowed_origins("") == []
+
+
+# ============================================================
+# WEBSOCKET: ORIGIN CHECK + PER-IP CAP
+# ============================================================
+
+
+def test_is_origin_allowed_empty_rejected():
+    # Browsers always send Origin on WS; missing → reject (CSWSH defense).
+    assert _is_origin_allowed(None) is False
+    assert _is_origin_allowed("") is False
+
+
+def test_is_origin_allowed_matches_list(monkeypatch):
+    monkeypatch.setattr(_server, "_allowed_origins", ["https://fish-dash.com"])
+    assert _is_origin_allowed("https://fish-dash.com") is True
+    assert _is_origin_allowed("https://evil.com") is False
+
+
+def test_is_origin_allowed_wildcard_accepts_any(monkeypatch):
+    monkeypatch.setattr(_server, "_allowed_origins", ["*"])
+    assert _is_origin_allowed("https://fish-dash.com") is True
+    assert _is_origin_allowed("https://evil.com") is True
+    # Still reject missing Origin even with wildcard
+    assert _is_origin_allowed("") is False
+
+
+def test_is_origin_allowed_empty_allowlist_rejects_all(monkeypatch):
+    monkeypatch.setattr(_server, "_allowed_origins", [])
+    assert _is_origin_allowed("https://fish-dash.com") is False
+    assert _is_origin_allowed("https://evil.com") is False
+
+
+def test_ws_reserve_slot_succeeds_under_cap():
+    ok, reason = _try_reserve_ws_slot("1.2.3.4")
+    assert ok is True
+    assert reason == "ok"
+    assert _ws_ip_counts["1.2.3.4"] == 1
+
+
+def test_ws_reserve_slot_per_ip_cap():
+    for _ in range(MAX_WS_PER_IP):
+        ok, _r = _try_reserve_ws_slot("5.6.7.8")
+        assert ok is True
+    # Fourth connection from same IP is rejected
+    ok, reason = _try_reserve_ws_slot("5.6.7.8")
+    assert ok is False
+    assert reason == "per-ip"
+
+
+def test_ws_reserve_slot_different_ips_independent():
+    for _ in range(MAX_WS_PER_IP):
+        _try_reserve_ws_slot("10.0.0.1")
+    # Different IP should still be allowed
+    ok, _r = _try_reserve_ws_slot("10.0.0.2")
+    assert ok is True
+
+
+def test_ws_release_slot_frees_capacity():
+    for _ in range(MAX_WS_PER_IP):
+        _try_reserve_ws_slot("20.0.0.1")
+    _release_ws_slot("20.0.0.1")
+    ok, _r = _try_reserve_ws_slot("20.0.0.1")
+    assert ok is True
+
+
+def test_ws_release_slot_removes_empty_ip():
+    _try_reserve_ws_slot("30.0.0.1")
+    _release_ws_slot("30.0.0.1")
+    assert "30.0.0.1" not in _ws_ip_counts
+
+
+def test_ws_reserve_slot_global_cap(monkeypatch):
+    # Fill the global pool with fake clients
+    class _FakeWS:
+        pass
+    for _ in range(MAX_WS_CLIENTS):
+        browser_clients.add(_FakeWS())
+    ok, reason = _try_reserve_ws_slot("40.0.0.1")
+    assert ok is False
+    assert reason == "global"
 
 
 # ============================================================

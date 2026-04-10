@@ -134,6 +134,54 @@ def _get_client_ip(scope_obj) -> str:
 _clients_lock = Lock()
 browser_clients: set[WebSocket] = set()
 
+# Per-IP WebSocket connection cap — prevents one IP from exhausting the
+# global 50-client pool. Uses the XFF-corrected IP from _get_client_ip.
+MAX_WS_PER_IP = 3
+_ws_ip_counts: dict = defaultdict(int)
+
+
+def _is_origin_allowed(origin) -> bool:
+    """Return True iff the WebSocket Origin header matches _allowed_origins.
+
+    WebSockets are not subject to the browser same-origin policy, so without
+    an Origin check any page on the internet can open ``wss://fish-dash.com/ws``
+    and receive live events (CSWSH). Browsers always send Origin on WS
+    handshakes; a missing Origin indicates a non-browser client, which this
+    read-only public dashboard does not need to support and we reject to stay
+    strict.
+    """
+    if not origin:
+        return False
+    if "*" in _allowed_origins:
+        return True
+    return origin in _allowed_origins
+
+
+def _try_reserve_ws_slot(ip: str) -> tuple[bool, str]:
+    """Atomically reserve a WebSocket slot for ``ip``.
+
+    Returns ``(True, "ok")`` on success — caller MUST call
+    ``_release_ws_slot(ip)`` when the connection closes. Returns
+    ``(False, reason)`` on failure with one of ``"global"`` (MAX_WS_CLIENTS
+    pool exhausted) or ``"per-ip"`` (this IP already has MAX_WS_PER_IP
+    connections).
+    """
+    with _clients_lock:
+        if len(browser_clients) >= MAX_WS_CLIENTS:
+            return (False, "global")
+        if _ws_ip_counts[ip] >= MAX_WS_PER_IP:
+            return (False, "per-ip")
+        _ws_ip_counts[ip] += 1
+        return (True, "ok")
+
+
+def _release_ws_slot(ip: str) -> None:
+    """Release a previously-reserved WebSocket slot for ``ip``."""
+    with _clients_lock:
+        _ws_ip_counts[ip] -= 1
+        if _ws_ip_counts[ip] <= 0:
+            _ws_ip_counts.pop(ip, None)
+
 
 async def _ws_ping_loop():
     """Send a no-op ping to all browser clients every 60s to prevent Cloudflare idle timeout (100s)."""
@@ -366,12 +414,28 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    with _clients_lock:
-        if len(browser_clients) >= MAX_WS_CLIENTS:
-            await ws.close(code=1013, reason="Too many connections")
-            return
+    # CSWSH defense — reject cross-origin WebSocket handshakes. Browsers
+    # always send Origin on WS; missing Origin is treated as non-browser.
+    origin = ws.headers.get("origin")
+    if not _is_origin_allowed(origin):
+        await ws.close(code=1008, reason="Origin not allowed")
+        return
+
+    ip = _get_client_ip(ws)
+    ok, reason = _try_reserve_ws_slot(ip)
+    if not ok:
+        await ws.close(code=1013, reason=f"Too many connections ({reason})")
+        return
+
+    try:
         await ws.accept()
+    except Exception:
+        _release_ws_slot(ip)
+        raise
+
+    with _clients_lock:
         browser_clients.add(ws)
+
     try:
         state = shared_state.read_state(_SHARED_STATE_PATH)
         await ws.send_text(fast_dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION, "chatRoom": state.get("chat_room", "")}}))
@@ -382,6 +446,7 @@ async def websocket_endpoint(ws: WebSocket):
     finally:
         with _clients_lock:
             browser_clients.discard(ws)
+        _release_ws_slot(ip)
 
 
 # --- REST endpoints ---
@@ -827,4 +892,8 @@ if __name__ == "__main__":
         # per-IP rate limiter sees every request as coming from a CF edge IP.
         proxy_headers=True,
         forwarded_allow_ips="*",
+        # Browsers only send tiny keepalive frames on /ws (the endpoint just
+        # awaits receive_text() to detect disconnect). Cap inbound frame size
+        # to 4 KB to bound memory under a connection-level flood.
+        ws_max_size=4096,
     )
