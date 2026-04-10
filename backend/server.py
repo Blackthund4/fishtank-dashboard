@@ -10,6 +10,7 @@ Usage:
 """
 
 import asyncio
+import logging
 import os
 import time as _time
 from collections import defaultdict, deque
@@ -243,11 +244,34 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
 
-# CORS: configurable via ALLOWED_ORIGINS env var (comma-separated)
-_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+
+def _parse_allowed_origins(raw: str) -> list[str]:
+    """Parse a comma-separated ALLOWED_ORIGINS env value into a clean list.
+
+    Fail-closed: unset, blank, or whitespace-only → ``[]`` (rejects every
+    cross-origin request). Previously defaulted to ``"*"`` which was silently
+    insecure if the env var was forgotten.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+# CORS: configurable via ALLOWED_ORIGINS env var (comma-separated).
+# Default is empty list — fail closed. Production sets this explicitly via
+# docker-compose.yml. An unset value logs a startup warning.
+_allowed_origins = _parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS", ""))
+if not _allowed_origins:
+    logging.warning(
+        "ALLOWED_ORIGINS is unset or empty — CORS will reject all "
+        "cross-origin requests. Set ALLOWED_ORIGINS to a comma-separated "
+        "list of origins (e.g. https://fish-dash.com) in production."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _allowed_origins],
+    allow_origins=_allowed_origins,
     allow_methods=["GET", "HEAD"],
     allow_headers=["content-type"],
     max_age=3600,

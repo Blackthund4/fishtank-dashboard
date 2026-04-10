@@ -601,7 +601,7 @@ def test_get_client_ip_falls_back_on_empty_host():
 
 import asyncio
 from starlette.responses import Response as _StarletteResponse
-from server import security_headers_middleware, _CSP_POLICY, _HAS_SSL
+from server import security_headers_middleware, _CSP_POLICY, _HAS_SSL, _parse_allowed_origins
 
 
 def _run_security_headers(status_code=200):
@@ -665,6 +665,44 @@ def test_security_headers_hsts_only_with_ssl():
         assert "max-age=31536000" in resp.headers["Strict-Transport-Security"]
     else:
         assert "Strict-Transport-Security" not in resp.headers
+
+
+# ============================================================
+# CORS ALLOWED ORIGINS (fail-closed parsing)
+# ============================================================
+
+
+def test_parse_allowed_origins_unset_is_empty():
+    assert _parse_allowed_origins("") == []
+    assert _parse_allowed_origins("   ") == []
+    assert _parse_allowed_origins(None) == []
+
+
+def test_parse_allowed_origins_single():
+    assert _parse_allowed_origins("https://fish-dash.com") == ["https://fish-dash.com"]
+
+
+def test_parse_allowed_origins_multiple():
+    result = _parse_allowed_origins("https://fish-dash.com,https://www.fish-dash.com")
+    assert result == ["https://fish-dash.com", "https://www.fish-dash.com"]
+
+
+def test_parse_allowed_origins_strips_whitespace():
+    result = _parse_allowed_origins("  https://a.com , https://b.com  ")
+    assert result == ["https://a.com", "https://b.com"]
+
+
+def test_parse_allowed_origins_drops_empty_entries():
+    # Trailing comma, double comma, etc. should not yield "" entries
+    assert _parse_allowed_origins("https://a.com,,,") == ["https://a.com"]
+    assert _parse_allowed_origins(",,https://a.com,,") == ["https://a.com"]
+
+
+def test_parse_allowed_origins_does_not_default_to_wildcard():
+    # Regression guard: the old default was "*", which silently allowed
+    # cross-origin requests from anywhere if the env var was unset.
+    assert "*" not in _parse_allowed_origins("")
+    assert _parse_allowed_origins("") == []
 
 
 # ============================================================
