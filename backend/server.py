@@ -112,6 +112,20 @@ def _prune_rate_limits():
             del _rate_limits[ip]
 
 
+def _get_client_ip(scope_obj) -> str:
+    """Return the real client IP for a Request or WebSocket.
+
+    Uvicorn rewrites ``request.client.host`` to the X-Forwarded-For value when
+    started with ``proxy_headers=True`` and ``forwarded_allow_ips="*"``. On the
+    production VPS, UFW restricts port 443 ingress to published Cloudflare IP
+    ranges, so the XFF header cannot be forged by an untrusted peer.
+    """
+    client = getattr(scope_obj, "client", None)
+    if client and client.host:
+        return client.host
+    return "unknown"
+
+
 # ============================================================
 # BROWSER WEBSOCKET CLIENTS
 # ============================================================
@@ -247,7 +261,7 @@ async def rate_limit_middleware(request: Request, call_next):
     if request.url.path.startswith("/assets") or request.url.path == "/":
         return await call_next(request)
 
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_client_ip(request)
     if _check_rate_limit(ip):
         return JSONResponse(
             status_code=429,
@@ -731,4 +745,9 @@ if __name__ == "__main__":
         log_level="warning",
         ssl_keyfile=ssl_keyfile or None,
         ssl_certfile=ssl_certfile or None,
+        # Behind Cloudflare: UFW restricts port 443 ingress to CF IP ranges, so
+        # trusting X-Forwarded-For from any peer is safe. Without this, the
+        # per-IP rate limiter sees every request as coming from a CF edge IP.
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )

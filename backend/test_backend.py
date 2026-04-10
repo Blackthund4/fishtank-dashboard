@@ -23,7 +23,7 @@ import database
 sys.path.insert(0, os.path.dirname(__file__))
 from ingest import _should_filter_chat, _should_filter_notification, _is_duplicate, _seen_tts_sfx_ids
 from ingest import _score_sentiment
-from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX
+from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX, _get_client_ip
 
 
 # ============================================================
@@ -564,6 +564,34 @@ def test_rate_limit_prune_keeps_active():
     _check_rate_limit("10.0.0.5")
     _prune_rate_limits()
     assert "10.0.0.5" in _rate_limits
+
+
+# ============================================================
+# CLIENT IP RESOLUTION (XFF via uvicorn proxy_headers)
+# ============================================================
+
+
+class _MockClient:
+    def __init__(self, host):
+        self.host = host
+
+
+class _MockRequest:
+    def __init__(self, host):
+        self.client = _MockClient(host) if host is not None else None
+
+
+def test_get_client_ip_returns_host():
+    # With uvicorn proxy_headers=True, .client.host already reflects XFF
+    assert _get_client_ip(_MockRequest("203.0.113.5")) == "203.0.113.5"
+
+
+def test_get_client_ip_falls_back_on_missing_client():
+    assert _get_client_ip(_MockRequest(None)) == "unknown"
+
+
+def test_get_client_ip_falls_back_on_empty_host():
+    assert _get_client_ip(_MockRequest("")) == "unknown"
 
 
 # ============================================================
