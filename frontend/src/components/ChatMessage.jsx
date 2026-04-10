@@ -6,12 +6,26 @@ function formatXP(xp) {
   return String(xp)
 }
 
+// Defensive validators for user-controlled CSS colors. customUsernameColor
+// and endorsementColor come straight from the fishtank API; React's CSS
+// parser already rejects code execution, but a malformed value can still
+// produce broken layout or be used to smuggle URLs. Accept only hex and
+// rgb/hsl functional notations, fall back to the tank palette default.
+const CSS_HEX_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+const CSS_FUNC_RE = /^(?:rgba?|hsla?)\([\s\d.,%/]+\)$/i
+function safeColor(value, fallback) {
+  if (typeof value !== 'string') return fallback
+  if (value.length > 64) return fallback
+  if (CSS_HEX_RE.test(value) || CSS_FUNC_RE.test(value)) return value
+  return fallback
+}
+
 export default memo(function ChatMessage({ data }) {
   if (!data || typeof data !== 'object') return null
 
   const user = data.user || {}
   const meta = data.metadata || {}
-  const nameColor = user.customUsernameColor || '#c8cdd4'
+  const nameColor = safeColor(user.customUsernameColor, '#c8cdd4')
 
   const badges = []
   if (meta.isAdmin) badges.push({ label: 'ADMIN', color: 'bg-green-500/20 text-green-400' })
@@ -54,7 +68,7 @@ export default memo(function ChatMessage({ data }) {
           {user.endorsement && (
             <span
               className="text-[10px] font-mono px-1 rounded bg-tank-highlight/50"
-              style={{ color: user.endorsementColor || '#a78bfa' }}
+              style={{ color: safeColor(user.endorsementColor, '#a78bfa') }}
             >
               {user.endorsement}
             </span>

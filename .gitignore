@@ -3,6 +3,14 @@
 backend/.env
 backend/token_cache.json
 
+# TLS certificates and private keys
+certs/
+*.key
+*.crt
+*.pem
+*.pfx
+*.p12
+
 # Database
 *.db
 *.db-wal

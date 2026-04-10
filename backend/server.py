@@ -10,6 +10,7 @@ Usage:
 """
 
 import asyncio
+import logging
 import os
 import time as _time
 from collections import defaultdict, deque
@@ -26,6 +27,26 @@ from pathlib import Path
 import database
 import shared_state
 from database import fast_loads, fast_dumps
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+# Single structured logger for the API process. Uvicorn's access log is left
+# at log_level="warning" (see uvicorn.run below) to avoid double-logging; this
+# logger replaces it with a one-line-per-request access log plus explicit
+# exception logging.
+logger = logging.getLogger("fishtank.api")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+    # Propagate to root so pytest caplog and other test hooks can observe
+    # records. Uvicorn does not attach handlers to root by default, so this
+    # does not cause duplicate output in production.
+    logger.propagate = True
+
 
 # ============================================================
 # CONFIG
@@ -112,12 +133,74 @@ def _prune_rate_limits():
             del _rate_limits[ip]
 
 
+def _get_client_ip(scope_obj) -> str:
+    """Return the real client IP for a Request or WebSocket.
+
+    Uvicorn rewrites ``request.client.host`` to the X-Forwarded-For value when
+    started with ``proxy_headers=True`` and ``forwarded_allow_ips="*"``. On the
+    production VPS, UFW restricts port 443 ingress to published Cloudflare IP
+    ranges, so the XFF header cannot be forged by an untrusted peer.
+    """
+    client = getattr(scope_obj, "client", None)
+    if client and client.host:
+        return client.host
+    return "unknown"
+
+
 # ============================================================
 # BROWSER WEBSOCKET CLIENTS
 # ============================================================
 
 _clients_lock = Lock()
 browser_clients: set[WebSocket] = set()
+
+# Per-IP WebSocket connection cap — prevents one IP from exhausting the
+# global 50-client pool. Uses the XFF-corrected IP from _get_client_ip.
+MAX_WS_PER_IP = 3
+_ws_ip_counts: dict = defaultdict(int)
+
+
+def _is_origin_allowed(origin) -> bool:
+    """Return True iff the WebSocket Origin header matches _allowed_origins.
+
+    WebSockets are not subject to the browser same-origin policy, so without
+    an Origin check any page on the internet can open ``wss://fish-dash.com/ws``
+    and receive live events (CSWSH). Browsers always send Origin on WS
+    handshakes; a missing Origin indicates a non-browser client, which this
+    read-only public dashboard does not need to support and we reject to stay
+    strict.
+    """
+    if not origin:
+        return False
+    if "*" in _allowed_origins:
+        return True
+    return origin in _allowed_origins
+
+
+def _try_reserve_ws_slot(ip: str) -> tuple[bool, str]:
+    """Atomically reserve a WebSocket slot for ``ip``.
+
+    Returns ``(True, "ok")`` on success — caller MUST call
+    ``_release_ws_slot(ip)`` when the connection closes. Returns
+    ``(False, reason)`` on failure with one of ``"global"`` (MAX_WS_CLIENTS
+    pool exhausted) or ``"per-ip"`` (this IP already has MAX_WS_PER_IP
+    connections).
+    """
+    with _clients_lock:
+        if len(browser_clients) >= MAX_WS_CLIENTS:
+            return (False, "global")
+        if _ws_ip_counts[ip] >= MAX_WS_PER_IP:
+            return (False, "per-ip")
+        _ws_ip_counts[ip] += 1
+        return (True, "ok")
+
+
+def _release_ws_slot(ip: str) -> None:
+    """Release a previously-reserved WebSocket slot for ``ip``."""
+    with _clients_lock:
+        _ws_ip_counts[ip] -= 1
+        if _ws_ip_counts[ip] <= 0:
+            _ws_ip_counts.pop(ip, None)
 
 
 async def _ws_ping_loop():
@@ -187,15 +270,18 @@ async def _notify_poller():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Idempotent schema ensure — safe if ingestion already created the tables.
+    # On split-architecture the sole schema owner is ingest.py, but we keep
+    # this defensive call to guard against api starting before ingest on a
+    # fresh volume.
     database.init_db()
 
-    # Backfill extracted columns in background (one-time migration, batched)
-    def _run_backfill():
-        backfilled = database.backfill_extracted_columns()
-        if backfilled:
-            print(f"[OK] Backfilled extracted columns for {backfilled} events")
-        database.backfill_poll_vote_costs()
-    Thread(target=_run_backfill, daemon=True).start()
+    # Flip to read-only SQLite mode for the rest of this process's lifetime.
+    # Defense-in-depth: even a bug or exploit path cannot write through the
+    # API's database handles. Must be called AFTER init_db (which writes
+    # DDL) and BEFORE any request handler opens a thread-local connection.
+    # Backfill lives on ingest.py; this process does not perform migrations.
+    database.enable_readonly()
 
     # Pre-warm analytics cache so first browser connect doesn't trigger a CPU spike
     def _warm_caches():
@@ -229,11 +315,34 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Fishtank Dashboard", lifespan=lifespan)
 
-# CORS: configurable via ALLOWED_ORIGINS env var (comma-separated)
-_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+
+def _parse_allowed_origins(raw: str) -> list[str]:
+    """Parse a comma-separated ALLOWED_ORIGINS env value into a clean list.
+
+    Fail-closed: unset, blank, or whitespace-only → ``[]`` (rejects every
+    cross-origin request). Previously defaulted to ``"*"`` which was silently
+    insecure if the env var was forgotten.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+# CORS: configurable via ALLOWED_ORIGINS env var (comma-separated).
+# Default is empty list — fail closed. Production sets this explicitly via
+# docker-compose.yml. An unset value logs a startup warning.
+_allowed_origins = _parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS", ""))
+if not _allowed_origins:
+    logger.warning(
+        "ALLOWED_ORIGINS is unset or empty — CORS will reject all "
+        "cross-origin requests. Set ALLOWED_ORIGINS to a comma-separated "
+        "list of origins (e.g. https://fish-dash.com) in production."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _allowed_origins],
+    allow_origins=_allowed_origins,
     allow_methods=["GET", "HEAD"],
     allow_headers=["content-type"],
     max_age=3600,
@@ -247,7 +356,7 @@ async def rate_limit_middleware(request: Request, call_next):
     if request.url.path.startswith("/assets") or request.url.path == "/":
         return await call_next(request)
 
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_client_ip(request)
     if _check_rate_limit(ip):
         return JSONResponse(
             status_code=429,
@@ -261,9 +370,102 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# Suppress stack traces in production
+# ============================================================
+# SECURITY HEADERS
+# ============================================================
+
+# Emit HSTS only when TLS is terminated at this process. Behind Cloudflare in
+# production the api process serves HTTPS via SSL_CERTFILE; locally it serves
+# plain HTTP and HSTS would poison the browser cache.
+_HAS_SSL = bool(os.environ.get("SSL_CERTFILE"))
+
+# Content-Security-Policy (Report-Only for now — flip to enforcing in a
+# follow-up once live-site violations have been observed).
+#   script-src 'self'       — requires the SW registration in index.html to be
+#                             an external file, not inline.
+#   style-src   'unsafe-inline' is unavoidable: React inline styles and
+#                             recharts emit inline style attributes.
+#   connect-src wss: https: — WebSocket upgrade + future cross-origin fetches.
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self' wss: https:; "
+    "frame-ancestors 'none'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "object-src 'none'"
+)
+
+
+# Registered after rate_limit_middleware so it runs *outer* — it stamps
+# responses from the rate limiter (429) and the exception handler (500) too.
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    h = response.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+    )
+    h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    h.setdefault("Content-Security-Policy-Report-Only", _CSP_POLICY)
+    if _HAS_SSL:
+        h.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
+
+
+# Access log middleware — registered last so it runs OUTERMOST and captures
+# the final stamped response (including rate-limit 429s and exception 500s).
+# Emits a single line per request to the fishtank.api logger.
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    start = _time.perf_counter()
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    except Exception:
+        # The generic_exception_handler will run after this and turn it into
+        # a 500 response, but call_next raised, so we only see the exception
+        # here. Log the access line with status=500 and re-raise.
+        status = 500
+        raise
+    finally:
+        duration_ms = (_time.perf_counter() - start) * 1000.0
+        logger.info(
+            "%s %s %s %.1fms %s",
+            request.method,
+            request.url.path,
+            status,
+            duration_ms,
+            _get_client_ip(request),
+        )
+    return response
+
+
+# Generic exception handler — returns a neutral 500 to the client but logs
+# the full traceback via fishtank.api so issues are actually visible in
+# docker logs (previously the exception was silently swallowed).
+# Uses exc_info=exc (the exception instance) instead of logger.exception()
+# so the traceback is captured from the passed object rather than the
+# ambient sys.exc_info(), which may be empty when called from non-handler
+# contexts (e.g. unit tests).
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception handling %s %s",
+        request.method,
+        request.url.path,
+        exc_info=exc,
+    )
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
@@ -275,12 +477,28 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    with _clients_lock:
-        if len(browser_clients) >= MAX_WS_CLIENTS:
-            await ws.close(code=1013, reason="Too many connections")
-            return
+    # CSWSH defense — reject cross-origin WebSocket handshakes. Browsers
+    # always send Origin on WS; missing Origin is treated as non-browser.
+    origin = ws.headers.get("origin")
+    if not _is_origin_allowed(origin):
+        await ws.close(code=1008, reason="Origin not allowed")
+        return
+
+    ip = _get_client_ip(ws)
+    ok, reason = _try_reserve_ws_slot(ip)
+    if not ok:
+        await ws.close(code=1013, reason=f"Too many connections ({reason})")
+        return
+
+    try:
         await ws.accept()
+    except Exception:
+        _release_ws_slot(ip)
+        raise
+
+    with _clients_lock:
         browser_clients.add(ws)
+
     try:
         state = shared_state.read_state(_SHARED_STATE_PATH)
         await ws.send_text(fast_dumps({"event_type": "server:hello", "data": {"version": BUILD_VERSION, "chatRoom": state.get("chat_room", "")}}))
@@ -291,6 +509,7 @@ async def websocket_endpoint(ws: WebSocket):
     finally:
         with _clients_lock:
             browser_clients.discard(ws)
+        _release_ws_slot(ip)
 
 
 # --- REST endpoints ---
@@ -731,4 +950,13 @@ if __name__ == "__main__":
         log_level="warning",
         ssl_keyfile=ssl_keyfile or None,
         ssl_certfile=ssl_certfile or None,
+        # Behind Cloudflare: UFW restricts port 443 ingress to CF IP ranges, so
+        # trusting X-Forwarded-For from any peer is safe. Without this, the
+        # per-IP rate limiter sees every request as coming from a CF edge IP.
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+        # Browsers only send tiny keepalive frames on /ws (the endpoint just
+        # awaits receive_text() to detect disconnect). Cap inbound frame size
+        # to 4 KB to bound memory under a connection-level flood.
+        ws_max_size=4096,
     )

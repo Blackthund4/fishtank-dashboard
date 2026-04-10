@@ -11,6 +11,7 @@ Run:
 
 import json
 import os
+import sqlite3
 import sys
 import pytest
 
@@ -23,7 +24,12 @@ import database
 sys.path.insert(0, os.path.dirname(__file__))
 from ingest import _should_filter_chat, _should_filter_notification, _is_duplicate, _seen_tts_sfx_ids
 from ingest import _score_sentiment
-from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX
+from server import (
+    _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX, _get_client_ip,
+    _is_origin_allowed, _try_reserve_ws_slot, _release_ws_slot,
+    _ws_ip_counts, browser_clients, MAX_WS_PER_IP, MAX_WS_CLIENTS,
+)
+import server as _server
 
 
 # ============================================================
@@ -34,6 +40,9 @@ from server import _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIM
 @pytest.fixture(autouse=True)
 def fresh_db():
     """Reset the database for each test."""
+    # Clear read-only mode from a previous test so the DROP TABLE below can
+    # run. Must happen BEFORE getting the connection.
+    database.disable_readonly()
     # Get a fresh connection for this thread
     conn = database._get_conn()
     # Drop and recreate tables
@@ -47,6 +56,9 @@ def fresh_db():
     # Clear dedup and rate limit state between tests
     _seen_tts_sfx_ids.clear()
     _rate_limits.clear()
+    _ws_ip_counts.clear()
+    browser_clients.clear()
+    database.disable_readonly()
 
 
 # ============================================================
@@ -564,6 +576,359 @@ def test_rate_limit_prune_keeps_active():
     _check_rate_limit("10.0.0.5")
     _prune_rate_limits()
     assert "10.0.0.5" in _rate_limits
+
+
+# ============================================================
+# CLIENT IP RESOLUTION (XFF via uvicorn proxy_headers)
+# ============================================================
+
+
+class _MockClient:
+    def __init__(self, host):
+        self.host = host
+
+
+class _MockRequest:
+    def __init__(self, host):
+        self.client = _MockClient(host) if host is not None else None
+
+
+def test_get_client_ip_returns_host():
+    # With uvicorn proxy_headers=True, .client.host already reflects XFF
+    assert _get_client_ip(_MockRequest("203.0.113.5")) == "203.0.113.5"
+
+
+def test_get_client_ip_falls_back_on_missing_client():
+    assert _get_client_ip(_MockRequest(None)) == "unknown"
+
+
+def test_get_client_ip_falls_back_on_empty_host():
+    assert _get_client_ip(_MockRequest("")) == "unknown"
+
+
+# ============================================================
+# SECURITY HEADERS MIDDLEWARE
+# ============================================================
+
+
+import asyncio
+from starlette.responses import Response as _StarletteResponse
+from server import security_headers_middleware, _CSP_POLICY, _HAS_SSL, _parse_allowed_origins
+
+
+def _run_security_headers(status_code=200):
+    async def call_next(_req):
+        return _StarletteResponse("ok", status_code=status_code)
+    return asyncio.run(security_headers_middleware(None, call_next))
+
+
+def test_security_headers_sets_x_content_type_options():
+    resp = _run_security_headers()
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_security_headers_sets_x_frame_options_deny():
+    resp = _run_security_headers()
+    assert resp.headers["X-Frame-Options"] == "DENY"
+
+
+def test_security_headers_sets_referrer_policy():
+    resp = _run_security_headers()
+    assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+
+
+def test_security_headers_sets_permissions_policy():
+    resp = _run_security_headers()
+    perm = resp.headers["Permissions-Policy"]
+    assert "camera=()" in perm
+    assert "microphone=()" in perm
+    assert "geolocation=()" in perm
+
+
+def test_security_headers_sets_coop():
+    resp = _run_security_headers()
+    assert resp.headers["Cross-Origin-Opener-Policy"] == "same-origin"
+
+
+def test_security_headers_sets_csp_report_only():
+    resp = _run_security_headers()
+    csp = resp.headers["Content-Security-Policy-Report-Only"]
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "base-uri 'none'" in csp
+    # No enforcing CSP header — still in report-only phase
+    assert "Content-Security-Policy" not in resp.headers or \
+           resp.headers.get("Content-Security-Policy") is None
+
+
+def test_security_headers_stamps_non_200_responses():
+    # Headers must be present on rate-limit 429 and exception 500 responses.
+    resp = _run_security_headers(status_code=429)
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    resp = _run_security_headers(status_code=500)
+    assert resp.headers["X-Frame-Options"] == "DENY"
+
+
+def test_security_headers_hsts_only_with_ssl():
+    resp = _run_security_headers()
+    # Locally SSL_CERTFILE is unset → no HSTS (would poison browser cache)
+    if _HAS_SSL:
+        assert "max-age=31536000" in resp.headers["Strict-Transport-Security"]
+    else:
+        assert "Strict-Transport-Security" not in resp.headers
+
+
+# ============================================================
+# CORS ALLOWED ORIGINS (fail-closed parsing)
+# ============================================================
+
+
+def test_parse_allowed_origins_unset_is_empty():
+    assert _parse_allowed_origins("") == []
+    assert _parse_allowed_origins("   ") == []
+    assert _parse_allowed_origins(None) == []
+
+
+def test_parse_allowed_origins_single():
+    assert _parse_allowed_origins("https://fish-dash.com") == ["https://fish-dash.com"]
+
+
+def test_parse_allowed_origins_multiple():
+    result = _parse_allowed_origins("https://fish-dash.com,https://www.fish-dash.com")
+    assert result == ["https://fish-dash.com", "https://www.fish-dash.com"]
+
+
+def test_parse_allowed_origins_strips_whitespace():
+    result = _parse_allowed_origins("  https://a.com , https://b.com  ")
+    assert result == ["https://a.com", "https://b.com"]
+
+
+def test_parse_allowed_origins_drops_empty_entries():
+    # Trailing comma, double comma, etc. should not yield "" entries
+    assert _parse_allowed_origins("https://a.com,,,") == ["https://a.com"]
+    assert _parse_allowed_origins(",,https://a.com,,") == ["https://a.com"]
+
+
+def test_parse_allowed_origins_does_not_default_to_wildcard():
+    # Regression guard: the old default was "*", which silently allowed
+    # cross-origin requests from anywhere if the env var was unset.
+    assert "*" not in _parse_allowed_origins("")
+    assert _parse_allowed_origins("") == []
+
+
+# ============================================================
+# WEBSOCKET: ORIGIN CHECK + PER-IP CAP
+# ============================================================
+
+
+def test_is_origin_allowed_empty_rejected():
+    # Browsers always send Origin on WS; missing → reject (CSWSH defense).
+    assert _is_origin_allowed(None) is False
+    assert _is_origin_allowed("") is False
+
+
+def test_is_origin_allowed_matches_list(monkeypatch):
+    monkeypatch.setattr(_server, "_allowed_origins", ["https://fish-dash.com"])
+    assert _is_origin_allowed("https://fish-dash.com") is True
+    assert _is_origin_allowed("https://evil.com") is False
+
+
+def test_is_origin_allowed_wildcard_accepts_any(monkeypatch):
+    monkeypatch.setattr(_server, "_allowed_origins", ["*"])
+    assert _is_origin_allowed("https://fish-dash.com") is True
+    assert _is_origin_allowed("https://evil.com") is True
+    # Still reject missing Origin even with wildcard
+    assert _is_origin_allowed("") is False
+
+
+def test_is_origin_allowed_empty_allowlist_rejects_all(monkeypatch):
+    monkeypatch.setattr(_server, "_allowed_origins", [])
+    assert _is_origin_allowed("https://fish-dash.com") is False
+    assert _is_origin_allowed("https://evil.com") is False
+
+
+def test_ws_reserve_slot_succeeds_under_cap():
+    ok, reason = _try_reserve_ws_slot("1.2.3.4")
+    assert ok is True
+    assert reason == "ok"
+    assert _ws_ip_counts["1.2.3.4"] == 1
+
+
+def test_ws_reserve_slot_per_ip_cap():
+    for _ in range(MAX_WS_PER_IP):
+        ok, _r = _try_reserve_ws_slot("5.6.7.8")
+        assert ok is True
+    # Fourth connection from same IP is rejected
+    ok, reason = _try_reserve_ws_slot("5.6.7.8")
+    assert ok is False
+    assert reason == "per-ip"
+
+
+def test_ws_reserve_slot_different_ips_independent():
+    for _ in range(MAX_WS_PER_IP):
+        _try_reserve_ws_slot("10.0.0.1")
+    # Different IP should still be allowed
+    ok, _r = _try_reserve_ws_slot("10.0.0.2")
+    assert ok is True
+
+
+def test_ws_release_slot_frees_capacity():
+    for _ in range(MAX_WS_PER_IP):
+        _try_reserve_ws_slot("20.0.0.1")
+    _release_ws_slot("20.0.0.1")
+    ok, _r = _try_reserve_ws_slot("20.0.0.1")
+    assert ok is True
+
+
+def test_ws_release_slot_removes_empty_ip():
+    _try_reserve_ws_slot("30.0.0.1")
+    _release_ws_slot("30.0.0.1")
+    assert "30.0.0.1" not in _ws_ip_counts
+
+
+def test_ws_reserve_slot_global_cap(monkeypatch):
+    # Fill the global pool with fake clients
+    class _FakeWS:
+        pass
+    for _ in range(MAX_WS_CLIENTS):
+        browser_clients.add(_FakeWS())
+    ok, reason = _try_reserve_ws_slot("40.0.0.1")
+    assert ok is False
+    assert reason == "global"
+
+
+# ============================================================
+# LOGGING: exception handler + access log middleware
+# ============================================================
+
+import logging as _logging
+from server import generic_exception_handler, access_log_middleware, logger as _api_logger
+
+
+class _MockURL:
+    def __init__(self, path):
+        self.path = path
+
+
+class _MockLoggingRequest:
+    def __init__(self, method="GET", path="/api/test", host="1.2.3.4"):
+        self.method = method
+        self.url = _MockURL(path)
+        self.client = _MockClient(host) if host else None
+
+
+def test_exception_handler_logs_and_returns_500(caplog):
+    req = _MockLoggingRequest(method="GET", path="/api/boom")
+    exc = ValueError("kaboom")
+    with caplog.at_level(_logging.ERROR, logger="fishtank.api"):
+        resp = asyncio.run(generic_exception_handler(req, exc))
+    assert resp.status_code == 500
+    # Generic body, not the exception message
+    assert b"Internal server error" in resp.body
+    # But the logger saw the full context
+    assert "GET" in caplog.text
+    assert "/api/boom" in caplog.text
+    assert "kaboom" in caplog.text
+    assert "ValueError" in caplog.text
+
+
+def test_access_log_middleware_logs_request(caplog):
+    req = _MockLoggingRequest(method="GET", path="/api/stats", host="9.9.9.9")
+
+    async def call_next(_r):
+        return _StarletteResponse("ok", status_code=200)
+
+    with caplog.at_level(_logging.INFO, logger="fishtank.api"):
+        resp = asyncio.run(access_log_middleware(req, call_next))
+
+    assert resp.status_code == 200
+    assert "GET" in caplog.text
+    assert "/api/stats" in caplog.text
+    assert "200" in caplog.text
+    assert "9.9.9.9" in caplog.text
+
+
+def test_access_log_middleware_logs_non_200(caplog):
+    req = _MockLoggingRequest(method="POST", path="/api/bad", host="8.8.8.8")
+
+    async def call_next(_r):
+        return _StarletteResponse("rate limited", status_code=429)
+
+    with caplog.at_level(_logging.INFO, logger="fishtank.api"):
+        asyncio.run(access_log_middleware(req, call_next))
+
+    assert "POST" in caplog.text
+    assert "/api/bad" in caplog.text
+    assert "429" in caplog.text
+
+
+def test_access_log_middleware_logs_exception_then_reraises(caplog):
+    req = _MockLoggingRequest(method="GET", path="/api/crash", host="7.7.7.7")
+
+    async def call_next(_r):
+        raise RuntimeError("boom")
+
+    with caplog.at_level(_logging.INFO, logger="fishtank.api"):
+        with pytest.raises(RuntimeError):
+            asyncio.run(access_log_middleware(req, call_next))
+
+    # Access line still emitted with status=500 before the raise propagates
+    assert "/api/crash" in caplog.text
+    assert "500" in caplog.text
+
+
+# ============================================================
+# DATABASE: read-only mode (PRAGMA query_only)
+# ============================================================
+
+
+def test_enable_readonly_blocks_inserts():
+    # Baseline: write works
+    database.store_event("chat:message", {"message": "before"})
+    # Flip to read-only
+    database.enable_readonly()
+    # Subsequent INSERT must be refused by SQLite
+    with pytest.raises(sqlite3.OperationalError) as exc_info:
+        database.store_event("chat:message", {"message": "after"})
+    msg = str(exc_info.value).lower()
+    assert "readonly" in msg or "read-only" in msg or "query_only" in msg
+
+
+def test_enable_readonly_allows_reads():
+    database.store_event("chat:message", {"message": "hello"})
+    database.enable_readonly()
+    # Reads still work
+    events = database.get_events(event_type="chat:message")
+    assert len(events) == 1
+    assert events[0]["data"]["message"] == "hello"
+
+
+def test_disable_readonly_restores_writes():
+    database.enable_readonly()
+    with pytest.raises(sqlite3.OperationalError):
+        database.store_event("chat:message", {"message": "blocked"})
+    database.disable_readonly()
+    # Writes work again after disabling
+    db_id = database.store_event("chat:message", {"message": "ok"})
+    assert db_id > 0
+
+
+def test_enable_readonly_blocks_ddl():
+    database.enable_readonly()
+    conn = database._get_conn()
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("CREATE TABLE foo (id INTEGER)")
+
+
+def test_enable_readonly_persists_across_get_conn_calls():
+    database.enable_readonly()
+    # Same thread, multiple _get_conn() calls — pragma must still apply
+    for _ in range(3):
+        conn = database._get_conn()
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("INSERT INTO events (event_type, timestamp_local, data) VALUES (?, ?, ?)",
+                     ("test", "2026-01-01T00:00:00+00:00", "{}"))
 
 
 # ============================================================
