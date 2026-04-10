@@ -794,6 +794,86 @@ def test_ws_reserve_slot_global_cap(monkeypatch):
 
 
 # ============================================================
+# LOGGING: exception handler + access log middleware
+# ============================================================
+
+import logging as _logging
+from server import generic_exception_handler, access_log_middleware, logger as _api_logger
+
+
+class _MockURL:
+    def __init__(self, path):
+        self.path = path
+
+
+class _MockLoggingRequest:
+    def __init__(self, method="GET", path="/api/test", host="1.2.3.4"):
+        self.method = method
+        self.url = _MockURL(path)
+        self.client = _MockClient(host) if host else None
+
+
+def test_exception_handler_logs_and_returns_500(caplog):
+    req = _MockLoggingRequest(method="GET", path="/api/boom")
+    exc = ValueError("kaboom")
+    with caplog.at_level(_logging.ERROR, logger="fishtank.api"):
+        resp = asyncio.run(generic_exception_handler(req, exc))
+    assert resp.status_code == 500
+    # Generic body, not the exception message
+    assert b"Internal server error" in resp.body
+    # But the logger saw the full context
+    assert "GET" in caplog.text
+    assert "/api/boom" in caplog.text
+    assert "kaboom" in caplog.text
+    assert "ValueError" in caplog.text
+
+
+def test_access_log_middleware_logs_request(caplog):
+    req = _MockLoggingRequest(method="GET", path="/api/stats", host="9.9.9.9")
+
+    async def call_next(_r):
+        return _StarletteResponse("ok", status_code=200)
+
+    with caplog.at_level(_logging.INFO, logger="fishtank.api"):
+        resp = asyncio.run(access_log_middleware(req, call_next))
+
+    assert resp.status_code == 200
+    assert "GET" in caplog.text
+    assert "/api/stats" in caplog.text
+    assert "200" in caplog.text
+    assert "9.9.9.9" in caplog.text
+
+
+def test_access_log_middleware_logs_non_200(caplog):
+    req = _MockLoggingRequest(method="POST", path="/api/bad", host="8.8.8.8")
+
+    async def call_next(_r):
+        return _StarletteResponse("rate limited", status_code=429)
+
+    with caplog.at_level(_logging.INFO, logger="fishtank.api"):
+        asyncio.run(access_log_middleware(req, call_next))
+
+    assert "POST" in caplog.text
+    assert "/api/bad" in caplog.text
+    assert "429" in caplog.text
+
+
+def test_access_log_middleware_logs_exception_then_reraises(caplog):
+    req = _MockLoggingRequest(method="GET", path="/api/crash", host="7.7.7.7")
+
+    async def call_next(_r):
+        raise RuntimeError("boom")
+
+    with caplog.at_level(_logging.INFO, logger="fishtank.api"):
+        with pytest.raises(RuntimeError):
+            asyncio.run(access_log_middleware(req, call_next))
+
+    # Access line still emitted with status=500 before the raise propagates
+    assert "/api/crash" in caplog.text
+    assert "500" in caplog.text
+
+
+# ============================================================
 # DATABASE: store_stock_snapshot / get_stock_history / count
 # ============================================================
 

@@ -29,6 +29,26 @@ import shared_state
 from database import fast_loads, fast_dumps
 
 # ============================================================
+# LOGGING
+# ============================================================
+
+# Single structured logger for the API process. Uvicorn's access log is left
+# at log_level="warning" (see uvicorn.run below) to avoid double-logging; this
+# logger replaces it with a one-line-per-request access log plus explicit
+# exception logging.
+logger = logging.getLogger("fishtank.api")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+    # Propagate to root so pytest caplog and other test hooks can observe
+    # records. Uvicorn does not attach handlers to root by default, so this
+    # does not cause duplicate output in production.
+    logger.propagate = True
+
+
+# ============================================================
 # CONFIG
 # ============================================================
 
@@ -311,7 +331,7 @@ def _parse_allowed_origins(raw: str) -> list[str]:
 # docker-compose.yml. An unset value logs a startup warning.
 _allowed_origins = _parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS", ""))
 if not _allowed_origins:
-    logging.warning(
+    logger.warning(
         "ALLOWED_ORIGINS is unset or empty — CORS will reject all "
         "cross-origin requests. Set ALLOWED_ORIGINS to a comma-separated "
         "list of origins (e.g. https://fish-dash.com) in production."
@@ -400,9 +420,49 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-# Suppress stack traces in production
+# Access log middleware — registered last so it runs OUTERMOST and captures
+# the final stamped response (including rate-limit 429s and exception 500s).
+# Emits a single line per request to the fishtank.api logger.
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    start = _time.perf_counter()
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    except Exception:
+        # The generic_exception_handler will run after this and turn it into
+        # a 500 response, but call_next raised, so we only see the exception
+        # here. Log the access line with status=500 and re-raise.
+        status = 500
+        raise
+    finally:
+        duration_ms = (_time.perf_counter() - start) * 1000.0
+        logger.info(
+            "%s %s %s %.1fms %s",
+            request.method,
+            request.url.path,
+            status,
+            duration_ms,
+            _get_client_ip(request),
+        )
+    return response
+
+
+# Generic exception handler — returns a neutral 500 to the client but logs
+# the full traceback via fishtank.api so issues are actually visible in
+# docker logs (previously the exception was silently swallowed).
+# Uses exc_info=exc (the exception instance) instead of logger.exception()
+# so the traceback is captured from the passed object rather than the
+# ambient sys.exc_info(), which may be empty when called from non-handler
+# contexts (e.g. unit tests).
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception handling %s %s",
+        request.method,
+        request.url.path,
+        exc_info=exc,
+    )
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
