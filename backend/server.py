@@ -270,15 +270,18 @@ async def _notify_poller():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Idempotent schema ensure — safe if ingestion already created the tables.
+    # On split-architecture the sole schema owner is ingest.py, but we keep
+    # this defensive call to guard against api starting before ingest on a
+    # fresh volume.
     database.init_db()
 
-    # Backfill extracted columns in background (one-time migration, batched)
-    def _run_backfill():
-        backfilled = database.backfill_extracted_columns()
-        if backfilled:
-            print(f"[OK] Backfilled extracted columns for {backfilled} events")
-        database.backfill_poll_vote_costs()
-    Thread(target=_run_backfill, daemon=True).start()
+    # Flip to read-only SQLite mode for the rest of this process's lifetime.
+    # Defense-in-depth: even a bug or exploit path cannot write through the
+    # API's database handles. Must be called AFTER init_db (which writes
+    # DDL) and BEFORE any request handler opens a thread-local connection.
+    # Backfill lives on ingest.py; this process does not perform migrations.
+    database.enable_readonly()
 
     # Pre-warm analytics cache so first browser connect doesn't trigger a CPU spike
     def _warm_caches():

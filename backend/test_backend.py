@@ -11,6 +11,7 @@ Run:
 
 import json
 import os
+import sqlite3
 import sys
 import pytest
 
@@ -39,6 +40,9 @@ import server as _server
 @pytest.fixture(autouse=True)
 def fresh_db():
     """Reset the database for each test."""
+    # Clear read-only mode from a previous test so the DROP TABLE below can
+    # run. Must happen BEFORE getting the connection.
+    database.disable_readonly()
     # Get a fresh connection for this thread
     conn = database._get_conn()
     # Drop and recreate tables
@@ -54,6 +58,7 @@ def fresh_db():
     _rate_limits.clear()
     _ws_ip_counts.clear()
     browser_clients.clear()
+    database.disable_readonly()
 
 
 # ============================================================
@@ -871,6 +876,59 @@ def test_access_log_middleware_logs_exception_then_reraises(caplog):
     # Access line still emitted with status=500 before the raise propagates
     assert "/api/crash" in caplog.text
     assert "500" in caplog.text
+
+
+# ============================================================
+# DATABASE: read-only mode (PRAGMA query_only)
+# ============================================================
+
+
+def test_enable_readonly_blocks_inserts():
+    # Baseline: write works
+    database.store_event("chat:message", {"message": "before"})
+    # Flip to read-only
+    database.enable_readonly()
+    # Subsequent INSERT must be refused by SQLite
+    with pytest.raises(sqlite3.OperationalError) as exc_info:
+        database.store_event("chat:message", {"message": "after"})
+    msg = str(exc_info.value).lower()
+    assert "readonly" in msg or "read-only" in msg or "query_only" in msg
+
+
+def test_enable_readonly_allows_reads():
+    database.store_event("chat:message", {"message": "hello"})
+    database.enable_readonly()
+    # Reads still work
+    events = database.get_events(event_type="chat:message")
+    assert len(events) == 1
+    assert events[0]["data"]["message"] == "hello"
+
+
+def test_disable_readonly_restores_writes():
+    database.enable_readonly()
+    with pytest.raises(sqlite3.OperationalError):
+        database.store_event("chat:message", {"message": "blocked"})
+    database.disable_readonly()
+    # Writes work again after disabling
+    db_id = database.store_event("chat:message", {"message": "ok"})
+    assert db_id > 0
+
+
+def test_enable_readonly_blocks_ddl():
+    database.enable_readonly()
+    conn = database._get_conn()
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("CREATE TABLE foo (id INTEGER)")
+
+
+def test_enable_readonly_persists_across_get_conn_calls():
+    database.enable_readonly()
+    # Same thread, multiple _get_conn() calls — pragma must still apply
+    for _ in range(3):
+        conn = database._get_conn()
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("INSERT INTO events (event_type, timestamp_local, data) VALUES (?, ?, ?)",
+                     ("test", "2026-01-01T00:00:00+00:00", "{}"))
 
 
 # ============================================================

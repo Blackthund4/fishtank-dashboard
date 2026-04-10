@@ -28,6 +28,13 @@ FISHTOY_TYPE = "fishtoy:used"
 
 _local = threading.local()
 
+# Module-level read-only flag. When True, every subsequently-created
+# thread-local connection gets PRAGMA query_only=1, which makes the SQLite
+# engine refuse any INSERT/UPDATE/DELETE/CREATE/DROP on that connection.
+# Flipped via enable_readonly() from the API process after init_db.
+# The ingestion process never touches this flag and stays writable.
+READ_ONLY = False
+
 
 def _get_conn():
     if not hasattr(_local, "conn") or _local.conn is None:
@@ -38,7 +45,34 @@ def _get_conn():
         _local.conn.execute("PRAGMA temp_store=MEMORY")
         _local.conn.execute("PRAGMA cache_size=-16384")  # 16 MB page cache per connection
         _local.conn.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s for write lock instead of failing immediately
+        if READ_ONLY:
+            _local.conn.execute("PRAGMA query_only=1")
     return _local.conn
+
+
+def enable_readonly():
+    """Put this process into read-only SQLite mode (defense-in-depth).
+
+    Sets the module-level READ_ONLY flag so every subsequent thread-local
+    connection is opened with ``PRAGMA query_only=1``. Also retroactively
+    applies the pragma to the current thread's connection if one already
+    exists (e.g. the connection created by init_db during process startup).
+
+    Call this in the API process after init_db and before serving traffic.
+    Ingestion must never call this — it owns all writes.
+    """
+    global READ_ONLY
+    READ_ONLY = True
+    if hasattr(_local, "conn") and _local.conn is not None:
+        _local.conn.execute("PRAGMA query_only=1")
+
+
+def disable_readonly():
+    """Clear read-only mode. Used by tests to reset state between runs."""
+    global READ_ONLY
+    READ_ONLY = False
+    if hasattr(_local, "conn") and _local.conn is not None:
+        _local.conn.execute("PRAGMA query_only=0")
 
 
 def init_db():
