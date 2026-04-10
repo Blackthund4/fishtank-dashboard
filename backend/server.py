@@ -275,6 +275,59 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ============================================================
+# SECURITY HEADERS
+# ============================================================
+
+# Emit HSTS only when TLS is terminated at this process. Behind Cloudflare in
+# production the api process serves HTTPS via SSL_CERTFILE; locally it serves
+# plain HTTP and HSTS would poison the browser cache.
+_HAS_SSL = bool(os.environ.get("SSL_CERTFILE"))
+
+# Content-Security-Policy (Report-Only for now — flip to enforcing in a
+# follow-up once live-site violations have been observed).
+#   script-src 'self'       — requires the SW registration in index.html to be
+#                             an external file, not inline.
+#   style-src   'unsafe-inline' is unavoidable: React inline styles and
+#                             recharts emit inline style attributes.
+#   connect-src wss: https: — WebSocket upgrade + future cross-origin fetches.
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self' wss: https:; "
+    "frame-ancestors 'none'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "object-src 'none'"
+)
+
+
+# Registered after rate_limit_middleware so it runs *outer* — it stamps
+# responses from the rate limiter (429) and the exception handler (500) too.
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    h = response.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+    )
+    h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    h.setdefault("Content-Security-Policy-Report-Only", _CSP_POLICY)
+    if _HAS_SSL:
+        h.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
+
+
 # Suppress stack traces in production
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):

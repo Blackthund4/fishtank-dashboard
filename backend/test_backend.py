@@ -595,6 +595,79 @@ def test_get_client_ip_falls_back_on_empty_host():
 
 
 # ============================================================
+# SECURITY HEADERS MIDDLEWARE
+# ============================================================
+
+
+import asyncio
+from starlette.responses import Response as _StarletteResponse
+from server import security_headers_middleware, _CSP_POLICY, _HAS_SSL
+
+
+def _run_security_headers(status_code=200):
+    async def call_next(_req):
+        return _StarletteResponse("ok", status_code=status_code)
+    return asyncio.run(security_headers_middleware(None, call_next))
+
+
+def test_security_headers_sets_x_content_type_options():
+    resp = _run_security_headers()
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_security_headers_sets_x_frame_options_deny():
+    resp = _run_security_headers()
+    assert resp.headers["X-Frame-Options"] == "DENY"
+
+
+def test_security_headers_sets_referrer_policy():
+    resp = _run_security_headers()
+    assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+
+
+def test_security_headers_sets_permissions_policy():
+    resp = _run_security_headers()
+    perm = resp.headers["Permissions-Policy"]
+    assert "camera=()" in perm
+    assert "microphone=()" in perm
+    assert "geolocation=()" in perm
+
+
+def test_security_headers_sets_coop():
+    resp = _run_security_headers()
+    assert resp.headers["Cross-Origin-Opener-Policy"] == "same-origin"
+
+
+def test_security_headers_sets_csp_report_only():
+    resp = _run_security_headers()
+    csp = resp.headers["Content-Security-Policy-Report-Only"]
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "base-uri 'none'" in csp
+    # No enforcing CSP header — still in report-only phase
+    assert "Content-Security-Policy" not in resp.headers or \
+           resp.headers.get("Content-Security-Policy") is None
+
+
+def test_security_headers_stamps_non_200_responses():
+    # Headers must be present on rate-limit 429 and exception 500 responses.
+    resp = _run_security_headers(status_code=429)
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    resp = _run_security_headers(status_code=500)
+    assert resp.headers["X-Frame-Options"] == "DENY"
+
+
+def test_security_headers_hsts_only_with_ssl():
+    resp = _run_security_headers()
+    # Locally SSL_CERTFILE is unset → no HSTS (would poison browser cache)
+    if _HAS_SSL:
+        assert "max-age=31536000" in resp.headers["Strict-Transport-Security"]
+    else:
+        assert "Strict-Transport-Security" not in resp.headers
+
+
+# ============================================================
 # DATABASE: store_stock_snapshot / get_stock_history / count
 # ============================================================
 
