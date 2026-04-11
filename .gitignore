@@ -16,6 +16,8 @@ certs/
 *.db-wal
 *.db-shm
 *.db.backup
+*.db.backup.*
+*.db.backup.gz*
 
 # Logs
 *.jsonl
@@ -23,6 +25,8 @@ certs/
 # Node
 node_modules/
 frontend/dist/
+frontend/vite.config.js.timestamp-*.mjs
+/package-lock.json
 
 # Python
 __pycache__/
