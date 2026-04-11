@@ -662,11 +662,14 @@ def test_security_headers_sets_csp_report_only():
            resp.headers.get("Content-Security-Policy") is None
 
 
-def test_security_headers_csp_allows_fishtank_cdn_images():
-    # Avatars and images served from cdn.fishtank.live must be allowed
-    # under img-src. Regression guard: if this assertion fails after a
-    # CSP edit, avatars will break on fish-dash.com the moment CSP is
-    # flipped from report-only to enforcing.
+def test_security_headers_csp_allows_image_cdn_hosts():
+    # Avatars and contestant photos come from three different hosts.
+    # Regression guard: if this assertion fails after a CSP edit,
+    # avatars will break on fish-dash.com the moment CSP is flipped
+    # from report-only to enforcing.
+    #   - cdn.fishtank.live  — official contestant photos + some user avatars
+    #   - fishtank.b-cdn.net — BunnyCDN pull-zone serving some user avatars
+    #   - cdn2.mondomegabits.com — fallback avatar for contestants with no photo
     resp = _run_security_headers()
     csp = resp.headers["Content-Security-Policy-Report-Only"]
     # Extract the img-src directive specifically
@@ -676,6 +679,8 @@ def test_security_headers_csp_allows_fishtank_cdn_images():
     assert "'self'" in img_src
     assert "data:" in img_src
     assert "https://cdn.fishtank.live" in img_src
+    assert "https://fishtank.b-cdn.net" in img_src
+    assert "https://cdn2.mondomegabits.com" in img_src
 
 
 def test_security_headers_stamps_non_200_responses():

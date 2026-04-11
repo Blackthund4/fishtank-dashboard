@@ -391,7 +391,7 @@ _CSP_POLICY = (
     "script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
-    "img-src 'self' data: https://cdn.fishtank.live; "
+    "img-src 'self' data: https://cdn.fishtank.live https://fishtank.b-cdn.net https://cdn2.mondomegabits.com; "
     "connect-src 'self' wss: https:; "
     "frame-ancestors 'none'; "
     "base-uri 'none'; "
