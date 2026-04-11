@@ -662,6 +662,22 @@ def test_security_headers_sets_csp_report_only():
            resp.headers.get("Content-Security-Policy") is None
 
 
+def test_security_headers_csp_allows_fishtank_cdn_images():
+    # Avatars and images served from cdn.fishtank.live must be allowed
+    # under img-src. Regression guard: if this assertion fails after a
+    # CSP edit, avatars will break on fish-dash.com the moment CSP is
+    # flipped from report-only to enforcing.
+    resp = _run_security_headers()
+    csp = resp.headers["Content-Security-Policy-Report-Only"]
+    # Extract the img-src directive specifically
+    directives = {d.strip().split(" ", 1)[0]: d.strip() for d in csp.split(";") if d.strip()}
+    assert "img-src" in directives, "img-src directive missing from CSP"
+    img_src = directives["img-src"]
+    assert "'self'" in img_src
+    assert "data:" in img_src
+    assert "https://cdn.fishtank.live" in img_src
+
+
 def test_security_headers_stamps_non_200_responses():
     # Headers must be present on rate-limit 429 and exception 500 responses.
     resp = _run_security_headers(status_code=429)
