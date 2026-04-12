@@ -9,6 +9,7 @@ import FishtoyCard from './components/FishtoyCard'
 import ChatMessage from './components/ChatMessage'
 import ActivityCard from './components/ActivityCard'
 import { okJson } from './utils/fetchUtils'
+import { tokenize } from './utils/tokenizer'
 const AnalyticsTab = lazy(() => import('./tabs/AnalyticsTab'))
 const ChartsTab = lazy(() => import('./tabs/ChartsTab'))
 const HiddenContentTab = lazy(() => import('./tabs/HiddenContentTab'))
@@ -149,7 +150,6 @@ export default function App() {
     fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
     top_targets: [], top_senders: [], top_tts_senders: [], top_sfx_senders: [], top_chat_senders: [], top_fishtoy_senders: [], total_events: 0,
   })
-  const [trendingKeywords, setTrendingKeywords] = useState([])
   const [topKeywords, setTopKeywords] = useState([])
 
   // Catalog data
@@ -410,17 +410,6 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Refresh trending chat words periodically (5-min rolling window, used by chat panel)
-  useEffect(() => {
-    const fetchTrending = () => {
-      if (document.hidden) return
-      fetch('/api/keywords/trending').then(okJson).then(data => setTrendingKeywords(data.keywords || [])).catch(() => setTrendingKeywords([]))
-    }
-    fetchTrending()
-    const interval = setInterval(fetchTrending, 60000)
-    return () => clearInterval(interval)
-  }, [])
-
   // Refresh top chat keywords periodically (24h window, used by sidebar)
   useEffect(() => {
     const fetchTop = () => {
@@ -547,7 +536,21 @@ export default function App() {
 
   // Chat array is already newest-first (server ORDER BY id DESC + WS prepend)
   const sortedChats = useMemo(() => roleChats ?? chats, [roleChats, chats])
-  const trendingTags = useMemo(() => (trendingKeywords || []).slice(0, 5), [trendingKeywords])
+  const chatKeywordTags = useMemo(() => {
+    const counts = new Map()
+    for (const chat of sortedChats) {
+      const text = typeof chat.data === 'string' ? chat.data : chat.data?.message
+      if (!text) continue
+      const words = tokenize(text)
+      for (const w of words) {
+        counts.set(w, (counts.get(w) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([word, count]) => ({ word, count }))
+  }, [sortedChats])
   const sortedActivity = useMemo(() => {
     const q = searchText.trim().toLowerCase()
 
@@ -1467,12 +1470,12 @@ export default function App() {
               </>}
             >
               <div className="flex flex-col h-full">
-                {trendingTags.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1 px-2 py-1 border-b border-tank-border shrink-0">
-                    <span className="text-[8px] text-tank-muted uppercase mr-1">trending:</span>
-                    {trendingTags.map(w => (
-                      <span key={w.word} className="text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full px-2 py-0.5">
-                        {w.word} {w.count}
+                {chatKeywordTags.length > 0 && (
+                  <div className="flex items-center flex-wrap gap-1 px-2 py-1 border-b border-tank-border bg-tank-surface/50 shrink-0">
+                    <span className="text-[8px] text-tank-muted uppercase tracking-wide mr-0.5">trending:</span>
+                    {chatKeywordTags.map(({ word, count }) => (
+                      <span key={word} className="text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full px-2 py-0.5">
+                        {word} <span className="text-cyan-400/60">{count}</span>
                       </span>
                     ))}
                   </div>
