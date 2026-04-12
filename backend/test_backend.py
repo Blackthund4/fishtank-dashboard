@@ -1584,6 +1584,17 @@ def test_tokenize_bot_commands_filtered():
     assert result == []
 
 
+def test_tokenize_platform_noise_filtered():
+    """Platform-specific noise words are stopword-filtered."""
+    tokens = tokenize("clip this tts sfx tip used for real")
+    assert "clip" not in tokens
+    assert "tts" not in tokens
+    assert "sfx" not in tokens
+    assert "tip" not in tokens
+    assert "used" not in tokens
+    assert "real" in tokens
+
+
 def test_tokenize_short_words_filtered():
     result = tokenize("I am ok no hi go")
     assert result == []

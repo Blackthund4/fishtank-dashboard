@@ -41,6 +41,9 @@ STOPWORDS = frozenset({
 
     # Bot/game command spam (confirmed in audit)
     "coinflip", "double", "lexxpoints",
+
+    # Platform noise (event type leakage / generic actions)
+    "clip", "tip", "sfx", "tts", "used",
 })
 
 
