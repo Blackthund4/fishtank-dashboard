@@ -103,11 +103,12 @@ function EmptyChart({ text }) {
 
 function DarkTooltip({ active, payload, label, range, unit, labelMap }) {
   if (!active || !payload?.length) return null
+  const visible = payload.filter(e => e.value != null)
+  const total = visible.reduce((sum, e) => sum + e.value, 0)
   return (
     <div className="bg-[#111115] border border-[#1e1e24] rounded px-3 py-2 text-xs font-mono shadow-xl">
       <div className="text-[#555566] mb-1.5">{formatTsLabel(label, range)}</div>
-      {payload.map(entry => {
-        if (entry.value == null) return null
+      {visible.map(entry => {
         const displayKey = labelMap?.[entry.dataKey] ?? entry.dataKey
         const val = unit === 'usd' ? tokensToUSD(entry.value) : entry.value.toLocaleString() + 't'
         return (
@@ -117,6 +118,12 @@ function DarkTooltip({ active, payload, label, range, unit, labelMap }) {
           </div>
         )
       })}
+      {visible.length > 1 && (
+        <div className="flex items-center gap-2 leading-5 border-t border-[#1e1e24] mt-1 pt-1">
+          <span className="text-[#555566] shrink-0">Total:</span>
+          <span className="text-tank-bright">{unit === 'usd' ? tokensToUSD(total) : total.toLocaleString() + 't'}</span>
+        </div>
+      )}
     </div>
   )
 }
