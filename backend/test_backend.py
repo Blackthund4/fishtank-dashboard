@@ -1203,15 +1203,34 @@ def test_get_fishtoys_search():
     assert len(result) == 1
 
 
-def test_get_fishtoys_pagination():
+def test_get_fishtoys_pagination_offset():
     for i in range(5):
         database.store_event("fishtoy:used", {"displayName": f"U{i}", "target": "T", "cost": 100})
-    result = database.get_fishtoys(limit=2, offset=0)
-    assert len(result) == 2
-    result2 = database.get_fishtoys(limit=2, offset=2)
-    assert len(result2) == 2
-    # Different events
-    assert result[0]["id"] != result2[0]["id"]
+    page1 = database.get_fishtoys(limit=2, offset=0)
+    assert len(page1) == 2
+    page2 = database.get_fishtoys(limit=2, offset=2)
+    assert len(page2) == 2
+    # Pages must not overlap
+    page1_ids = {e["id"] for e in page1}
+    page2_ids = {e["id"] for e in page2}
+    assert page1_ids.isdisjoint(page2_ids)
+
+
+def test_get_fishtoys_pagination_before_id():
+    for i in range(5):
+        database.store_event("fishtoy:used", {"displayName": f"U{i}", "target": "T", "cost": 100})
+    page1 = database.get_fishtoys(limit=2)
+    assert len(page1) == 2
+    # Keyset: next page starts before the last id of page1
+    last_id = page1[-1]["id"]
+    page2 = database.get_fishtoys(limit=2, before_id=last_id)
+    assert len(page2) == 2
+    # All page2 ids must be less than the cursor
+    assert all(e["id"] < last_id for e in page2)
+    # No overlap
+    page1_ids = {e["id"] for e in page1}
+    page2_ids = {e["id"] for e in page2}
+    assert page1_ids.isdisjoint(page2_ids)
 
 
 # ============================================================

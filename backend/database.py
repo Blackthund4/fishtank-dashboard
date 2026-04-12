@@ -647,8 +647,8 @@ def get_fishtoys(target=None, item_id=None, search=None, limit=200, offset=0, be
         params.append(before_id)
 
     query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = conn.execute(query, params).fetchall()
     return [
