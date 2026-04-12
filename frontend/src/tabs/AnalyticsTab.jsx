@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, memo } from 'react'
-import { TrendingUp, Volume2, MessageSquare, Users, Zap, Fish } from 'lucide-react'
+import { TrendingUp, Volume2, MessageSquare, Users, Zap, Fish, Type } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
 import { okJson } from '../utils/fetchUtils'
 import AnchorRow, { RANGE_MS } from '../components/AnchorRow'
@@ -101,6 +101,15 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
     else setChatAnchorLabel(a ? 'custom' : 'now')
   }, [])
 
+  const [keywordAnalytics, setKeywordAnalytics] = useState(null)
+  const [keywordPeriod, setKeywordPeriod] = useState('24h')
+  const [keywordAnchor, setKeywordAnchor] = useState(null)
+  const [keywordAnchorLabel, setKeywordAnchorLabel] = useState('now')
+  const handleKeywordAnchor = useCallback((a, label) => {
+    setKeywordAnchor(a); if (label) setKeywordAnchorLabel(label)
+    else setKeywordAnchorLabel(a ? 'custom' : 'now')
+  }, [])
+
   const [stockSort, setStockSort] = useState('value')
   const [contestantSort, setContestantSort] = useState('endorsements')
 
@@ -170,6 +179,26 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
     }
     return () => { cancelled = true }
   }, [chatPeriod, chatAnchor])
+
+  // --- Chat keyword analytics (only depend on keywordPeriod + keywordAnchor) ---
+  useEffect(() => {
+    let cancelled = false
+    async function fetchKeywords() {
+      if (document.hidden) return
+      const kwSince = getSinceISO(keywordPeriod, keywordAnchor)
+      const kwParams = new URLSearchParams()
+      if (kwSince) kwParams.set('since', kwSince)
+      if (keywordAnchor) kwParams.set('until', keywordAnchor)
+      const kwParam = kwParams.toString() ? `?${kwParams}` : ''
+      await fetch(`/api/analytics/keywords${kwParam}`).then(okJson).then(d => { if (!cancelled) setKeywordAnalytics(d) }).catch(() => {})
+    }
+    fetchKeywords()
+    if (!keywordAnchor) {
+      const interval = setInterval(fetchKeywords, 120000)
+      return () => { cancelled = true; clearInterval(interval) }
+    }
+    return () => { cancelled = true }
+  }, [keywordPeriod, keywordAnchor])
 
   // Build per-ticker reference prices from filtered stock history
   const stockRefPrices = useMemo(() => {
@@ -523,6 +552,54 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
           )}
         </Section>
       </div>
+
+      {/* Chat Keyword Analytics */}
+      <Section title="Chat Keyword Analytics" icon={Type}
+        extra={
+          <div className="flex flex-col items-end gap-1">
+            <TimeFilter value={keywordPeriod} onChange={setKeywordPeriod} />
+            <AnchorRow anchor={keywordAnchor} anchorLabel={keywordAnchorLabel} onAnchorChange={handleKeywordAnchor} range={keywordPeriod} compact />
+          </div>
+        }>
+        {keywordAnalytics ? (
+          <div className="space-y-3">
+            <div className="text-xs text-tank-muted">
+              Top words in window: <span className="text-tank-bright font-mono">{keywordAnalytics.top_keywords?.length || 0}</span>
+            </div>
+            {keywordAnalytics.top_keywords?.length > 0 && (() => {
+              const top20 = keywordAnalytics.top_keywords.slice(0, 20)
+              const maxCount = top20[0]?.count || 1
+              return (
+                <div>
+                  <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Top Chat Keywords</h4>
+                  <div className="space-y-1">
+                    {top20.map((k, i) => (
+                      <div key={k.word} className="relative flex items-center justify-between text-xs">
+                        <div className="absolute inset-0 rounded" style={{ width: `${(k.count / maxCount) * 100}%` }}>
+                          <div className="w-full h-full bg-cyan-500/10 rounded" />
+                        </div>
+                        <div className="relative flex items-center gap-1">
+                          <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+                          <span className="text-tank-bright">{k.word}</span>
+                        </div>
+                        <span className="relative font-mono text-cyan-400">{k.count.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+            {keywordAnalytics.hourly?.length > 0 && (
+              <div>
+                <h4 className="text-[10px] font-mono text-tank-muted uppercase mb-1">Hourly Chat Keyword Volume</h4>
+                <HourlyBar data={keywordAnalytics.hourly.map(h => ({ hour: h.bucket, count: h.top.reduce((s, k) => s + k.count, 0) }))} color="bg-cyan-400" />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-xs text-tank-muted font-mono">Loading chat keyword data...</div>
+        )}
+      </Section>
 
       {/* Fishtoy Availability */}
       <Section title="Fishtoy Availability" icon={Fish} extra={

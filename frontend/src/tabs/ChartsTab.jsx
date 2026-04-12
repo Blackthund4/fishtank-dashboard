@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { TrendingUp, DollarSign, MessageSquare } from 'lucide-react'
+import { TrendingUp, DollarSign, MessageSquare, Type } from 'lucide-react'
 import AnchorRow, { RANGE_MS } from '../components/AnchorRow'
 import { okJson } from '../utils/fetchUtils'
 import {
-  LineChart, Line, BarChart, Bar,
+  LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
 } from 'recharts'
@@ -22,6 +22,8 @@ const SPEND_COLORS = {
 const SPEND_LABELS = {
   tts: 'TTS', sfx: 'SFX', fishtoy: 'Fishtoy', poll: 'Poll Votes', superchat: 'Superchat',
 }
+
+const KEYWORD_COLORS = ['#06b6d4', '#a855f7', '#f59e0b', '#10b981', '#f43f5e', '#3b82f6', '#f97316', '#84cc16']
 
 function tokensToUSD(t) { return `$${(t * 0.10).toFixed(2)}` }
 
@@ -156,6 +158,30 @@ function ChatVolumeTooltip({ active, payload, label, range }) {
   )
 }
 
+function KeywordTooltip({ active, payload, label, range }) {
+  if (!active || !payload?.length) return null
+  const visible = payload.filter(e => e.value != null && e.value > 0)
+  const total = visible.reduce((sum, e) => sum + e.value, 0)
+  return (
+    <div className="bg-[#111115] border border-[#1e1e24] rounded px-3 py-2 text-xs font-mono shadow-xl">
+      <div className="text-[#555566] mb-1.5">{formatTsLabel(label, range)}</div>
+      {visible.map(entry => (
+        <div key={entry.dataKey} className="flex items-center gap-2 leading-5">
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: entry.color ?? entry.fill }} />
+          <span style={{ color: entry.color ?? entry.fill }} className="shrink-0">{entry.dataKey}:</span>
+          <span className="text-[#c8c8d0]">{entry.value.toLocaleString()}</span>
+        </div>
+      ))}
+      {visible.length > 1 && (
+        <div className="flex items-center gap-2 leading-5 border-t border-[#1e1e24] mt-1 pt-1">
+          <span className="text-[#555566] shrink-0">Total:</span>
+          <span className="text-tank-bright">{total.toLocaleString()}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 const axisStyle = { fill: '#555566', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }
 
 export default function ChartsTab({ stocks }) {
@@ -195,6 +221,16 @@ export default function ChartsTab({ stocks }) {
     else setChatAnchorLabel(a ? 'custom' : 'now')
   }, [])
 
+  const [keywordChartData, setKeywordChartData] = useState([])
+  const [keywordTopWords, setKeywordTopWords] = useState([])
+  const [keywordRange, setKeywordRange] = useState('24h')
+  const [keywordAnchor, setKeywordAnchor] = useState(null)
+  const [keywordAnchorLabel, setKeywordAnchorLabel] = useState('now')
+  const handleKeywordAnchor = useCallback((a, label) => {
+    setKeywordAnchor(a); if (label) setKeywordAnchorLabel(label)
+    else setKeywordAnchorLabel(a ? 'custom' : 'now')
+  }, [])
+
   // Drag-to-pan state
   const dragRef = useRef(null)
 
@@ -213,10 +249,10 @@ export default function ChartsTab({ stocks }) {
     const timeDelta = (dx / width) * rangeMs
     const ref = anchor ? new Date(anchor).getTime() : Date.now()
     const next = new Date(ref + timeDelta)
-    const handler = chartId === 'stock' ? handleStockAnchor : chartId === 'spend' ? handleSpendAnchor : handleChatAnchor
+    const handler = chartId === 'stock' ? handleStockAnchor : chartId === 'spend' ? handleSpendAnchor : chartId === 'keywords' ? handleKeywordAnchor : handleChatAnchor
     if (next >= new Date()) handler(null, 'now')
     else handler(next.toISOString(), null)
-  }, [handleStockAnchor, handleSpendAnchor, handleChatAnchor])
+  }, [handleStockAnchor, handleSpendAnchor, handleChatAnchor, handleKeywordAnchor])
 
   // Keyboard pan — arrows pan all charts together
   useEffect(() => {
@@ -229,6 +265,7 @@ export default function ChartsTab({ stocks }) {
         [stockAnchor, stockRange, handleStockAnchor],
         [spendAnchor, spendRange, handleSpendAnchor],
         [chatAnchor, chatRange, handleChatAnchor],
+        [keywordAnchor, keywordRange, handleKeywordAnchor],
       ].forEach(([anchor, range, handler]) => {
         const step = RANGE_MS[range] || RANGE_MS['24h']
         const ref = anchor ? new Date(anchor).getTime() : Date.now()
@@ -240,7 +277,8 @@ export default function ChartsTab({ stocks }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [stockAnchor, stockRange, spendAnchor, spendRange, chatAnchor, chatRange,
-      handleStockAnchor, handleSpendAnchor, handleChatAnchor])
+      keywordAnchor, keywordRange,
+      handleStockAnchor, handleSpendAnchor, handleChatAnchor, handleKeywordAnchor])
 
   const activeTickers = useMemo(
     () => new Set(stocks.map(s => s.tickerSymbol).filter(Boolean)),
@@ -317,6 +355,38 @@ export default function ChartsTab({ stocks }) {
       return () => clearInterval(id)
     }
   }, [chatRange, chatAnchor])
+
+  useEffect(() => {
+    function fetchKeywords() {
+      if (document.hidden) return
+      const rangeMs = RANGE_MS[keywordRange]
+      const ref = keywordAnchor ? new Date(keywordAnchor).getTime() : Date.now()
+      const since = rangeMs ? new Date(ref - rangeMs).toISOString() : undefined
+      const params = new URLSearchParams()
+      if (since) params.set('since', since)
+      if (keywordAnchor) params.set('until', keywordAnchor)
+      fetch(`/api/analytics/keywords?${params}`)
+        .then(okJson)
+        .then(d => {
+          const top6 = (d.top_keywords || []).slice(0, 6)
+          setKeywordTopWords(top6)
+          const words = top6.map(k => k.word)
+          const points = (d.hourly || []).map(h => {
+            const point = { time: h.bucket }
+            words.forEach(w => { point[w] = 0 })
+            h.top.forEach(k => { if (words.includes(k.word)) point[k.word] = k.count })
+            return point
+          })
+          setKeywordChartData(points)
+        })
+        .catch(() => {})
+    }
+    fetchKeywords()
+    if (!keywordAnchor) {
+      const id = setInterval(fetchKeywords, 5 * 60 * 1000)
+      return () => clearInterval(id)
+    }
+  }, [keywordRange, keywordAnchor])
 
   const tickerColors = useMemo(() => {
     const map = {}
@@ -519,6 +589,46 @@ export default function ChartsTab({ stocks }) {
                 </div>
               </div>
             )}
+          </div>
+        )}
+      </ChartPanel>
+
+      {/* Chat Keyword Trends */}
+      <ChartPanel title="Chat Keyword Trends" icon={Type} controls={
+        <div className="flex flex-col items-end gap-1">
+          <RangeButtons value={keywordRange} onChange={setKeywordRange} />
+          <AnchorRow anchor={keywordAnchor} anchorLabel={keywordAnchorLabel} onAnchorChange={handleKeywordAnchor} range={keywordRange} />
+        </div>
+      }>
+        {keywordChartData.length === 0 ? <EmptyChart text="No chat keyword data for this range." /> : (
+          <div>
+            <div style={{ cursor: 'grab' }} onMouseDown={e => handleDragStart(e, 'keywords', keywordAnchor, keywordRange)}
+              onMouseUp={handleDragEnd} onMouseLeave={handleDragEnd}>
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={keywordChartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                  <CartesianGrid stroke="#1e1e24" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="time" tick={axisStyle} tickLine={false} axisLine={{ stroke: '#1e1e24' }}
+                    interval={tickInterval(keywordChartData.length)} tickFormatter={v => formatTsLabel(v, keywordRange)} />
+                  <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={40} domain={[0, 'auto']}
+                    tickFormatter={v => v.toLocaleString()} />
+                  <Tooltip content={<KeywordTooltip range={keywordRange} />} />
+                  {keywordTopWords.map((kw, i) => (
+                    <Area key={kw.word} type="monotone" dataKey={kw.word} stackId="1"
+                      fill={KEYWORD_COLORS[i % KEYWORD_COLORS.length]}
+                      stroke={KEYWORD_COLORS[i % KEYWORD_COLORS.length]}
+                      fillOpacity={0.6} isAnimationActive={false} />
+                  ))}
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-1 px-2">
+              {keywordTopWords.map((kw, i) => (
+                <div key={kw.word} className="flex items-center gap-1 text-[10px]">
+                  <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: KEYWORD_COLORS[i % KEYWORD_COLORS.length] }} />
+                  <span className="text-tank-muted">{kw.word}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </ChartPanel>

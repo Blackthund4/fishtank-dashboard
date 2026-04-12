@@ -149,6 +149,7 @@ export default function App() {
     fishtoys: 0, chats: 0, tts: 0, sfx: 0, total_spend: 0, poll_tokens: 0, superchat_tokens: 0,
     top_targets: [], top_senders: [], top_tts_senders: [], top_sfx_senders: [], top_chat_senders: [], top_fishtoy_senders: [], total_events: 0,
   })
+  const [trendingKeywords, setTrendingKeywords] = useState([])
 
   // Catalog data
   const [itemCatalog, setItemCatalog] = useState({})
@@ -405,6 +406,17 @@ export default function App() {
       fetch('/api/stocks').then(okJson).then(setStocks).catch(() => {})
       fetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
     }, 60000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Refresh trending chat words periodically
+  useEffect(() => {
+    const fetchTrending = () => {
+      if (document.hidden) return
+      fetch('/api/keywords/trending').then(okJson).then(data => setTrendingKeywords(data.keywords || [])).catch(() => setTrendingKeywords([]))
+    }
+    fetchTrending()
+    const interval = setInterval(fetchTrending, 60000)
     return () => clearInterval(interval)
   }, [])
 
@@ -1493,7 +1505,7 @@ export default function App() {
         </div>
 
         {/* RIGHT: 24h sidebar */}
-        <Last24hSidebar sessionStats={sessionStats} />
+        <Last24hSidebar sessionStats={sessionStats} trendingKeywords={trendingKeywords} />
       </main>
       )}
 
@@ -1535,7 +1547,7 @@ function LeaderboardSection({ title, items, renderItem }) {
   )
 }
 
-const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
+const Last24hSidebar = memo(function Last24hSidebar({ sessionStats, trendingKeywords }) {
   const formattedSpend = useMemo(() => ({
     pollTokens: sessionStats.poll_tokens.toLocaleString(),
     superchatTokens: sessionStats.superchat_tokens.toLocaleString(),
@@ -1566,6 +1578,8 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
     (sessionStats.top_fishtoy_senders || []).slice(0, 5).map(s => ({
       ...s, spendFmt: s.spend.toLocaleString(), usdFmt: tokensToUSD(s.spend)
     })), [sessionStats.top_fishtoy_senders])
+
+  const topWords = useMemo(() => (trendingKeywords || []).slice(0, 10), [trendingKeywords])
 
   return (
     <Panel title="Last 24 Hours" icon={Clock} className="w-full md:w-[240px] lg:w-[280px] md:shrink-0 border-t-2 border-t-cyan-500/60">
@@ -1644,6 +1658,16 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats }) {
             <span className="font-mono text-tank-muted text-[10px]">{s.count}x / {s.spendFmt}t</span>
             <span className="font-mono text-green-400 text-[9px]">{s.usdFmt}</span>
           </div>
+        </div>
+      )} />
+
+      <LeaderboardSection title="Trending Chat Words (5 min)" items={topWords} renderItem={(w, i) => (
+        <div key={w.word} className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
+            <span className="text-tank-bright truncate">{w.word}</span>
+          </div>
+          <span className="font-mono text-cyan-400 shrink-0 text-[10px]">{w.count}</span>
         </div>
       )} />
     </Panel>
