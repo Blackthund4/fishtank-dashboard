@@ -17,7 +17,8 @@ import logging
 import os
 import time as _time
 import types
-from datetime import datetime, timezone
+from collections import deque, Counter
+from datetime import datetime, timezone, timedelta
 from threading import Thread, Event, Lock
 from pathlib import Path
 
@@ -28,6 +29,7 @@ import database
 import shared_state
 from database import fast_loads, fast_dumps
 from auth import AuthManager
+from tokenizer import tokenize
 
 _sentiment_analyzer = None
 
@@ -96,6 +98,40 @@ WAL_CHECKPOINT_INTERVAL = 3600  # 1 hour
 _last_backup = None
 
 NOTIFY_PRUNE_INTERVAL = 30  # seconds
+
+# ============================================================
+# KEYWORD TRENDING BUFFER (real-time, in-memory, 5 min window)
+# ============================================================
+
+_KEYWORD_BUFFER_WINDOW = 300      # 5 minutes
+_KEYWORD_BUFFER_LOCK = Lock()
+_keyword_buffer = deque()          # [(timestamp, [words]), ...]
+_keyword_snapshot = []             # Last computed top-N for shared state
+
+
+def _update_keyword_buffer(message_text):
+    """Add tokenized words from a chat message to the rolling buffer."""
+    if not message_text:
+        return
+    words = tokenize(message_text)
+    if not words:
+        return
+    now = _time.time()
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.append((now, words))
+        # Prune expired entries from the left
+        cutoff = now - _KEYWORD_BUFFER_WINDOW
+        while _keyword_buffer and _keyword_buffer[0][0] < cutoff:
+            _keyword_buffer.popleft()
+
+
+def _compute_trending_keywords(top_n=20):
+    """Compute top-N keywords from the rolling buffer."""
+    with _KEYWORD_BUFFER_LOCK:
+        counts = Counter()
+        for _, words in _keyword_buffer:
+            counts.update(words)
+    return [{"word": w, "count": c} for w, c in counts.most_common(top_n)]
 
 
 def db_backup_poller():
@@ -167,6 +203,14 @@ def db_backup_poller():
                 print(f"[OK] Chat pruned: {deleted} non-staff messages older than 30 days removed")
         except Exception as e:
             print(f"[!] Chat prune failed: {e}")
+
+        # Prune old keyword count buckets (keep 31 days, 1 day past chat retention)
+        try:
+            deleted = database.prune_keyword_counts(retention_days=31)
+            if deleted > 0:
+                print(f"[OK] Keyword counts pruned: {deleted} old bucket rows removed")
+        except Exception as e:
+            print(f"[!] Keyword counts prune failed: {e}")
 
         _poller_stop.wait(BACKUP_INTERVAL)
 
@@ -508,6 +552,10 @@ def make_event_handler(evt):
         if isinstance(data, dict):
             if evt in ("chat:message", "tts:update"):
                 data["sentiment"] = _score_sentiment(data.get("message"))
+
+        # Update keyword trending buffer for chat messages
+        if evt == "chat:message" and isinstance(data, dict):
+            _update_keyword_buffer(data.get("message"))
 
         # Store in database
         db_id = database.store_event(evt, data)
@@ -924,6 +972,89 @@ def catalog_refresh_poller():
 
 
 # ============================================================
+# KEYWORD AGGREGATION THREAD
+# ============================================================
+
+
+def keyword_agg_thread():
+    """Background thread: aggregate chat keywords into hourly buckets every 120s.
+
+    Reads new chat:message events since last checkpoint, tokenizes message_text,
+    upserts counts into keyword_counts table, and updates trending snapshot
+    in _shared_state.json.
+    """
+    global _keyword_snapshot
+
+    # Wait 60s for startup to settle before first run
+    _poller_stop.wait(60)
+
+    while not _poller_stop.is_set():
+        try:
+            # 1. Read checkpoint (last processed event ID)
+            last_id_str = database.get_kv("keyword_agg_last_id")
+            if last_id_str is not None:
+                last_id = int(last_id_str)
+            else:
+                # First run: find the approximate ID for 24h ago to avoid
+                # processing entire history
+                conn = database._get_conn()
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+                row = conn.execute(
+                    "SELECT MIN(id) FROM events WHERE event_type = 'chat:message' AND timestamp_local >= ?",
+                    (cutoff,)
+                ).fetchone()
+                last_id = (row[0] - 1) if row and row[0] else 0
+
+            # 2. Fetch new chat messages since checkpoint
+            conn = database._get_conn()
+            rows = conn.execute("""
+                SELECT id, message_text, timestamp_local FROM events
+                WHERE event_type = 'chat:message'
+                  AND id > ?
+                  AND message_text IS NOT NULL
+                ORDER BY id
+                LIMIT 50000
+            """, (last_id,)).fetchall()
+
+            if rows:
+                # 3. Tokenize and accumulate counts per hourly bucket
+                from collections import defaultdict
+                bucket_counts = defaultdict(Counter)
+                for row in rows:
+                    words = tokenize(row["message_text"])
+                    if words:
+                        # Derive hourly bucket from timestamp_local
+                        # Format: "2026-04-12T15" (first 13 chars of ISO timestamp)
+                        bucket = row["timestamp_local"][:13]
+                        bucket_counts[bucket].update(words)
+
+                # 4. Upsert into keyword_counts table
+                upsert_rows = []
+                for bucket, counter in bucket_counts.items():
+                    for word, count in counter.items():
+                        upsert_rows.append((bucket, word, count))
+
+                if upsert_rows:
+                    database.upsert_keyword_counts(upsert_rows)
+
+                # 5. Update checkpoint to max(id) from batch
+                max_id = rows[-1]["id"]
+                database.set_kv("keyword_agg_last_id", str(max_id))
+
+                print(f"[OK] Keyword aggregation: processed {len(rows)} messages, "
+                      f"{len(upsert_rows)} word-bucket pairs upserted")
+
+            # 6. Update trending snapshot for shared state
+            _keyword_snapshot = _compute_trending_keywords(top_n=20)
+            _write_shared_state()
+
+        except Exception as e:
+            print(f"[!] Keyword aggregation failed: {e}")
+
+        _poller_stop.wait(120)
+
+
+# ============================================================
 # SHARED STATE
 # ============================================================
 
@@ -950,6 +1081,7 @@ def _write_shared_state():
             "last_stock_poll": _last_stock_poll.isoformat() if _last_stock_poll else None,
             "last_backup": _last_backup.isoformat() if _last_backup else None,
             "chat_room": _chat_room,
+            "trending_keywords": list(_keyword_snapshot),
         }
     shared_state.write_state(_SHARED_STATE_PATH, state)
 
@@ -968,6 +1100,11 @@ if __name__ == "__main__":
     database.backfill_poll_vote_costs()
     _backfill_empty_sc_names()
 
+    # Backfill message_text for existing chat:message events (one-time)
+    mt_backfilled = database.backfill_message_text()
+    if mt_backfilled:
+        print(f"[OK] Backfilled message_text for {mt_backfilled} events")
+
     load_catalog()
     _seed_poll_vote_state()
     seed_superchats_from_rest()
@@ -979,6 +1116,7 @@ if __name__ == "__main__":
     Thread(target=catalog_refresh_poller, daemon=True).start()
     Thread(target=db_backup_poller, daemon=True).start()
     Thread(target=_notify_prune_loop, daemon=True).start()
+    Thread(target=keyword_agg_thread, daemon=True).start()
 
     print(f"[OK] Ingestion process started (auth: {auth.mode})")
 

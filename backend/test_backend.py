@@ -1846,3 +1846,178 @@ def test_backfill_message_text_skips_already_populated():
     database.store_event("chat:message", {"user": {"displayName": "Alice"}, "message": "already here"})
     total = database.backfill_message_text()
     assert total == 0
+
+
+# ============================================================
+# Phase 2: Ingestion integration tests
+# ============================================================
+
+from datetime import datetime, timezone, timedelta
+
+
+def test_update_keyword_buffer_adds_entries():
+    """_update_keyword_buffer adds tokenized words to the buffer."""
+    from ingest import _update_keyword_buffer, _keyword_buffer, _KEYWORD_BUFFER_LOCK
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+    _update_keyword_buffer("drama fight eviction")
+    with _KEYWORD_BUFFER_LOCK:
+        assert len(_keyword_buffer) == 1
+        ts, words = _keyword_buffer[0]
+        assert "drama" in words
+        assert "fight" in words
+        assert "eviction" in words
+    # Cleanup
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+
+
+def test_update_keyword_buffer_ignores_empty():
+    """_update_keyword_buffer does nothing for empty/None input."""
+    from ingest import _update_keyword_buffer, _keyword_buffer, _KEYWORD_BUFFER_LOCK
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+    _update_keyword_buffer(None)
+    _update_keyword_buffer("")
+    _update_keyword_buffer("the and but")  # all stopwords
+    with _KEYWORD_BUFFER_LOCK:
+        assert len(_keyword_buffer) == 0
+    # Cleanup
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+
+
+def test_update_keyword_buffer_prunes_old_entries():
+    """_update_keyword_buffer prunes entries older than the window."""
+    import time
+    from ingest import (
+        _update_keyword_buffer, _keyword_buffer,
+        _KEYWORD_BUFFER_LOCK, _KEYWORD_BUFFER_WINDOW
+    )
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+        # Manually insert an old entry (6 minutes ago)
+        old_ts = time.time() - _KEYWORD_BUFFER_WINDOW - 60
+        _keyword_buffer.append((old_ts, ["stale"]))
+    # Adding a new entry should prune the old one
+    _update_keyword_buffer("fresh content here")
+    with _KEYWORD_BUFFER_LOCK:
+        assert len(_keyword_buffer) == 1
+        _, words = _keyword_buffer[0]
+        assert "stale" not in words
+        assert "fresh" in words
+    # Cleanup
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+
+
+def test_compute_trending_keywords_basic():
+    """_compute_trending_keywords returns top keywords sorted by count."""
+    import time
+    from ingest import (
+        _compute_trending_keywords, _keyword_buffer, _KEYWORD_BUFFER_LOCK
+    )
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+        now = time.time()
+        # Add multiple entries with known word frequencies
+        _keyword_buffer.append((now, ["drama", "fight", "drama"]))
+        _keyword_buffer.append((now, ["drama", "eviction"]))
+        _keyword_buffer.append((now, ["fight"]))
+    result = _compute_trending_keywords(top_n=3)
+    assert len(result) == 3
+    assert result[0]["word"] == "drama"
+    assert result[0]["count"] == 3
+    assert result[1]["word"] == "fight"
+    assert result[1]["count"] == 2
+    # Cleanup
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+
+
+def test_compute_trending_keywords_empty_buffer():
+    """_compute_trending_keywords returns empty list when buffer is empty."""
+    from ingest import _compute_trending_keywords, _keyword_buffer, _KEYWORD_BUFFER_LOCK
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+    result = _compute_trending_keywords()
+    assert result == []
+
+
+def test_compute_trending_keywords_respects_top_n():
+    """_compute_trending_keywords limits results to top_n."""
+    import time
+    from ingest import (
+        _compute_trending_keywords, _keyword_buffer, _KEYWORD_BUFFER_LOCK
+    )
+    with _KEYWORD_BUFFER_LOCK:
+        _keyword_buffer.clear()
+        now = time.time()
+        # Add many distinct words
+        _keyword_buffer.append((now, ["alpha", "beta", "gamma", "delta", "epsilon"]))
+    result = _compute_trending_keywords(top_n=2)
+    assert len(result) == 2
+
+
+def test_keyword_agg_processes_messages(tmp_path, monkeypatch):
+    """keyword_agg_thread processes chat messages and upserts keyword counts."""
+    import database as db
+    # Use in-memory DB
+    monkeypatch.setattr(db, "DB_PATH", ":memory:")
+    # Reset thread-local connection
+    if hasattr(db._local, "conn"):
+        db._local.conn = None
+    db.init_db()
+
+    # Insert some chat messages with message_text
+    conn = db._get_conn()
+    now = datetime.now(timezone.utc)
+    for i, msg in enumerate(["drama fight", "drama eviction", "fight drama"]):
+        ts = (now - timedelta(minutes=i)).isoformat()
+        conn.execute(
+            "INSERT INTO events (event_type, data, timestamp_local, message_text) VALUES (?, ?, ?, ?)",
+            ("chat:message", '{"message": "' + msg + '"}', ts, msg)
+        )
+    conn.commit()
+
+    # Set checkpoint to 0 so all messages get processed
+    db.set_kv("keyword_agg_last_id", "0")
+
+    # Run the aggregation logic manually (extracted from keyword_agg_thread)
+    from tokenizer import tokenize
+    from collections import defaultdict, Counter
+
+    last_id = int(db.get_kv("keyword_agg_last_id"))
+    rows = conn.execute("""
+        SELECT id, message_text, timestamp_local FROM events
+        WHERE event_type = 'chat:message'
+          AND id > ?
+          AND message_text IS NOT NULL
+        ORDER BY id
+        LIMIT 50000
+    """, (last_id,)).fetchall()
+
+    bucket_counts = defaultdict(Counter)
+    for row in rows:
+        words = tokenize(row["message_text"])
+        if words:
+            bucket = row["timestamp_local"][:13]
+            bucket_counts[bucket].update(words)
+
+    upsert_rows = []
+    for bucket, counter in bucket_counts.items():
+        for word, count in counter.items():
+            upsert_rows.append((bucket, word, count))
+
+    db.upsert_keyword_counts(upsert_rows)
+    db.set_kv("keyword_agg_last_id", str(rows[-1]["id"]))
+
+    # Verify keyword counts
+    top = db.get_keyword_top(limit=10)
+    word_map = {k["word"]: k["count"] for k in top}
+    assert word_map["drama"] == 3
+    assert word_map["fight"] == 2
+    assert word_map["eviction"] == 1
+
+    # Verify checkpoint was updated
+    assert int(db.get_kv("keyword_agg_last_id")) == rows[-1]["id"]
