@@ -37,7 +37,9 @@ export default memo(function ActivityCard({ data, eventType, roomMap = {} }) {
           </span>
           {name && <span className="text-xs font-medium text-tank-bright">{name}</span>}
           {data.cost > 0 && (
-            <span className="text-[10px] font-mono text-tank-warn">{data.cost}t</span>
+            <span className="text-[10px] font-mono text-tank-warn">
+              {data.cost}t <span className="text-tank-muted">(${(data.cost * 0.10).toFixed(2)})</span>
+            </span>
           )}
           <span className="text-[10px] font-mono text-tank-muted ml-auto shrink-0">
             {formatTime(ts)}
