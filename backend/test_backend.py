@@ -50,6 +50,8 @@ def fresh_db():
         DROP TABLE IF EXISTS events;
         DROP TABLE IF EXISTS stock_history;
         DROP TABLE IF EXISTS _notify;
+        DROP TABLE IF EXISTS keyword_counts;
+        DROP TABLE IF EXISTS _kv;
     """)
     database.init_db()
     yield
@@ -1551,3 +1553,296 @@ def test_prune_notify_keeps_recent_rows():
     database.prune_notify()
     rows = database.poll_notify(0)
     assert len(rows) == 1
+
+
+# ============================================================
+# TOKENIZER
+# ============================================================
+
+from tokenizer import tokenize, count_tokens, STOPWORDS
+
+
+def test_tokenize_basic():
+    result = tokenize("drake is causing drama in the house")
+    assert "drake" in result
+    assert "drama" in result
+    assert "house" in result
+
+
+def test_tokenize_stopwords_filtered():
+    result = tokenize("the and that have for not with you this")
+    assert result == []
+
+
+def test_tokenize_chat_noise_filtered():
+    result = tokenize("lol lmao bro bruh dude yeah omg pog poggers")
+    assert result == []
+
+
+def test_tokenize_bot_commands_filtered():
+    result = tokenize("coinflip double lexxpoints")
+    assert result == []
+
+
+def test_tokenize_short_words_filtered():
+    result = tokenize("I am ok no hi go")
+    assert result == []
+
+
+def test_tokenize_empty():
+    assert tokenize("") == []
+    assert tokenize(None) == []
+    assert tokenize(123) == []
+
+
+def test_tokenize_urls_stripped():
+    result = tokenize("check out https://example.com/page for more info")
+    assert "https" not in result
+    assert "com" not in result
+    assert "example" in result
+    assert "page" in result
+
+
+def test_tokenize_mixed_case():
+    result = tokenize("DRAKE is FIGHTING with LAURA")
+    assert "drake" in result
+    assert "fighting" in result
+    assert "laura" in result
+    assert all(w == w.lower() for w in result)
+
+
+def test_tokenize_numbers_stripped():
+    result = tokenize("there are 500 tokens and 2 contestants")
+    assert "tokens" in result
+    assert "contestants" in result
+    assert "500" not in result
+
+
+def test_tokenize_preserves_duplicates():
+    result = tokenize("drama drama drama")
+    assert result.count("drama") == 3
+
+
+def test_count_tokens_tuples():
+    texts = [("drake is cool",), ("drake fights laura",)]
+    counts = count_tokens(texts)
+    assert counts["drake"] == 2
+    assert counts["cool"] == 1
+    assert counts["fights"] == 1
+    assert counts["laura"] == 1
+
+
+def test_count_tokens_strings():
+    texts = ["drake is cool", "drake fights laura"]
+    counts = count_tokens(texts)
+    assert counts["drake"] == 2
+
+
+def test_count_tokens_empty():
+    counts = count_tokens([])
+    assert len(counts) == 0
+
+
+def test_count_tokens_filters_stopwords():
+    texts = [("the and this for lol",)]
+    counts = count_tokens(texts)
+    assert len(counts) == 0
+
+
+# ============================================================
+# DATABASE: _extract_columns - message_text
+# ============================================================
+
+
+def test_extract_message_text_chat():
+    ext = database._extract_columns("chat:message", {
+        "user": {"displayName": "Alice"}, "message": "hello world"
+    })
+    assert ext["message_text"] == "hello world"
+
+
+def test_extract_message_text_non_chat():
+    ext = database._extract_columns("tts:update", {
+        "displayName": "Alice", "message": "hello", "cost": 248
+    })
+    assert ext["message_text"] is None
+
+
+def test_extract_message_text_missing_message():
+    ext = database._extract_columns("chat:message", {
+        "user": {"displayName": "Alice"}
+    })
+    assert ext["message_text"] is None
+
+
+def test_store_event_populates_message_text():
+    database.store_event("chat:message", {"user": {"displayName": "Alice"}, "message": "test msg"})
+    conn = database._get_conn()
+    row = conn.execute("SELECT message_text FROM events WHERE event_type = 'chat:message'").fetchone()
+    assert row["message_text"] == "test msg"
+
+
+# ============================================================
+# DATABASE: keyword_counts (upsert, query, prune)
+# ============================================================
+
+
+def test_upsert_keyword_counts_insert():
+    database.upsert_keyword_counts([
+        ("2026-04-12T15", "drama", 10),
+        ("2026-04-12T15", "fight", 5),
+    ])
+    results = database.get_keyword_top(since="2026-04-12T15", limit=10)
+    assert len(results) == 2
+    assert results[0]["word"] == "drama"
+    assert results[0]["count"] == 10
+    assert results[1]["word"] == "fight"
+    assert results[1]["count"] == 5
+
+
+def test_upsert_keyword_counts_increment():
+    database.upsert_keyword_counts([("2026-04-12T15", "drama", 10)])
+    database.upsert_keyword_counts([("2026-04-12T15", "drama", 7)])
+    results = database.get_keyword_top(since="2026-04-12T15", limit=10)
+    assert results[0]["word"] == "drama"
+    assert results[0]["count"] == 17
+
+
+def test_upsert_keyword_counts_empty():
+    database.upsert_keyword_counts([])
+    results = database.get_keyword_top(since="2000-01-01T00", limit=10)
+    assert results == []
+
+
+def test_get_keyword_top_respects_since():
+    database.upsert_keyword_counts([
+        ("2026-04-11T10", "old", 100),
+        ("2026-04-12T15", "new", 50),
+    ])
+    results = database.get_keyword_top(since="2026-04-12T00:00:00Z", limit=10)
+    words = [r["word"] for r in results]
+    assert "new" in words
+    assert "old" not in words
+
+
+def test_get_keyword_top_default_limit():
+    for i in range(30):
+        database.upsert_keyword_counts([("2026-04-12T15", f"word{i:02d}", 30 - i)])
+    results = database.get_keyword_top(since="2026-04-12T00:00:00Z")
+    assert len(results) == 20
+
+
+def test_get_keyword_top_sums_across_buckets():
+    database.upsert_keyword_counts([
+        ("2026-04-12T14", "drama", 20),
+        ("2026-04-12T15", "drama", 30),
+        ("2026-04-12T16", "drama", 10),
+    ])
+    results = database.get_keyword_top(since="2026-04-12T14:00:00Z", limit=10)
+    assert results[0]["word"] == "drama"
+    assert results[0]["count"] == 60
+
+
+def test_get_keyword_analytics_top_and_hourly():
+    database.upsert_keyword_counts([
+        ("2026-04-12T14", "drama", 20),
+        ("2026-04-12T14", "fight", 10),
+        ("2026-04-12T15", "drama", 30),
+        ("2026-04-12T15", "laura", 25),
+    ])
+    result = database.get_keyword_analytics(since="2026-04-12T14:00:00Z")
+    top_words = [k["word"] for k in result["top_keywords"]]
+    assert top_words[0] == "drama"
+    assert len(result["hourly"]) == 2
+    assert result["hourly"][0]["bucket"] == "2026-04-12T14"
+    assert result["hourly"][1]["bucket"] == "2026-04-12T15"
+
+
+def test_get_keyword_analytics_with_until():
+    database.upsert_keyword_counts([
+        ("2026-04-12T14", "drama", 20),
+        ("2026-04-12T16", "fight", 10),
+    ])
+    result = database.get_keyword_analytics(since="2026-04-12T14:00:00Z", until="2026-04-12T15:00:00Z")
+    top_words = [k["word"] for k in result["top_keywords"]]
+    assert "drama" in top_words
+    assert "fight" not in top_words
+
+
+def test_get_keyword_analytics_hourly_top_10_cap():
+    rows = [("2026-04-12T14", f"word{i:02d}", 15 - i) for i in range(15)]
+    database.upsert_keyword_counts(rows)
+    result = database.get_keyword_analytics(since="2026-04-12T14:00:00Z")
+    assert len(result["hourly"]) == 1
+    assert len(result["hourly"][0]["top"]) == 10
+
+
+def test_prune_keyword_counts():
+    database.upsert_keyword_counts([
+        ("2025-01-01T00", "old", 100),
+        ("2026-04-12T15", "new", 50),
+    ])
+    deleted = database.prune_keyword_counts(retention_days=31)
+    assert deleted == 1
+    results = database.get_keyword_top(since="2000-01-01T00", limit=10)
+    assert len(results) == 1
+    assert results[0]["word"] == "new"
+
+
+def test_prune_keyword_counts_keeps_recent():
+    database.upsert_keyword_counts([("2026-04-12T15", "recent", 10)])
+    deleted = database.prune_keyword_counts(retention_days=31)
+    assert deleted == 0
+
+
+# ============================================================
+# DATABASE: _kv (key-value store)
+# ============================================================
+
+
+def test_kv_get_set():
+    assert database.get_kv("test_key") is None
+    database.set_kv("test_key", "test_value")
+    assert database.get_kv("test_key") == "test_value"
+
+
+def test_kv_upsert():
+    database.set_kv("key", "value1")
+    database.set_kv("key", "value2")
+    assert database.get_kv("key") == "value2"
+
+
+def test_kv_stores_as_string():
+    database.set_kv("num", 42)
+    assert database.get_kv("num") == "42"
+
+
+# ============================================================
+# DATABASE: backfill_message_text
+# ============================================================
+
+
+def test_backfill_message_text():
+    conn = database._get_conn()
+    conn.execute(
+        """INSERT INTO events (event_type, timestamp_local, data, message_text)
+           VALUES ('chat:message', '2026-04-12T00:00:00+00:00', ?, NULL)""",
+        (json.dumps({"user": {"displayName": "Alice"}, "message": "hello world"}),),
+    )
+    conn.execute(
+        """INSERT INTO events (event_type, timestamp_local, data, message_text)
+           VALUES ('chat:message', '2026-04-12T00:01:00+00:00', ?, NULL)""",
+        (json.dumps({"user": {"displayName": "Bob"}, "message": "goodbye"}),),
+    )
+    conn.commit()
+    total = database.backfill_message_text(batch_size=10)
+    assert total == 2
+    rows = conn.execute("SELECT message_text FROM events ORDER BY id").fetchall()
+    assert rows[0]["message_text"] == "hello world"
+    assert rows[1]["message_text"] == "goodbye"
+
+
+def test_backfill_message_text_skips_already_populated():
+    database.store_event("chat:message", {"user": {"displayName": "Alice"}, "message": "already here"})
+    total = database.backfill_message_text()
+    assert total == 0

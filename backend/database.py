@@ -146,6 +146,7 @@ def init_db():
         "item_id TEXT",
         "feature TEXT",
         "chat_role TEXT",
+        "message_text TEXT",
     ]:
         try:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col}")
@@ -197,7 +198,30 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_events_chat_role
             ON events(chat_role, id)
             WHERE chat_role IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_events_ext_message_text
+            ON events(event_type, id)
+            WHERE message_text IS NOT NULL;
     """)
+
+    # keyword_counts: pre-aggregated hourly keyword frequencies (written by ingest, read by api)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS keyword_counts (
+            bucket TEXT NOT NULL,
+            word TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (bucket, word)
+        );
+        CREATE INDEX IF NOT EXISTS idx_keyword_counts_word ON keyword_counts(word, bucket);
+    """)
+
+    # _kv: lightweight key-value store for checkpoints and metadata
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS _kv (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    """)
+
     conn.commit()
 
 
@@ -271,7 +295,7 @@ def backfill_poll_vote_costs():
     return len(rows)
 
 
-_EXTRACTED_COLS = ("sentiment", "cost", "display_name", "target", "room", "metadata", "item_id", "feature", "chat_role")
+_EXTRACTED_COLS = ("sentiment", "cost", "display_name", "target", "room", "metadata", "item_id", "feature", "chat_role", "message_text")
 _EXTRACTED_NONE = {k: None for k in _EXTRACTED_COLS}
 _INSERT_SQL = (
     "INSERT INTO events (event_type, event_id, timestamp_server, timestamp_local, data, "
@@ -318,6 +342,11 @@ def _extract_columns(event_type, data):
         elif meta.get("isEpic"):
             chat_role = "epic"
 
+    # Extract raw message text for chat messages (keyword analysis)
+    message_text = None
+    if event_type == "chat:message":
+        message_text = data.get("message")
+
     return {
         "sentiment": data.get("sentiment"),
         "cost": cost,
@@ -328,6 +357,7 @@ def _extract_columns(event_type, data):
         "item_id": item_id_val,
         "feature": data.get("feature"),
         "chat_role": chat_role,
+        "message_text": message_text,
     }
 
 
@@ -857,6 +887,160 @@ def prune_chat_events(retention_days=30):
     )
     conn.commit()
     return count
+
+
+# ============================================================
+# KEYWORD ANALYSIS: pre-aggregated hourly counts
+# ============================================================
+
+
+def backfill_message_text(batch_size=5000):
+    """Backfill message_text for existing chat:message events.
+
+    Processes in chunks to stay memory-safe on large datasets.
+    Returns total number of rows backfilled.
+    """
+    conn = _get_conn()
+    total = 0
+    while True:
+        rows = conn.execute("""
+            SELECT id, data FROM events
+            WHERE event_type = 'chat:message'
+              AND message_text IS NULL
+            LIMIT ?
+        """, (batch_size,)).fetchall()
+        if not rows:
+            break
+        for row in rows:
+            try:
+                d = fast_loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+                text = d.get("message") if isinstance(d, dict) else None
+            except Exception:
+                text = None
+            conn.execute("UPDATE events SET message_text = ? WHERE id = ?", (text, row["id"]))
+        conn.commit()
+        total += len(rows)
+        print(f"[OK] Backfilled message_text for {total} rows so far")
+    if total:
+        print(f"[OK] Backfilled message_text for {total} total rows")
+    return total
+
+
+def upsert_keyword_counts(rows):
+    """Batch upsert keyword counts into hourly buckets.
+
+    Args:
+        rows: list of (bucket, word, count) tuples
+    """
+    if not rows:
+        return
+    conn = _get_conn()
+    conn.executemany("""
+        INSERT INTO keyword_counts (bucket, word, count)
+        VALUES (?, ?, ?)
+        ON CONFLICT(bucket, word) DO UPDATE SET count = count + excluded.count
+    """, rows)
+    conn.commit()
+
+
+def get_keyword_top(since=None, limit=20):
+    """Top keywords by frequency in the given time window.
+
+    Args:
+        since: ISO timestamp (truncated to hour for bucket matching).
+               Defaults to last 24 hours if None.
+        limit: max keywords to return
+    """
+    conn = _get_conn()
+    if not since:
+        since_bucket = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H")
+    else:
+        since_bucket = since[:13]  # Truncate to hour: "2026-04-12T15"
+    rows = conn.execute("""
+        SELECT word, SUM(count) as total
+        FROM keyword_counts
+        WHERE bucket >= ?
+        GROUP BY word
+        ORDER BY total DESC
+        LIMIT ?
+    """, (since_bucket, limit)).fetchall()
+    return [{"word": r["word"], "count": r["total"]} for r in rows]
+
+
+def get_keyword_analytics(since=None, until=None, top_n=30):
+    """Keyword analytics with hourly breakdown.
+
+    Returns dict with top_keywords (overall) and hourly (per-bucket top 10).
+    """
+    conn = _get_conn()
+    since_bucket = since[:13] if since else (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H")
+    until_bucket = until[:13] if until else None
+
+    # Overall top keywords
+    params = [since_bucket]
+    until_clause = ""
+    if until_bucket:
+        until_clause = " AND bucket < ?"
+        params.append(until_bucket)
+    params.append(top_n)
+
+    top = conn.execute("""
+        SELECT word, SUM(count) as total
+        FROM keyword_counts
+        WHERE bucket >= ?{}
+        GROUP BY word
+        ORDER BY total DESC
+        LIMIT ?
+    """.format(until_clause), params).fetchall()
+
+    # Hourly breakdown (all rows in range, sliced to top 10 per bucket in Python)
+    h_params = [since_bucket]
+    if until_bucket:
+        h_params.append(until_bucket)
+    hourly_rows = conn.execute("""
+        SELECT bucket, word, count
+        FROM keyword_counts
+        WHERE bucket >= ?{}
+        ORDER BY bucket, count DESC
+    """.format(until_clause), h_params).fetchall()
+
+    # Group by bucket, take top 10 per bucket
+    from itertools import groupby
+    hourly = []
+    for bucket, group in groupby(hourly_rows, key=lambda r: r["bucket"]):
+        items = [{"word": r["word"], "count": r["count"]} for r in group]
+        hourly.append({"bucket": bucket, "top": items[:10]})
+
+    return {
+        "top_keywords": [{"word": r["word"], "count": r["total"]} for r in top],
+        "hourly": hourly,
+    }
+
+
+def prune_keyword_counts(retention_days=31):
+    """Delete keyword count buckets older than retention_days."""
+    conn = _get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%dT%H")
+    cursor = conn.execute("DELETE FROM keyword_counts WHERE bucket < ?", (cutoff,))
+    conn.commit()
+    return cursor.rowcount
+
+
+def get_kv(key):
+    """Read a value from the _kv table. Returns None if not found."""
+    conn = _get_conn()
+    row = conn.execute("SELECT value FROM _kv WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_kv(key, value):
+    """Write a value to the _kv table (upsert)."""
+    conn = _get_conn()
+    conn.execute("""
+        INSERT INTO _kv (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    """, (key, str(value)))
+    conn.commit()
 
 
 def get_stock_history(ticker=None, limit=500, since=None):
