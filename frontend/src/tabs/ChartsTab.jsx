@@ -9,6 +9,7 @@ import {
 } from 'recharts'
 
 const RANGES = ['30m', '1h', '2h', '6h', '12h', '24h', '3d', '7d', 'all']
+const KEYWORD_RANGES = ['6h', '12h', '24h', '3d', '7d']
 
 const TICKER_COLORS = [
   '#60a5fa', '#34d399', '#f59e0b', '#f87171', '#a78bfa',
@@ -30,6 +31,8 @@ function tokensToUSD(t) { return `$${(t * 0.10).toFixed(2)}` }
 function parseTs(ts) {
   if (!ts) return null
   let s = ts.replace(' ', 'T')
+  // Handle hourly bucket format "2026-04-12T15" — append :00:00 for valid ISO
+  if (/^\d{4}-\d{2}-\d{2}T\d{1,2}$/.test(s)) s += ':00:00'
   if (!s.includes('+') && !s.endsWith('Z')) s += 'Z'
   const d = new Date(s)
   return isNaN(d.getTime()) ? null : d
@@ -46,14 +49,25 @@ function formatTsLabel(ts, range) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })
 }
 
+function formatKeywordTsLabel(ts, range) {
+  const d = parseTs(ts)
+  if (!d) return ts ?? ''
+  const hh = String(d.getUTCHours()).padStart(2, '0')
+  if (range === '6h' || range === '12h' || range === '24h')
+    return `${hh}:00`
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(d.getUTCDate()).padStart(2, '0')
+  return `${mm}/${dd} ${hh}:00`
+}
+
 function tickInterval(len, target = 10) {
   return len <= target ? 0 : Math.ceil(len / target) - 1
 }
 
-function RangeButtons({ value, onChange }) {
+function RangeButtons({ value, onChange, ranges = RANGES }) {
   return (
     <div className="flex gap-1">
-      {RANGES.map(r => (
+      {ranges.map(r => (
         <button
           key={r}
           onClick={() => onChange(r)}
@@ -164,7 +178,7 @@ function KeywordTooltip({ active, payload, label, range }) {
   const total = visible.reduce((sum, e) => sum + e.value, 0)
   return (
     <div className="bg-[#111115] border border-[#1e1e24] rounded px-3 py-2 text-xs font-mono shadow-xl">
-      <div className="text-[#555566] mb-1.5">{formatTsLabel(label, range)}</div>
+      <div className="text-[#555566] mb-1.5">{formatKeywordTsLabel(label, range)}</div>
       {visible.map(entry => (
         <div key={entry.dataKey} className="flex items-center gap-2 leading-5">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: entry.color ?? entry.fill }} />
@@ -596,7 +610,7 @@ export default function ChartsTab({ stocks }) {
       {/* Chat Keyword Trends */}
       <ChartPanel title="Chat Keyword Trends" icon={Type} controls={
         <div className="flex flex-col items-end gap-1">
-          <RangeButtons value={keywordRange} onChange={setKeywordRange} />
+          <RangeButtons value={keywordRange} onChange={setKeywordRange} ranges={KEYWORD_RANGES} />
           <AnchorRow anchor={keywordAnchor} anchorLabel={keywordAnchorLabel} onAnchorChange={handleKeywordAnchor} range={keywordRange} />
         </div>
       }>
@@ -608,7 +622,7 @@ export default function ChartsTab({ stocks }) {
                 <AreaChart data={keywordChartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
                   <CartesianGrid stroke="#1e1e24" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="time" tick={axisStyle} tickLine={false} axisLine={{ stroke: '#1e1e24' }}
-                    interval={tickInterval(keywordChartData.length)} tickFormatter={v => formatTsLabel(v, keywordRange)} />
+                    interval={tickInterval(keywordChartData.length)} tickFormatter={v => formatKeywordTsLabel(v, keywordRange)} />
                   <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={40} domain={[0, 'auto']}
                     tickFormatter={v => v.toLocaleString()} />
                   <Tooltip content={<KeywordTooltip range={keywordRange} />} />

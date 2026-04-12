@@ -150,6 +150,7 @@ export default function App() {
     top_targets: [], top_senders: [], top_tts_senders: [], top_sfx_senders: [], top_chat_senders: [], top_fishtoy_senders: [], total_events: 0,
   })
   const [trendingKeywords, setTrendingKeywords] = useState([])
+  const [topKeywords, setTopKeywords] = useState([])
 
   // Catalog data
   const [itemCatalog, setItemCatalog] = useState({})
@@ -409,7 +410,7 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Refresh trending chat words periodically
+  // Refresh trending chat words periodically (5-min rolling window, used by chat panel)
   useEffect(() => {
     const fetchTrending = () => {
       if (document.hidden) return
@@ -417,6 +418,17 @@ export default function App() {
     }
     fetchTrending()
     const interval = setInterval(fetchTrending, 60000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Refresh top chat keywords periodically (24h window, used by sidebar)
+  useEffect(() => {
+    const fetchTop = () => {
+      if (document.hidden) return
+      fetch('/api/keywords/top').then(okJson).then(data => setTopKeywords(data || [])).catch(() => setTopKeywords([]))
+    }
+    fetchTop()
+    const interval = setInterval(fetchTop, 60000)
     return () => clearInterval(interval)
   }, [])
 
@@ -535,6 +547,7 @@ export default function App() {
 
   // Chat array is already newest-first (server ORDER BY id DESC + WS prepend)
   const sortedChats = useMemo(() => roleChats ?? chats, [roleChats, chats])
+  const trendingTags = useMemo(() => (trendingKeywords || []).slice(0, 5), [trendingKeywords])
   const sortedActivity = useMemo(() => {
     const q = searchText.trim().toLowerCase()
 
@@ -1453,6 +1466,18 @@ export default function App() {
                 )}
               </>}
             >
+              <div className="flex flex-col h-full">
+                {trendingTags.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 px-2 py-1 border-b border-tank-border shrink-0">
+                    <span className="text-[8px] text-tank-muted uppercase mr-1">trending:</span>
+                    {trendingTags.map(w => (
+                      <span key={w.word} className="text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full px-2 py-0.5">
+                        {w.word} {w.count}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="flex-1 min-h-0">
               {sortedChats.length === 0 ? (
                 <div className="p-2">
                   <EmptyState text={chatFilter !== 'all' ? (roleChatsLoading ? 'Looking for messages...' : 'No messages yet') : 'Waiting for chat messages...'} />
@@ -1499,13 +1524,15 @@ export default function App() {
                   )}
                 />
               )}
+                </div>
+              </div>
             </Panel>
           </div>
 
         </div>
 
         {/* RIGHT: 24h sidebar */}
-        <Last24hSidebar sessionStats={sessionStats} trendingKeywords={trendingKeywords} />
+        <Last24hSidebar sessionStats={sessionStats} topKeywords={topKeywords} />
       </main>
       )}
 
@@ -1547,7 +1574,7 @@ function LeaderboardSection({ title, items, renderItem }) {
   )
 }
 
-const Last24hSidebar = memo(function Last24hSidebar({ sessionStats, trendingKeywords }) {
+const Last24hSidebar = memo(function Last24hSidebar({ sessionStats, topKeywords }) {
   const formattedSpend = useMemo(() => ({
     pollTokens: sessionStats.poll_tokens.toLocaleString(),
     superchatTokens: sessionStats.superchat_tokens.toLocaleString(),
@@ -1579,7 +1606,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats, trendingKeyw
       ...s, spendFmt: s.spend.toLocaleString(), usdFmt: tokensToUSD(s.spend)
     })), [sessionStats.top_fishtoy_senders])
 
-  const topWords = useMemo(() => (trendingKeywords || []).slice(0, 10), [trendingKeywords])
+  const topWords = useMemo(() => (topKeywords || []).slice(0, 10), [topKeywords])
 
   return (
     <Panel title="Last 24 Hours" icon={Clock} className="w-full md:w-[240px] lg:w-[280px] md:shrink-0 border-t-2 border-t-cyan-500/60">
@@ -1661,7 +1688,7 @@ const Last24hSidebar = memo(function Last24hSidebar({ sessionStats, trendingKeyw
         </div>
       )} />
 
-      <LeaderboardSection title="Trending Chat Words (5 min)" items={topWords} renderItem={(w, i) => (
+      <LeaderboardSection title="Top Chat Keywords (24h)" items={topWords} renderItem={(w, i) => (
         <div key={w.word} className="flex items-center justify-between text-[11px]">
           <div className="flex items-center gap-1">
             <span className="text-[10px] font-mono text-tank-muted">{i + 1}.</span>
