@@ -94,7 +94,7 @@ def _cached_query(key, func, *args, ttl=None):
 # RATE LIMITING
 # ============================================================
 
-MAX_WS_CLIENTS = 50  # Max concurrent WebSocket connections
+MAX_WS_CLIENTS = 200  # Max concurrent WebSocket connections
 BUILD_VERSION = os.environ.get("BUILD_VERSION", "dev")
 
 # Lightweight cache for /api/health event count — avoids a COUNT(*) on every monitor ping
@@ -481,12 +481,14 @@ async def websocket_endpoint(ws: WebSocket):
     # always send Origin on WS; missing Origin is treated as non-browser.
     origin = ws.headers.get("origin")
     if not _is_origin_allowed(origin):
+        logger.warning("WS rejected origin=%s from %s", origin, _get_client_ip(ws))
         await ws.close(code=1008, reason="Origin not allowed")
         return
 
     ip = _get_client_ip(ws)
     ok, reason = _try_reserve_ws_slot(ip)
     if not ok:
+        logger.warning("WS rejected %s: %s (%d/%d global)", ip, reason, len(browser_clients), MAX_WS_CLIENTS)
         await ws.close(code=1013, reason=f"Too many connections ({reason})")
         return
 
