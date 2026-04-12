@@ -2021,3 +2021,73 @@ def test_keyword_agg_processes_messages(tmp_path, monkeypatch):
 
     # Verify checkpoint was updated
     assert int(db.get_kv("keyword_agg_last_id")) == rows[-1]["id"]
+
+
+# ============================================================
+# API: keyword endpoints
+# ============================================================
+
+
+def test_api_keywords_trending_returns_shared_state(monkeypatch):
+    fake_state = {"trending_keywords": [{"word": "fish", "count": 10}]}
+    monkeypatch.setattr(shared_state, "read_state", lambda path: fake_state)
+    result = _server.api_keywords_trending()
+    assert result["window_seconds"] == 300
+    assert len(result["keywords"]) == 1
+    assert result["keywords"][0]["word"] == "fish"
+    assert result["keywords"][0]["count"] == 10
+
+
+def test_api_keywords_trending_empty(monkeypatch):
+    monkeypatch.setattr(shared_state, "read_state", lambda path: {})
+    result = _server.api_keywords_trending()
+    assert result["window_seconds"] == 300
+    assert result["keywords"] == []
+
+
+def test_api_keywords_top_returns_data():
+    database.upsert_keyword_counts([
+        ("2026-04-12T14", "drama", 20),
+        ("2026-04-12T14", "fight", 10),
+    ])
+    result = _server.api_keywords_top(since="2026-04-12T00:00:00Z", limit=20)
+    assert len(result) == 2
+    assert result[0]["word"] == "drama"
+    assert result[0]["count"] == 20
+
+
+def test_api_keywords_top_respects_limit():
+    database.upsert_keyword_counts([
+        ("2026-04-12T14", "aaa", 50),
+        ("2026-04-12T14", "bbb", 40),
+        ("2026-04-12T14", "ccc", 30),
+        ("2026-04-12T14", "ddd", 20),
+        ("2026-04-12T14", "eee", 10),
+    ])
+    result = _server.api_keywords_top(since="2026-04-12T00:00:00Z", limit=2)
+    assert len(result) == 2
+    assert result[0]["word"] == "aaa"
+    assert result[1]["word"] == "bbb"
+
+
+def test_api_keyword_analytics_returns_top_and_hourly():
+    database.upsert_keyword_counts([
+        ("2026-04-12T14", "drama", 20),
+        ("2026-04-12T14", "fight", 10),
+        ("2026-04-12T15", "drama", 15),
+        ("2026-04-12T15", "chaos", 25),
+    ])
+    result = _server.api_keyword_analytics(since="2026-04-12T00:00:00Z", until=None)
+    assert "top_keywords" in result
+    assert "hourly" in result
+    assert len(result["hourly"]) == 2
+    top_words = [k["word"] for k in result["top_keywords"]]
+    assert "drama" in top_words
+    assert "chaos" in top_words
+
+
+def test_api_keywords_top_normalizes_since():
+    database.upsert_keyword_counts([("2026-04-12T14", "test", 5)])
+    # since with seconds precision should not error
+    result = _server.api_keywords_top(since="2026-04-12T14:30:45Z", limit=20)
+    assert isinstance(result, list)

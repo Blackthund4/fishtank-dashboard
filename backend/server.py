@@ -743,6 +743,34 @@ def api_peak_hours():
     return _cached_query("peak-hours", database.get_peak_hours)
 
 
+@app.get("/api/keywords/trending")
+def api_keywords_trending():
+    """Real-time trending keywords (5-minute rolling window)."""
+    state = shared_state.read_state(_SHARED_STATE_PATH)
+    return {
+        "window_seconds": 300,
+        "keywords": state.get("trending_keywords", []),
+    }
+
+
+@app.get("/api/keywords/top")
+def api_keywords_top(
+    since: str = Query(None, description="ISO timestamp"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Top keywords by frequency in the given time window (default 24h)."""
+    since = _normalize_since(since)
+    return _cached_query(f"keywords-top:{since}:{limit}", database.get_keyword_top, since, limit, ttl=120)
+
+
+@app.get("/api/analytics/keywords")
+def api_keyword_analytics(since: str = Query(None), until: str = Query(None)):
+    """Keyword analytics: top keywords overall + hourly breakdown with per-bucket top 10."""
+    since = _normalize_since(since)
+    until = _normalize_since(until)
+    return _cached_query(f"keywords-analytics:{since}:{until}", database.get_keyword_analytics, since, until, ttl=180)
+
+
 @app.get("/api/hidden-content")
 def api_hidden_content(
     target: str = Query(None),
