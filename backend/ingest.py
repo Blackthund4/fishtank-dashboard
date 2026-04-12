@@ -723,7 +723,8 @@ def seed_superchats_from_rest():
                 profile = _fetch_user_profile(sc["userId"])
                 if profile:
                     sc.update(profile)
-            database.store_event("super-chat:new", sc)
+            db_id = database.store_event("super-chat:new", sc)
+            database.notify_new_event(db_id, "super-chat:new")
             new_count += 1
         if new_count:
             print(f"[OK] Seeded {new_count} superchats from REST API")
