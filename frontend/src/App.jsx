@@ -1451,7 +1451,7 @@ export default function App() {
                   data={sortedChats}
                   overscan={100}
                   components={{
-                    Header: activeSuperchats.length > 0 ? () => (
+                    Header: () => activeSuperchats.length > 0 ? (
                       <div className="space-y-1 mb-2 px-2 pt-2">
                         {activeSuperchats.map(sc => {
                           const d = sc.data || {}
@@ -1480,7 +1480,7 @@ export default function App() {
                           )
                         })}
                       </div>
-                    ) : undefined,
+                    ) : null,
                   }}
                   itemContent={(index, item) => (
                     <ChatMessage data={item.data} />
