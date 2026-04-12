@@ -25,10 +25,14 @@ _cached_mtime = 0.0
 
 def write_state(path, state_dict):
     """Atomically write state_dict as JSON to path."""
+    global _cached_state, _cached_mtime
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
         f.write(_serialize(state_dict))
     os.replace(tmp, path)
+    # Invalidate cache so same-process reads see the new data even if
+    # mtime granularity masks the write (sub-second writes on ext4, etc.)
+    _cached_mtime = 0.0
 
 
 def read_state(path):
