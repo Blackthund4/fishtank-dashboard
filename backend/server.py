@@ -10,8 +10,11 @@ Usage:
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import os
+import secrets
 import time as _time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -21,7 +24,7 @@ from threading import Thread, Lock
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pathlib import Path
 
 import database
@@ -58,6 +61,39 @@ _SHARED_STATE_PATH = os.environ.get(
     "FISHTANK_SHARED_STATE",
     str(Path(__file__).parent / "_shared_state.json"),
 )
+
+API_TOKEN_SECRET = os.environ.get("API_TOKEN_SECRET") or secrets.token_hex(32)
+TOKEN_LIFETIME = 1800  # 30 minutes
+
+
+# ============================================================
+# API TOKEN FUNCTIONS
+# ============================================================
+
+
+def _make_token() -> str:
+    """Create an HMAC-signed short-lived API token."""
+    issued_at = str(int(_time.time()))
+    sig = hmac.new(API_TOKEN_SECRET.encode(), issued_at.encode(), hashlib.sha256).hexdigest()
+    return f"{issued_at}.{sig}"
+
+
+def _verify_token(token, grace=0) -> bool:
+    """Verify an HMAC-signed API token. Returns True if valid and not expired."""
+    if not token or not isinstance(token, str):
+        return False
+    parts = token.split(".")
+    if len(parts) != 2:
+        return False
+    try:
+        issued_at = int(parts[0])
+    except (ValueError, TypeError):
+        return False
+    if _time.time() - issued_at > TOKEN_LIFETIME + grace:
+        return False
+    expected_sig = hmac.new(API_TOKEN_SECRET.encode(), parts[0].encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected_sig, parts[1])
+
 
 # ============================================================
 # ANALYTICS CACHE
@@ -344,7 +380,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_methods=["GET", "HEAD"],
-    allow_headers=["content-type"],
+    allow_headers=["content-type", "x-dashboard-token"],
     max_age=3600,
 )
 
@@ -366,6 +402,39 @@ async def rate_limit_middleware(request: Request, call_next):
     # Periodic cleanup
     if len(_rate_limits) > 200:
         _prune_rate_limits()
+
+    return await call_next(request)
+
+
+# Token validation middleware — runs between rate limiting and security headers.
+@app.middleware("http")
+async def token_validation_middleware(request: Request, call_next):
+    path = request.url.path
+
+    # Skip non-API paths (static files, SPA routes, WebSocket upgrade)
+    if not path.startswith("/api/"):
+        return await call_next(request)
+
+    # Exempt /api/health (UptimeRobot hits this without a browser)
+    if path == "/api/health":
+        return await call_next(request)
+
+    token = request.headers.get("x-dashboard-token", "")
+
+    if path == "/api/token/refresh":
+        # Allow recently-expired tokens to refresh (5-minute grace window)
+        valid = _verify_token(token, grace=300)
+    else:
+        valid = _verify_token(token)
+
+    if not valid:
+        # TEMPORARY: remove in Phase 3
+        if not token and BUILD_VERSION == "dev":
+            return await call_next(request)
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Invalid or missing API token"},
+        )
 
     return await call_next(request)
 
@@ -485,6 +554,14 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.close(code=1008, reason="Origin not allowed")
         return
 
+    # Token validation — WebSocket can't set custom headers, so use query param
+    token = ws.query_params.get("token", "")
+    # TEMPORARY: dev bypass removed in Phase 3
+    if not _verify_token(token) and BUILD_VERSION != "dev":
+        logger.warning("WS rejected invalid token from %s", _get_client_ip(ws))
+        await ws.close(code=1008, reason="Invalid token")
+        return
+
     ip = _get_client_ip(ws)
     ok, reason = _try_reserve_ws_slot(ip)
     if not ok:
@@ -512,6 +589,15 @@ async def websocket_endpoint(ws: WebSocket):
         with _clients_lock:
             browser_clients.discard(ws)
         _release_ws_slot(ip)
+
+
+# --- Token refresh ---
+
+
+@app.get("/api/token/refresh")
+def api_token_refresh():
+    """Issue a fresh API token. Caller must present a valid (or recently-expired) token."""
+    return {"token": _make_token()}
 
 
 # --- REST endpoints ---
@@ -938,6 +1024,24 @@ def api_charts_chatters(range: str = Query('24h'), anchor: str = Query(None)):
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
+# Pre-read index.html at module level and inject a token placeholder meta tag.
+_INDEX_HTML_TEMPLATE = None
+if FRONTEND_DIST.exists():
+    _index_path = FRONTEND_DIST / "index.html"
+    if _index_path.is_file():
+        _raw_html = _index_path.read_text(encoding="utf-8")
+        _INDEX_HTML_TEMPLATE = _raw_html.replace(
+            '<div id="root">',
+            '<meta name="api-token" content="__API_TOKEN__">\n    <div id="root">',
+        )
+
+
+def _serve_index():
+    """Return index.html with a fresh API token injected."""
+    html = _INDEX_HTML_TEMPLATE.replace("__API_TOKEN__", _make_token())
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-cache, no-store, private"})
+
+
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
@@ -954,12 +1058,10 @@ if FRONTEND_DIST.exists():
         file_path = (FRONTEND_DIST / full_path).resolve()
         # Prevent path traversal outside dist directory
         if not str(file_path).startswith(str(FRONTEND_DIST.resolve())):
-            return FileResponse(FRONTEND_DIST / "index.html",
-                                headers={"Cache-Control": "no-cache"})
+            return _serve_index()
         if file_path.is_file():
             return FileResponse(file_path)
-        return FileResponse(FRONTEND_DIST / "index.html",
-                            headers={"Cache-Control": "no-cache"})
+        return _serve_index()
 
 
 # ============================================================

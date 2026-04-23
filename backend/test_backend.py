@@ -28,6 +28,7 @@ from server import (
     _check_rate_limit, _prune_rate_limits, _rate_limits, RATE_LIMIT_MAX, _get_client_ip,
     _is_origin_allowed, _try_reserve_ws_slot, _release_ws_slot,
     _ws_ip_counts, browser_clients, MAX_WS_PER_IP, MAX_WS_CLIENTS,
+    _make_token, _verify_token, TOKEN_LIFETIME,
 )
 import server as _server
 
@@ -2102,3 +2103,53 @@ def test_api_keywords_top_normalizes_since():
     # since with seconds precision should not error
     result = _server.api_keywords_top(since="2026-04-12T14:30:45Z", limit=20)
     assert isinstance(result, list)
+
+
+# ============================================================
+# API TOKEN
+# ============================================================
+
+import re
+import time as _time
+
+
+def test_make_token_format():
+    token = _make_token()
+    assert re.match(r"\d+\.[a-f0-9]{64}$", token)
+
+
+def test_verify_token_valid():
+    token = _make_token()
+    assert _verify_token(token) is True
+
+
+def test_verify_token_expired(monkeypatch):
+    token = _make_token()
+    # Advance time past TOKEN_LIFETIME
+    real_now = _time.time()
+    monkeypatch.setattr(_server._time, "time", lambda: real_now + TOKEN_LIFETIME + 200)
+    assert _verify_token(token) is False
+
+
+def test_verify_token_tampered():
+    token = _make_token()
+    # Flip one character in the signature
+    parts = token.split(".")
+    sig = parts[1]
+    tampered_char = "a" if sig[0] != "a" else "b"
+    tampered_token = f"{parts[0]}.{tampered_char}{sig[1:]}"
+    assert _verify_token(tampered_token) is False
+
+
+def test_verify_token_grace(monkeypatch):
+    token = _make_token()
+    # Advance time 60s past expiry
+    real_now = _time.time()
+    monkeypatch.setattr(_server._time, "time", lambda: real_now + TOKEN_LIFETIME + 60)
+    assert _verify_token(token, grace=0) is False
+    assert _verify_token(token, grace=120) is True
+
+
+def test_verify_token_empty():
+    assert _verify_token("") is False
+    assert _verify_token(None) is False

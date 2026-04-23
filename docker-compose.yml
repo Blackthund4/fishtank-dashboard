@@ -53,6 +53,7 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://fish-dash.com,https://www.fish-dash.com}
       - SSL_CERTFILE=/app/certs/origin.crt
       - SSL_KEYFILE=/app/certs/origin.key
+      - API_TOKEN_SECRET=${API_TOKEN_SECRET:-}
       - PYTHONDONTWRITEBYTECODE=1
     mem_limit: 2g
     memswap_limit: 2g
