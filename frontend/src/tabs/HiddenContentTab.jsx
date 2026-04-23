@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { FileText, Search, X, ArrowRight, Crosshair } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
-import { okJson } from '../utils/fetchUtils'
+import { okJson, apiFetch } from '../utils/fetchUtils'
 
 export default function HiddenContentTab({ itemCatalog }) {
   const [items, setItems] = useState([])
@@ -14,7 +14,7 @@ export default function HiddenContentTab({ itemCatalog }) {
 
   // Fetch target counts from server (full DB)
   useEffect(() => {
-    fetch('/api/hidden-content/targets')
+    apiFetch('/api/hidden-content/targets')
       .then(okJson)
       .then(setTargetData)
       .catch(() => {})
@@ -34,7 +34,7 @@ export default function HiddenContentTab({ itemCatalog }) {
     if (search.trim()) params.set('search', search.trim())
     if (beforeId != null) params.set('offset', beforeId)
 
-    fetch(`/api/hidden-content?${params}`)
+    apiFetch(`/api/hidden-content?${params}`)
       .then(okJson)
       .then(data => {
         if (beforeId != null) {

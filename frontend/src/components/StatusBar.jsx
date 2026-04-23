@@ -1,6 +1,6 @@
 import { useEffect, useState, memo } from 'react'
 import { Fish, MessageSquare, Volume2, Clock, RefreshCw, Wifi, WifiOff, Coins } from 'lucide-react'
-import { okJson } from '../utils/fetchUtils'
+import { okJson, apiFetch } from '../utils/fetchUtils'
 
 const fmt = (n) => Number(n || 0).toLocaleString()
 const fmtUSD = (n) => (n * 0.10).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
@@ -45,7 +45,7 @@ export default function StatusBar({ isConnected, stats, updateAvailable }) {
 
   useEffect(() => {
     const check = () => {
-      fetch('/api/status')
+      apiFetch('/api/status')
         .then(okJson)
         .then(setHealth)
         .catch(() => setHealth(null))

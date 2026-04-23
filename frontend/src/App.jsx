@@ -8,7 +8,7 @@ import Panel from './components/Panel'
 import FishtoyCard from './components/FishtoyCard'
 import ChatMessage from './components/ChatMessage'
 import ActivityCard from './components/ActivityCard'
-import { okJson } from './utils/fetchUtils'
+import { okJson, apiFetch } from './utils/fetchUtils'
 import { tokenize } from './utils/tokenizer'
 const AnalyticsTab = lazy(() => import('./tabs/AnalyticsTab'))
 const ChartsTab = lazy(() => import('./tabs/ChartsTab'))
@@ -195,17 +195,17 @@ export default function App() {
   // Load catalog + historical data on mount AND after stale WebSocket reconnect
   // (staleReconnect increments when WS reconnects after >2min gap, e.g. overnight idle)
   const loadAllData = useCallback(() => {
-    fetch('/api/items').then(okJson).then(setItemCatalog).catch(() => {})
-    fetch('/api/contestants').then(okJson).then(setContestants).catch(() => {})
-    fetch('/api/rooms').then(okJson).then(setRoomMap).catch(() => {})
-    fetch('/api/stocks').then(okJson).then(setStocks).catch(() => {})
-    fetch('/api/stats').then(okJson).then(raw => setStats(normalizeStats(raw))).catch(() => {})
+    apiFetch('/api/items').then(okJson).then(setItemCatalog).catch(() => {})
+    apiFetch('/api/contestants').then(okJson).then(setContestants).catch(() => {})
+    apiFetch('/api/rooms').then(okJson).then(setRoomMap).catch(() => {})
+    apiFetch('/api/stocks').then(okJson).then(setStocks).catch(() => {})
+    apiFetch('/api/stats').then(okJson).then(raw => setStats(normalizeStats(raw))).catch(() => {})
     const since24h = new Date(Date.now() - 24 * 3600000).toISOString()
-    fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
-    fetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
-    fetch('/api/targets').then(okJson).then(setAllTargets).catch(() => {})
-    fetch('/api/polls').then(okJson).then(setPolls).catch(() => {})
-    fetch('/api/notifications?limit=500').then(okJson).then(data => {
+    apiFetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
+    apiFetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
+    apiFetch('/api/targets').then(okJson).then(setAllTargets).catch(() => {})
+    apiFetch('/api/polls').then(okJson).then(setPolls).catch(() => {})
+    apiFetch('/api/notifications?limit=500').then(okJson).then(data => {
       setNotifications(data.map(n => ({
         id: n.id,
         type: n.event_type,
@@ -217,7 +217,7 @@ export default function App() {
     // Activity fetched by feedApiParams effect (unified feed with server-side filters + pagination)
 
     // Fetch chat messages
-    fetch('/api/events?type=chat:message&limit=500')
+    apiFetch('/api/events?type=chat:message&limit=500')
       .then(okJson)
       .then(events => {
         setChats(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
@@ -225,7 +225,7 @@ export default function App() {
       .catch(() => {})
 
     // Fetch active superchats for pinned banners
-    fetch('/api/superchats?limit=50')
+    apiFetch('/api/superchats?limit=50')
       .then(okJson)
       .then(data => setActiveSuperchats(data.filter(sc => !sc.deleted)))
       .catch(() => {})
@@ -234,9 +234,9 @@ export default function App() {
 
     // Fetch system events separately so one type doesn't crowd out others
     Promise.all([
-      fetch('/api/events?type=tts:price,sfx:price&limit=200').then(okJson).catch(() => []),
-      fetch('/api/events?type=stock:update,stock:new,stock:remove,stock:split&limit=200').then(okJson).catch(() => []),
-      fetch('/api/events?type=feature-toggles:update&limit=200').then(okJson).catch(() => []),
+      apiFetch('/api/events?type=tts:price,sfx:price&limit=200').then(okJson).catch(() => []),
+      apiFetch('/api/events?type=stock:update,stock:new,stock:remove,stock:split&limit=200').then(okJson).catch(() => []),
+      apiFetch('/api/events?type=feature-toggles:update&limit=200').then(okJson).catch(() => []),
     ]).then(([prices, stocks, toggles]) => {
       const all = [...prices, ...stocks, ...toggles]
         .map(e => ({ event: e.event_type, data: e.data, dbId: e.id, timestamp: e.timestamp_local }))
@@ -245,7 +245,7 @@ export default function App() {
     })
 
     // Reconstruct poll state from database
-    fetch('/api/polls/latest')
+    apiFetch('/api/polls/latest')
       .then(okJson)
       .then(poll => {
         if (poll && poll.question) {
@@ -269,10 +269,10 @@ export default function App() {
   // Fetch custom delta base prices and sparkline data when stoxRange changes
   useEffect(() => {
     if (['3h', '12h', '3d'].includes(stoxRange)) {
-      fetch(`/api/stocks/delta?range=${stoxRange}`)
+      apiFetch(`/api/stocks/delta?range=${stoxRange}`)
         .then(okJson).then(setStoxDeltas).catch(() => {})
     }
-    fetch(`/api/stocks/sparklines?range=${stoxRange}`)
+    apiFetch(`/api/stocks/sparklines?range=${stoxRange}`)
       .then(okJson).then(setStoxSparklines).catch(() => {})
   }, [stoxRange])
 
@@ -371,7 +371,7 @@ export default function App() {
         setPollVotes(Array.isArray(msg.data) ? msg.data : [])
       } else if (msg.event_type === 'poll:stop') {
         setActivePoll(prev => prev ? { ...prev, ended: true, winner: msg.data?.winner } : null)
-        fetch('/api/polls').then(okJson).then(setPolls).catch(() => {})
+        apiFetch('/api/polls').then(okJson).then(setPolls).catch(() => {})
       } else if (NOTIFICATION_TYPES.has(msg.event_type)) {
         const notif = {
           id: msg.db_id,
@@ -401,11 +401,11 @@ export default function App() {
   // Refresh stats periodically
   useEffect(() => {
     const interval = setInterval(() => {
-      fetch('/api/stats').then(okJson).then(raw => setStats(normalizeStats(raw))).catch(() => {})
+      apiFetch('/api/stats').then(okJson).then(raw => setStats(normalizeStats(raw))).catch(() => {})
       const since24h = new Date(Date.now() - 24 * 3600000).toISOString()
-      fetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
-      fetch('/api/stocks').then(okJson).then(setStocks).catch(() => {})
-      fetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
+      apiFetch(`/api/stats?since=${encodeURIComponent(since24h)}`).then(okJson).then(raw => setSessionStats(normalizeStats(raw))).catch(() => {})
+      apiFetch('/api/stocks').then(okJson).then(setStocks).catch(() => {})
+      apiFetch('/api/feature-toggles').then(okJson).then(setFeatureToggles).catch(() => {})
     }, 60000)
     return () => clearInterval(interval)
   }, [])
@@ -414,7 +414,7 @@ export default function App() {
   useEffect(() => {
     const fetchTop = () => {
       if (document.hidden) return
-      fetch('/api/keywords/top').then(okJson).then(data => setTopKeywords(data || [])).catch(() => setTopKeywords([]))
+      apiFetch('/api/keywords/top').then(okJson).then(data => setTopKeywords(data || [])).catch(() => setTopKeywords([]))
     }
     fetchTop()
     const interval = setInterval(fetchTop, 60000)
@@ -512,7 +512,7 @@ export default function App() {
     setActivityHasMore(true)
     setActivityHasNewer(!!activityAnchor)
     setFirstActivityIndex(10000)
-    fetch(`/api/events?${feedApiParams}`)
+    apiFetch(`/api/events?${feedApiParams}`)
       .then(okJson)
       .then(events => {
         setActivity(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id })))
@@ -527,7 +527,7 @@ export default function App() {
     const ac = new AbortController()
     setRoleChats([])
     setRoleChatsLoading(true)
-    fetch(`/api/events?type=chat:message&limit=500&role=${chatFilter}`, { signal: ac.signal })
+    apiFetch(`/api/events?type=chat:message&limit=500&role=${chatFilter}`, { signal: ac.signal })
       .then(okJson)
       .then(events => { setRoleChats(events.map(e => ({ event: e.event_type, data: e.data, dbId: e.id }))); setRoleChatsLoading(false) })
       .catch(() => setRoleChatsLoading(false))
@@ -592,7 +592,7 @@ export default function App() {
     }, null)
     if (minId === null) return
     setActivityLoading(true)
-    fetch(`/api/events?${feedApiParams}&before_id=${minId}`)
+    apiFetch(`/api/events?${feedApiParams}&before_id=${minId}`)
       .then(okJson)
       .then(events => {
         if (events.length === 0) {
@@ -624,7 +624,7 @@ export default function App() {
     // Strip around_ts from params for newer pagination (we want events after maxId)
     const p = new URLSearchParams(feedApiParams)
     p.delete('around_ts')
-    fetch(`/api/events?${p.toString()}&since_id=${maxId}`)
+    apiFetch(`/api/events?${p.toString()}&since_id=${maxId}`)
       .then(okJson)
       .then(events => {
         if (events.length === 0) {
@@ -665,7 +665,7 @@ export default function App() {
   const [targetStats, setTargetStats] = useState(null)
   useEffect(() => {
     if (!filterTarget) { setTargetStats(null); return }
-    fetch(`/api/target-stats?target=${encodeURIComponent(filterTarget)}`)
+    apiFetch(`/api/target-stats?target=${encodeURIComponent(filterTarget)}`)
       .then(okJson)
       .then(data => {
         // Enrich item names from catalog

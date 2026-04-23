@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { getToken, refreshToken } from './utils/fetchUtils'
 
 const STALE_THRESHOLD = 120000 // 2 minutes — reconnects after this gap trigger a full data re-fetch
 
@@ -26,7 +27,8 @@ export function useWebSocket(url) {
       const gapMs = Date.now() - lastMessageAt.current
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = url || `${protocol}//${window.location.host}/ws`
+      const token = getToken()
+      const wsUrl = url || `${protocol}//${window.location.host}/ws${token ? `?token=${token}` : ''}`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
@@ -56,12 +58,19 @@ export function useWebSocket(url) {
         }
       }
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         setIsConnected(false)
         wsRef.current = null
         if (alive) {
-          reconnectTimer.current = setTimeout(connect, delay)
-          delay = Math.min(delay * 2, 30000)
+          const scheduleReconnect = () => {
+            reconnectTimer.current = setTimeout(connect, delay)
+            delay = Math.min(delay * 2, 30000)
+          }
+          if (event.code === 1008) {
+            refreshToken().finally(scheduleReconnect)
+          } else {
+            scheduleReconnect()
+          }
         }
       }
 

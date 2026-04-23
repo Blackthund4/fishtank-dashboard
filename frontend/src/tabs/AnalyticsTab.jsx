@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, memo } from 'react'
 import { TrendingUp, Volume2, MessageSquare, Users, Zap, Fish, Type } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
-import { okJson } from '../utils/fetchUtils'
+import { okJson, apiFetch } from '../utils/fetchUtils'
 import AnchorRow, { RANGE_MS } from '../components/AnchorRow'
 
 function getSinceISO(period, anchor) {
@@ -127,7 +127,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       const stockSince = getSinceISO(stockPeriod)
       const stockParams = new URLSearchParams({ limit: '2000' })
       if (stockSince) stockParams.set('since', stockSince)
-      await fetch(`/api/stocks/history?${stockParams}`).then(okJson).then(d => { if (!cancelled) setStockHistory(d) }).catch(() => {})
+      await apiFetch(`/api/stocks/history?${stockParams}`).then(okJson).then(d => { if (!cancelled) setStockHistory(d) }).catch(() => {})
       if (cancelled) return
       fetch('/api/analytics/peak-hours').then(okJson).then(d => { if (!cancelled && d.hourly) setPeakHours(d) }).catch(() => {})
     }
@@ -146,9 +146,9 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       if (ttsSince) ttsParams.set('since', ttsSince)
       if (ttsAnchor) ttsParams.set('until', ttsAnchor)
       const ttsParam = ttsParams.toString() ? `?${ttsParams}` : ''
-      await fetch(`/api/analytics/tts-sfx${ttsParam}`).then(okJson).then(d => { if (!cancelled && d.top_rooms) setTtsAnalytics(d) }).catch(() => {})
+      await apiFetch(`/api/analytics/tts-sfx${ttsParam}`).then(okJson).then(d => { if (!cancelled && d.top_rooms) setTtsAnalytics(d) }).catch(() => {})
       if (cancelled) return
-      await fetch(`/api/analytics/tts-sentiment${ttsParam}`).then(okJson).then(d => { if (!cancelled && d.hourly) setTtsSentiment(d) }).catch(() => {})
+      await apiFetch(`/api/analytics/tts-sentiment${ttsParam}`).then(okJson).then(d => { if (!cancelled && d.hourly) setTtsSentiment(d) }).catch(() => {})
     }
     fetchTts()
     if (!ttsAnchor) {
@@ -168,9 +168,9 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       if (chatSince) chatParams.set('since', chatSince)
       if (chatAnchor) chatParams.set('until', chatAnchor)
       const chatParam = chatParams.toString() ? `?${chatParams}` : ''
-      await fetch(`/api/analytics/chat${chatParam}`).then(okJson).then(d => { if (!cancelled && d.total != null) setChatAnalytics(d) }).catch(() => {})
+      await apiFetch(`/api/analytics/chat${chatParam}`).then(okJson).then(d => { if (!cancelled && d.total != null) setChatAnalytics(d) }).catch(() => {})
       if (cancelled) return
-      await fetch(`/api/analytics/chat-sentiment${chatParam}`).then(okJson).then(d => { if (!cancelled && d.hourly) setChatSentiment(d) }).catch(() => {})
+      await apiFetch(`/api/analytics/chat-sentiment${chatParam}`).then(okJson).then(d => { if (!cancelled && d.hourly) setChatSentiment(d) }).catch(() => {})
     }
     fetchChat()
     if (!chatAnchor) {
@@ -190,7 +190,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       if (kwSince) kwParams.set('since', kwSince)
       if (keywordAnchor) kwParams.set('until', keywordAnchor)
       const kwParam = kwParams.toString() ? `?${kwParams}` : ''
-      await fetch(`/api/analytics/keywords${kwParam}`).then(okJson).then(d => { if (!cancelled) setKeywordAnalytics(d) }).catch(() => {})
+      await apiFetch(`/api/analytics/keywords${kwParam}`).then(okJson).then(d => { if (!cancelled) setKeywordAnalytics(d) }).catch(() => {})
     }
     fetchKeywords()
     if (!keywordAnchor) {

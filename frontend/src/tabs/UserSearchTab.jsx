@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useCallback } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { Search, MessageSquare, Volume2, Music, Fish, User } from 'lucide-react'
 import { formatDateTime } from '../utils/formatTime'
-import { okJson } from '../utils/fetchUtils'
+import { okJson, apiFetch } from '../utils/fetchUtils'
 
 export default function UserSearchTab({ itemCatalog, roomMap }) {
   const [query, setQuery] = useState('')
@@ -25,7 +25,7 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     // Debounce autocomplete
     if (suggestTimer.current) clearTimeout(suggestTimer.current)
     suggestTimer.current = setTimeout(() => {
-      fetch(`/api/users/suggest?q=${encodeURIComponent(val.trim())}`)
+      apiFetch(`/api/users/suggest?q=${encodeURIComponent(val.trim())}`)
         .then(okJson)
         .then(data => { setSuggestions(data || []); setShowSuggestions(true) })
         .catch(() => setSuggestions([]))
@@ -35,7 +35,7 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
   function doSearch(name) {
     setLoading(true)
     setHasMore(true)
-    fetch(`/api/user/${encodeURIComponent(name)}`)
+    apiFetch(`/api/user/${encodeURIComponent(name)}`)
       .then(okJson)
       .then(data => {
         setResults(data)
@@ -78,7 +78,7 @@ export default function UserSearchTab({ itemCatalog, roomMap }) {
     if (allIds.length === 0) return
     const minId = Math.min(...allIds)
     setLoadingMore(true)
-    fetch(`/api/user/${encodeURIComponent(results.username)}?before_id=${minId}`)
+    apiFetch(`/api/user/${encodeURIComponent(results.username)}?before_id=${minId}`)
       .then(okJson)
       .then(data => {
         setResults(prev => {

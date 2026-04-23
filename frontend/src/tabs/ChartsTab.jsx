@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { TrendingUp, DollarSign, MessageSquare, Type } from 'lucide-react'
 import AnchorRow, { RANGE_MS } from '../components/AnchorRow'
-import { okJson } from '../utils/fetchUtils'
+import { okJson, apiFetch } from '../utils/fetchUtils'
 import {
   LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -307,7 +307,7 @@ export default function ChartsTab({ stocks }) {
       setStockLoading(true)
       const params = new URLSearchParams({ range: stockRange })
       if (stockAnchor) params.set('anchor', stockAnchor)
-      fetch(`/api/charts/stocks?${params}`)
+      apiFetch(`/api/charts/stocks?${params}`)
         .then(okJson).then(setStockData).catch(() => {})
         .finally(() => setStockLoading(false))
     }
@@ -342,7 +342,7 @@ export default function ChartsTab({ stocks }) {
       setSpendLoading(true)
       const params = new URLSearchParams({ range: spendRange })
       if (spendAnchor) params.set('anchor', spendAnchor)
-      fetch(`/api/charts/spend?${params}`)
+      apiFetch(`/api/charts/spend?${params}`)
         .then(okJson).then(setSpendData).catch(() => {})
         .finally(() => setSpendLoading(false))
     }
@@ -359,7 +359,7 @@ export default function ChartsTab({ stocks }) {
       setChatLoading(true)
       const params = new URLSearchParams({ range: chatRange })
       if (chatAnchor) params.set('anchor', chatAnchor)
-      fetch(`/api/charts/chatters?${params}`)
+      apiFetch(`/api/charts/chatters?${params}`)
         .then(okJson).then(setChatData).catch(() => {})
         .finally(() => setChatLoading(false))
     }
@@ -379,7 +379,7 @@ export default function ChartsTab({ stocks }) {
       const params = new URLSearchParams()
       if (since) params.set('since', since)
       if (keywordAnchor) params.set('until', keywordAnchor)
-      fetch(`/api/analytics/keywords?${params}`)
+      apiFetch(`/api/analytics/keywords?${params}`)
         .then(okJson)
         .then(d => {
           const top6 = (d.top_keywords || []).slice(0, 6)
