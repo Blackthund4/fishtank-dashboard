@@ -118,10 +118,10 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
     let cancelled = false
     async function fetchCatalog() {
       if (document.hidden) return
-      fetch('/api/stocks').then(okJson).then(d => { if (!cancelled) setStocks(d) }).catch(() => {})
-      fetch('/api/stocks/count').then(okJson).then(d => { if (!cancelled) setStockCount(d.count || 0) }).catch(() => {})
-      fetch('/api/fishtoy-availability').then(okJson).then(d => { if (!cancelled) setFishtoyStatus(d) }).catch(() => {})
-      fetch('/api/price-changes').then(okJson).then(d => { if (!cancelled) setPriceChanges(d) }).catch(() => {})
+      apiFetch('/api/stocks').then(okJson).then(d => { if (!cancelled) setStocks(d) }).catch(() => {})
+      apiFetch('/api/stocks/count').then(okJson).then(d => { if (!cancelled) setStockCount(d.count || 0) }).catch(() => {})
+      apiFetch('/api/fishtoy-availability').then(okJson).then(d => { if (!cancelled) setFishtoyStatus(d) }).catch(() => {})
+      apiFetch('/api/price-changes').then(okJson).then(d => { if (!cancelled) setPriceChanges(d) }).catch(() => {})
       await new Promise(r => setTimeout(r, 300))
       if (cancelled) return
       const stockSince = getSinceISO(stockPeriod)
@@ -129,7 +129,7 @@ function AnalyticsTab({ contestants, roomMap, itemCatalog, featureToggles = {} }
       if (stockSince) stockParams.set('since', stockSince)
       await apiFetch(`/api/stocks/history?${stockParams}`).then(okJson).then(d => { if (!cancelled) setStockHistory(d) }).catch(() => {})
       if (cancelled) return
-      fetch('/api/analytics/peak-hours').then(okJson).then(d => { if (!cancelled && d.hourly) setPeakHours(d) }).catch(() => {})
+      apiFetch('/api/analytics/peak-hours').then(okJson).then(d => { if (!cancelled && d.hourly) setPeakHours(d) }).catch(() => {})
     }
     fetchCatalog()
     const interval = setInterval(fetchCatalog, 120000)

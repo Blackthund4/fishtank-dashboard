@@ -2153,3 +2153,68 @@ def test_verify_token_grace(monkeypatch):
 def test_verify_token_empty():
     assert _verify_token("") is False
     assert _verify_token(None) is False
+
+
+# ============================================================
+# API TOKEN MIDDLEWARE (TestClient, middleware-level)
+# ============================================================
+
+from fastapi.testclient import TestClient
+
+
+def _prod_client(monkeypatch):
+    """Return a TestClient with BUILD_VERSION set to a non-dev value."""
+    monkeypatch.setattr(_server, "BUILD_VERSION", "abc1234")
+    return TestClient(_server.app, raise_server_exceptions=False)
+
+
+def test_api_rejects_no_token(monkeypatch):
+    client = _prod_client(monkeypatch)
+    r = client.get("/api/events")
+    assert r.status_code == 403
+
+
+def test_api_allows_valid_token(monkeypatch):
+    client = _prod_client(monkeypatch)
+    token = _make_token()
+    r = client.get("/api/events", headers={"x-dashboard-token": token})
+    # Middleware passes (not 403); endpoint may 500 due to in-memory DB threading
+    assert r.status_code != 403
+
+
+def test_api_health_exempt(monkeypatch):
+    monkeypatch.setattr(_server, "BUILD_VERSION", "abc1234")
+    client = TestClient(_server.app, raise_server_exceptions=False)
+    r = client.get("/api/health")
+    assert r.status_code == 200
+
+
+def test_token_refresh_with_valid_token(monkeypatch):
+    client = _prod_client(monkeypatch)
+    token = _make_token()
+    r = client.get("/api/token/refresh", headers={"x-dashboard-token": token})
+    assert r.status_code == 200
+    assert "token" in r.json()
+
+
+def test_token_refresh_with_grace(monkeypatch):
+    token = _make_token()
+    # Expire the token by 60s (within the 300s grace window for refresh)
+    real_now = _time.time()
+    monkeypatch.setattr(_server._time, "time", lambda: real_now + TOKEN_LIFETIME + 60)
+    monkeypatch.setattr(_server, "BUILD_VERSION", "abc1234")
+    client = TestClient(_server.app, raise_server_exceptions=False)
+    r = client.get("/api/token/refresh", headers={"x-dashboard-token": token})
+    assert r.status_code == 200
+    assert "token" in r.json()
+
+
+@pytest.mark.skipif(
+    _server._INDEX_HTML_TEMPLATE is None,
+    reason="No built frontend dist available",
+)
+def test_index_html_contains_token_meta():
+    client = TestClient(_server.app, raise_server_exceptions=False)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert '<meta name="api-token" content="' in r.text

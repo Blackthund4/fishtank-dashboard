@@ -419,6 +419,11 @@ async def token_validation_middleware(request: Request, call_next):
     if path == "/api/health":
         return await call_next(request)
 
+    # Dev mode: skip token validation entirely (Vite dev server serves
+    # index.html directly without the server-injected meta tag)
+    if BUILD_VERSION == "dev":
+        return await call_next(request)
+
     token = request.headers.get("x-dashboard-token", "")
 
     if path == "/api/token/refresh":
@@ -428,9 +433,6 @@ async def token_validation_middleware(request: Request, call_next):
         valid = _verify_token(token)
 
     if not valid:
-        # TEMPORARY: remove in Phase 3
-        if not token and BUILD_VERSION == "dev":
-            return await call_next(request)
         return JSONResponse(
             status_code=403,
             content={"detail": "Invalid or missing API token"},
@@ -555,12 +557,12 @@ async def websocket_endpoint(ws: WebSocket):
         return
 
     # Token validation — WebSocket can't set custom headers, so use query param
-    token = ws.query_params.get("token", "")
-    # TEMPORARY: dev bypass removed in Phase 3
-    if not _verify_token(token) and BUILD_VERSION != "dev":
-        logger.warning("WS rejected invalid token from %s", _get_client_ip(ws))
-        await ws.close(code=1008, reason="Invalid token")
-        return
+    if BUILD_VERSION != "dev":
+        token = ws.query_params.get("token", "")
+        if not _verify_token(token):
+            logger.warning("WS rejected invalid token from %s", _get_client_ip(ws))
+            await ws.close(code=1008, reason="Invalid token")
+            return
 
     ip = _get_client_ip(ws)
     ok, reason = _try_reserve_ws_slot(ip)
