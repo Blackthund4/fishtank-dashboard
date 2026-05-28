@@ -445,9 +445,10 @@ async def token_validation_middleware(request: Request, call_next):
 # SECURITY HEADERS
 # ============================================================
 
-# Emit HSTS only when TLS is terminated at this process. Behind Cloudflare in
-# production the api process serves HTTPS via SSL_CERTFILE; locally it serves
-# plain HTTP and HSTS would poison the browser cache.
+# Emit HSTS only when TLS is terminated at this process. In production TLS is
+# terminated at nginx on the host (see nginx/fish-dash.conf), so SSL_CERTFILE
+# is unset and HSTS is added by nginx instead. Locally we serve plain HTTP and
+# HSTS would poison the browser cache, so this guard stays in place for dev.
 _HAS_SSL = bool(os.environ.get("SSL_CERTFILE"))
 
 # Content-Security-Policy (Report-Only for now — flip to enforcing in a

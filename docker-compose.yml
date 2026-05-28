@@ -42,17 +42,17 @@ services:
       context: .
       args:
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    # Bound to host loopback only — nginx on the host terminates TLS on 443 and
+    # reverse-proxies to here. Docker's iptables NAT bypass of UFW is avoided
+    # because the public listener is a host process (nginx), not docker-proxy.
     ports:
-      - "443:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - fishtank-data:/app/data
-      - /opt/fishtank-dashboard/certs:/app/certs:ro
     environment:
       - FISHTANK_DB_PATH=/app/data/fishtank.db
       - FISHTANK_SHARED_STATE=/app/data/_shared_state.json
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://fish-dash.com,https://www.fish-dash.com}
-      - SSL_CERTFILE=/app/certs/origin.crt
-      - SSL_KEYFILE=/app/certs/origin.key
       - API_TOKEN_SECRET=${API_TOKEN_SECRET:-}
       - PYTHONDONTWRITEBYTECODE=1
     mem_limit: 2g
@@ -75,7 +75,7 @@ services:
       - SETUID         # gosu: drop privileges
       - SETGID         # gosu: drop privileges
     healthcheck:
-      test: ["CMD", "curl", "-sf", "--insecure", "https://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
       interval: 60s
       timeout: 30s
       retries: 3
