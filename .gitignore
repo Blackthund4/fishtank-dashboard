@@ -37,6 +37,10 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+*.fuse_hidden*
+
+# Scratch / local notes
+CHAT_PAYLOAD_STRUCTURE.txt
 
 # MD
 CLAUDE.md
