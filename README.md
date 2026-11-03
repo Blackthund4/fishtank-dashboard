@@ -1,6 +1,6 @@
 # Fishtank Dashboard
 
-**Live: [https://fish-dash.com](https://fish-dash.com)**
+**[https://fish-dash.com](https://fish-dash.com)** (Currently Offline due to the off-season)
 
 Real-time event monitoring dashboard for [fishtank.live](https://www.fishtank.live), an interactive 24/7 reality show. Captures fishtoy redemptions (including hidden metadata like love letter contents), chat messages, TTS, SFX, superchat pinned messages, polls, director messages, STO-X (stock market) data, chat keyword trends, and system events via a dual data source architecture built on reverse-engineered APIs.
 
